@@ -52,8 +52,89 @@ void ViewportRenderer::OnResize(uint32_t width, uint32_t height) {
     m_needsResize.store(true, std::memory_order_release);
 }
 
+void ViewportRenderer::InitPipelines() {
+    if (!m_device) return;
+
+    RHI::VertexLayout cadVertexLayout{
+        .stride = sizeof(CADVertex), // 24 bytes (3 floats pos + 3 floats normal)
+        .attributes = {
+            {.location = 0, .format = RHI::VertexFormat::Float3, .offset = 0},
+            {.location = 1, .format = RHI::VertexFormat::Float3, .offset = 12}
+        }
+    };
+
+    // 1. Shaded Surface Pipeline
+    RHI::RHIPipelineDesc shadedDesc{
+        .vertexShaderSource = CADShaders::Vulkan_ShadedVertex,
+        .fragmentShaderSource = CADShaders::Vulkan_ShadedFragment,
+        .vertexLayout = cadVertexLayout,
+        .topology = RHI::PrimitiveTopology::TriangleList,
+        .rasterizer = {
+            .cullMode = RHI::CullMode::Back,
+            .frontFace = RHI::FrontFace::CounterClockwise,
+            .wireframe = false
+        },
+        .depthStencil = {
+            .depthTestEnable = true,
+            .depthWriteEnable = true,
+            .depthCompareOp = RHI::CompareOp::Less
+        },
+        .blendState = {.blendEnable = false},
+        .debugName = "CAD_Shaded_Pipeline"
+    };
+    m_shadedPipeline = m_device->CreatePipeline(shadedDesc);
+
+    // 2. Crisp Wireframe / Feature Edge Pipeline
+    RHI::RHIPipelineDesc wireframeDesc{
+        .vertexShaderSource = CADShaders::Vulkan_WireframeVertex,
+        .fragmentShaderSource = CADShaders::Vulkan_WireframeFragment,
+        .vertexLayout = cadVertexLayout,
+        .topology = RHI::PrimitiveTopology::LineList,
+        .rasterizer = {
+            .cullMode = RHI::CullMode::None,
+            .frontFace = RHI::FrontFace::CounterClockwise,
+            .wireframe = true,
+            .depthBiasConstant = -1.0f,
+            .depthBiasSlope = -1.0f
+        },
+        .depthStencil = {
+            .depthTestEnable = true,
+            .depthWriteEnable = true,
+            .depthCompareOp = RHI::CompareOp::LessOrEqual
+        },
+        .blendState = {.blendEnable = false},
+        .debugName = "CAD_Wireframe_Pipeline"
+    };
+    m_wireframePipeline = m_device->CreatePipeline(wireframeDesc);
+
+    // 3. Infinite Ground Grid Pipeline
+    RHI::RHIPipelineDesc gridDesc{
+        .vertexShaderSource = CADShaders::Vulkan_GridVertex,
+        .fragmentShaderSource = CADShaders::Vulkan_GridFragment,
+        .vertexLayout = {}, // Fullscreen procedural quad, no vertex buffer input
+        .topology = RHI::PrimitiveTopology::TriangleList,
+        .rasterizer = {
+            .cullMode = RHI::CullMode::None,
+            .frontFace = RHI::FrontFace::CounterClockwise,
+            .wireframe = false
+        },
+        .depthStencil = {
+            .depthTestEnable = true,
+            .depthWriteEnable = false, // Ground grid does not occlude objects behind it
+            .depthCompareOp = RHI::CompareOp::Less
+        },
+        .blendState = {.blendEnable = true},
+        .debugName = "CAD_Grid_Pipeline"
+    };
+    m_gridPipeline = m_device->CreatePipeline(gridDesc);
+
+    std::cout << "[ViewportRenderer] Multi-pass CAD shaders compiled & pipelines ready.\n";
+}
+
 void ViewportRenderer::RenderLoop(std::stop_token stopToken) {
     std::cout << "[ViewportRenderer] Independent Render Loop active (Target: 120 FPS).\n";
+
+    InitPipelines();
 
     constexpr auto targetFrameDuration = std::chrono::microseconds(8333); // 120 FPS cadence
     uint64_t lastGenerationId = 0;
@@ -89,7 +170,8 @@ void ViewportRenderer::RenderLoop(std::stop_token stopToken) {
                 latestMesh->edgeIndexCount
             );
             std::cout << "  [ViewportRenderer] Render proxy swapped to Gen " 
-                      << lastGenerationId << " (" << latestMesh->indexCount << " indices)\n";
+                      << lastGenerationId << " (" << latestMesh->indexCount 
+                      << " tri indices, " << latestMesh->edgeIndexCount << " edge indices)\n";
         }
 
         // 3. Acquire camera uniforms under short lock
@@ -99,13 +181,13 @@ void ViewportRenderer::RenderLoop(std::stop_token stopToken) {
             cameraUniforms = m_camera.GetUniforms();
         }
 
-        // 4. Record and present frame if hardware device is active
+        // 4. Record and present multi-pass CAD frame
         if (m_device && cmdList) {
             if (m_device->BeginFrame()) {
                 cmdList->Begin();
 
                 RHI::RenderPassDesc passDesc{
-                    .clearColor = {0.12f, 0.12f, 0.15f, 1.0f},
+                    .clearColor = {0.15f, 0.16f, 0.18f, 1.0f}, // CAD workstation dark slate background
                     .clearDepth = 1.0f,
                     .clearColorBuffer = true,
                     .clearDepthBuffer = true
@@ -131,18 +213,62 @@ void ViewportRenderer::RenderLoop(std::stop_token stopToken) {
                 };
                 cmdList->SetScissor(scissor);
 
-                // Push camera transform directly into command buffer stream
-                cmdList->SetPushConstants(
-                    RHI::ShaderStage::Vertex, 
-                    &cameraUniforms, 
-                    sizeof(cameraUniforms)
-                );
+                // --- PASS 1: Infinite Ground Grid ---
+                if (m_gridPipeline) {
+                    cmdList->SetPipeline(m_gridPipeline);
+                    CADGridUniforms gridUbo{
+                        .viewProjection = cameraUniforms.viewProjection,
+                        .invViewProjection = cameraUniforms.invViewProjection,
+                        .cameraPosition = cameraUniforms.eyePosition,
+                        .nearPlane = 0.1f,
+                        .farPlane = 1000.0f,
+                        .gridScale = 1.0f
+                    };
+                    cmdList->SetPushConstants(
+                        RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment,
+                        &gridUbo,
+                        sizeof(gridUbo)
+                    );
+                    cmdList->Draw(6); // 2 triangles covering ground
+                }
 
-                // Draw current render proxy mesh if valid
                 if (m_renderProxy.IsValid()) {
-                    cmdList->SetVertexBuffer(0, m_renderProxy.GetVertexBuffer());
-                    cmdList->SetIndexBuffer(m_renderProxy.GetIndexBuffer(), 0, RHI::IndexFormat::UInt32);
-                    cmdList->DrawIndexed(m_renderProxy.GetIndexCount());
+                    // --- PASS 2: Shaded CAD Model Pass ---
+                    if (m_shadedPipeline) {
+                        cmdList->SetPipeline(m_shadedPipeline);
+                        CADModelUniforms modelUbo{
+                            .modelViewProjection = cameraUniforms.viewProjection,
+                            .cameraPosition = cameraUniforms.eyePosition,
+                            .lightDirection = {0.577f, 0.816f, 0.577f, 0.0f},
+                            .surfaceColor = {0.72f, 0.76f, 0.82f, 1.0f}, // Clean CAD aluminum
+                            .lightingParams = {0.25f, 0.75f, 0.35f, 32.0f}
+                        };
+                        cmdList->SetPushConstants(
+                            RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment,
+                            &modelUbo,
+                            sizeof(modelUbo)
+                        );
+                        cmdList->SetVertexBuffer(0, m_renderProxy.GetVertexBuffer());
+                        cmdList->SetIndexBuffer(m_renderProxy.GetIndexBuffer(), 0, RHI::IndexFormat::UInt32);
+                        cmdList->DrawIndexed(m_renderProxy.GetIndexCount());
+                    }
+
+                    // --- PASS 3: Crisp Feature-Edge / Wireframe Overlay ---
+                    if (m_wireframePipeline && m_renderProxy.GetEdgeIndexBuffer()) {
+                        cmdList->SetPipeline(m_wireframePipeline);
+                        CADWireframeUniforms wireUbo{
+                            .modelViewProjection = cameraUniforms.viewProjection,
+                            .edgeColor = {0.10f, 0.12f, 0.14f, 1.0f} // Dark silhouette edge
+                        };
+                        cmdList->SetPushConstants(
+                            RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment,
+                            &wireUbo,
+                            sizeof(wireUbo)
+                        );
+                        cmdList->SetVertexBuffer(0, m_renderProxy.GetVertexBuffer());
+                        cmdList->SetIndexBuffer(m_renderProxy.GetEdgeIndexBuffer(), 0, RHI::IndexFormat::UInt32);
+                        cmdList->DrawIndexed(m_renderProxy.GetEdgeIndexCount());
+                    }
                 }
 
                 cmdList->EndRenderPass();
@@ -163,7 +289,7 @@ void ViewportRenderer::RenderLoop(std::stop_token stopToken) {
         m_avgFrameTimeMs.store(frameTimeMs, std::memory_order_relaxed);
 
         if (frames % 40 == 0) {
-            std::cout << "  [Viewport Frame #" << std::setw(4) << frames 
+            std::cout << "  [CAD Viewport Frame #" << std::setw(4) << frames 
                       << "] Cadence: " << std::fixed << std::setprecision(2) << frameTimeMs 
                       << " ms | Active Gen: " << lastGenerationId << "\n";
         }

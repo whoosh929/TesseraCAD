@@ -2,6 +2,7 @@
 
 #include "Camera.hpp"
 #include "MeshRenderProxy.hpp"
+#include "CADShaders.hpp"
 #include "engine/hal/RHI.hpp"
 #include "engine/concurrency/AtomicMeshExchange.hpp"
 #include <thread>
@@ -40,11 +41,17 @@ public:
     }
 
 private:
+    void InitPipelines();
     void RenderLoop(std::stop_token stopToken);
 
     RHI::RHIDevice* m_device;
     AtomicMeshExchange& m_meshExchange;
     MeshRenderProxy m_renderProxy;
+
+    // CAD Multi-Pass Pipelines
+    std::shared_ptr<RHI::RHIPipeline> m_shadedPipeline;
+    std::shared_ptr<RHI::RHIPipeline> m_wireframePipeline;
+    std::shared_ptr<RHI::RHIPipeline> m_gridPipeline;
 
     Camera m_camera;
     std::mutex m_cameraMutex;

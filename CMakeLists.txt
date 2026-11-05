@@ -40,6 +40,7 @@ target_sources(tessera_engine
         # Render Loop & Viewport
         src/engine/render/Camera.hpp
         src/engine/render/MeshRenderProxy.hpp
+        src/engine/render/CADShaders.hpp
         src/engine/render/ViewportRenderer.hpp
         src/engine/render/ViewportRenderer.cpp
 )

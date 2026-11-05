@@ -131,12 +131,18 @@ struct RasterizerState {
     FrontFace frontFace{FrontFace::CounterClockwise};
     bool wireframe{false};
     bool depthClamp{false};
+    float depthBiasConstant{0.0f};
+    float depthBiasSlope{0.0f};
 };
 
 struct DepthStencilState {
     bool depthTestEnable{true};
     bool depthWriteEnable{true};
     CompareOp depthCompareOp{CompareOp::Less};
+};
+
+struct BlendState {
+    bool blendEnable{false};
 };
 
 struct RHIBufferDesc {
@@ -155,6 +161,7 @@ struct RHIPipelineDesc {
     PrimitiveTopology topology{PrimitiveTopology::TriangleList};
     RasterizerState rasterizer;
     DepthStencilState depthStencil;
+    BlendState blendState;
     std::string debugName;
 };
 
