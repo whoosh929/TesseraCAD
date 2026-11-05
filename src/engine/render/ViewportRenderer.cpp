@@ -1,4 +1,5 @@
 #include "ViewportRenderer.hpp"
+#include "engine/graph/GeometryTypes.hpp"
 #include <iostream>
 #include <iomanip>
 

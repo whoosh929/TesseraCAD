@@ -209,8 +209,13 @@ void VulkanDevice::InitSurface(const NativeWindowHandle& windowHandle) {
         createInfo.hwnd = static_cast<HWND>(windowHandle.windowHandle);
         createInfo.hinstance = static_cast<HINSTANCE>(windowHandle.displayHandle ? windowHandle.displayHandle : GetModuleHandle(nullptr));
 
-        if (vkCreateWin32SurfaceKHR(m_instance, &createInfo, nullptr, &m_surface) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create Win32 Vulkan surface!");
+        auto pfnCreateWin32SurfaceKHR = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(
+            vkGetInstanceProcAddr(m_instance, "vkCreateWin32SurfaceKHR")
+        );
+        if (pfnCreateWin32SurfaceKHR) {
+            if (pfnCreateWin32SurfaceKHR(m_instance, &createInfo, nullptr, &m_surface) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to create Win32 Vulkan surface!");
+            }
         }
     }
 #else

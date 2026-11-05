@@ -94,6 +94,14 @@ elseif(WIN32)
         )
         FetchContent_MakeAvailable(volk)
 
+        if(TARGET volk)
+            target_compile_definitions(volk PUBLIC VK_USE_PLATFORM_WIN32_KHR)
+        endif()
+
+        if(TARGET volk AND TARGET Vulkan-Headers)
+            target_link_libraries(volk PUBLIC Vulkan-Headers)
+        endif()
+
         set(PLATFORM_GRAPHICS_LIBS volk Vulkan-Headers)
     endif()
 
