@@ -30,8 +30,18 @@ Application::Application() {
     // 2. Initialize Parametric Graph
     m_graph = std::make_unique<ParametricGraph>(m_threadPool);
 
-    // 3. Create initial parametric primitives
-    m_testBoxNode = std::make_shared<BoxNode>("ParametricBox_01", 3.0f, 1.5f, 4.0f);
+    // 3. Create initial parametric 2D Sketch & linked Extrusion feature
+    auto initialSketch = std::make_shared<SketchNode>("Sketch_01", SketchPlane::XZ_Ground);
+    initialSketch->SetPresetLBracket(4.0f, 4.0f, 1.2f);
+    initialSketch->SetPosition(-2.5f, 0.0f, 0.0f);
+    m_graph->AddNode(initialSketch);
+
+    auto initialExtrude = std::make_shared<ExtrudeNode>("Extrude_01", initialSketch, 3.0f);
+    initialExtrude->SetPosition(-2.5f, 0.0f, 0.0f);
+    m_graph->AddNode(initialExtrude);
+
+    m_testBoxNode = std::make_shared<BoxNode>("ParametricBox_01", 3.0f, 1.5f, 3.0f);
+    m_testBoxNode->SetPosition(3.5f, 0.0f, 0.0f);
     m_graph->AddNode(m_testBoxNode);
 
     // 4. Initialize Desktop Window & Native Graphics HAL

@@ -59,6 +59,7 @@ target_sources(tessera_engine
         src/engine/graph/BoxNode.hpp
         src/engine/graph/CylinderNode.hpp
         src/engine/graph/SphereNode.hpp
+        src/engine/graph/SketchNode.hpp
         src/engine/graph/ExtrudeNode.hpp
 
         # Render Loop & Viewport

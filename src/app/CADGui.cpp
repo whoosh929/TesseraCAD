@@ -112,109 +112,197 @@ void CADGui::RenderUI(
     if (!m_initialized) return;
 
     // -------------------------------------------------------------------------
-    // PANEL 1: CAD Tool Palette - Shape Creation
+    // PANEL 1: CAD Tool Palette - Shape Creation & 2D Sketching
     // -------------------------------------------------------------------------
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(340.0f, 380.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 430.0f), ImGuiCond_FirstUseEver);
 
-    if (ImGui::Begin("CAD Tool Palette - Create Shapes", nullptr)) {
-        ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Parametric Primitives");
-        ImGui::Separator();
-
-        const char* shapeTypes[] = { "Box", "Cylinder", "Sphere", "Extrude 2D" };
-        ImGui::Combo("Primitive Type", &m_selectedShapeType, shapeTypes, IM_ARRAYSIZE(shapeTypes));
-        ImGui::Spacing();
-
-        if (m_selectedShapeType == 0) {
-            // Box parameters
-            ImGui::SliderFloat("Width (X)",  &m_newBoxDims[0], 0.2f, 15.0f, "%.2f m");
-            ImGui::SliderFloat("Height (Y)", &m_newBoxDims[1], 0.2f, 15.0f, "%.2f m");
-            ImGui::SliderFloat("Depth (Z)",  &m_newBoxDims[2], 0.2f, 15.0f, "%.2f m");
-
-            ImGui::Spacing();
-            if (ImGui::Button("+ Create Parametric Box", ImVec2(-1, 32))) {
-                std::string name = "Box_" + std::to_string(m_shapeCounter++);
-                auto node = std::make_shared<BoxNode>(name, m_newBoxDims[0], m_newBoxDims[1], m_newBoxDims[2]);
-                float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
-                float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
-                node->SetPosition(posX, 0.0f, posZ);
-                graph.AddNode(node);
-                graph.EvaluateDirtyNodes(device, exchange);
-                m_selectedNodeId = node->GetId();
+    if (ImGui::Begin("CAD Tool Palette", nullptr)) {
+        // Collect all SketchNodes in the DAG
+        std::vector<std::shared_ptr<SketchNode>> sketchNodes;
+        for (const auto& n : graph.GetNodes()) {
+            if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                sketchNodes.push_back(s);
             }
-        } else if (m_selectedShapeType == 1) {
-            // Cylinder parameters
-            ImGui::SliderFloat("Radius", &m_newCylinderRadius, 0.1f, 10.0f, "%.2f m");
-            ImGui::SliderFloat("Height", &m_newCylinderHeight, 0.2f, 15.0f, "%.2f m");
-            ImGui::SliderInt("Segments", &m_newCylinderSegments, 8, 96);
+        }
 
-            ImGui::Spacing();
-            if (ImGui::Button("+ Create Parametric Cylinder", ImVec2(-1, 32))) {
-                std::string name = "Cylinder_" + std::to_string(m_shapeCounter++);
-                auto node = std::make_shared<CylinderNode>(name, m_newCylinderRadius, m_newCylinderHeight, m_newCylinderSegments);
-                float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
-                float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
-                node->SetPosition(posX, 0.0f, posZ);
-                graph.AddNode(node);
-                graph.EvaluateDirtyNodes(device, exchange);
-                m_selectedNodeId = node->GetId();
-            }
-        } else if (m_selectedShapeType == 2) {
-            // Sphere parameters
-            ImGui::SliderFloat("Radius", &m_newSphereRadius, 0.2f, 10.0f, "%.2f m");
-            ImGui::SliderInt("Rings",   &m_newSphereRings, 6, 48);
-            ImGui::SliderInt("Sectors", &m_newSphereSectors, 8, 64);
+        if (ImGui::BeginTabBar("PaletteTabBar")) {
+            // =================================================================
+            // TAB 1: 3D Features & Solids
+            // =================================================================
+            if (ImGui::BeginTabItem("3D Features")) {
+                const char* shapeTypes[] = { "Parametric Box", "Parametric Cylinder", "Parametric Sphere", "Extrude Feature" };
+                ImGui::Combo("Feature Type", &m_selectedShapeType, shapeTypes, IM_ARRAYSIZE(shapeTypes));
+                ImGui::Spacing();
 
-            ImGui::Spacing();
-            if (ImGui::Button("+ Create Parametric Sphere", ImVec2(-1, 32))) {
-                std::string name = "Sphere_" + std::to_string(m_shapeCounter++);
-                auto node = std::make_shared<SphereNode>(name, m_newSphereRadius, m_newSphereRings, m_newSphereSectors);
-                float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
-                float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
-                node->SetPosition(posX, 0.0f, posZ);
-                graph.AddNode(node);
-                graph.EvaluateDirtyNodes(device, exchange);
-                m_selectedNodeId = node->GetId();
-            }
-        } else if (m_selectedShapeType == 3) {
-            // Extrude 2D Sketch
-            const char* profiles[] = { "L-Bracket Profile", "Hexagon Profile", "Star Profile", "T-Beam Profile" };
-            ImGui::Combo("2D Sketch", &m_selectedExtrudeProfile, profiles, IM_ARRAYSIZE(profiles));
-            ImGui::SliderFloat("Extrude Depth", &m_newExtrudeHeight, 0.2f, 15.0f, "%.2f m");
+                if (m_selectedShapeType == 0) {
+                    // Box parameters
+                    ImGui::SliderFloat("Width (X)",  &m_newBoxDims[0], 0.2f, 15.0f, "%.2f m");
+                    ImGui::SliderFloat("Height (Y)", &m_newBoxDims[1], 0.2f, 15.0f, "%.2f m");
+                    ImGui::SliderFloat("Depth (Z)",  &m_newBoxDims[2], 0.2f, 15.0f, "%.2f m");
 
-            ImGui::Spacing();
-            if (ImGui::Button("+ Create Extrusion", ImVec2(-1, 32))) {
-                std::vector<std::array<float, 2>> profile;
-                if (m_selectedExtrudeProfile == 0) {
-                    // L-Bracket
-                    profile = {{-2.0f, -2.0f}, {2.0f, -2.0f}, {2.0f, -1.0f}, {-1.0f, -1.0f}, {-1.0f, 2.0f}, {-2.0f, 2.0f}};
-                } else if (m_selectedExtrudeProfile == 1) {
-                    // Regular Hexagon
-                    for (int i = 0; i < 6; ++i) {
-                        float angle = i * 1.04719755f;
-                        profile.push_back({2.0f * std::cos(angle), 2.0f * std::sin(angle)});
+                    ImGui::Spacing();
+                    if (ImGui::Button("+ Create Parametric Box", ImVec2(-1, 32))) {
+                        std::string name = "Box_" + std::to_string(m_shapeCounter++);
+                        auto node = std::make_shared<BoxNode>(name, m_newBoxDims[0], m_newBoxDims[1], m_newBoxDims[2]);
+                        float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                        float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                        node->SetPosition(posX, 0.0f, posZ);
+                        graph.AddNode(node);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                        m_selectedNodeId = node->GetId();
                     }
-                } else if (m_selectedExtrudeProfile == 2) {
-                    // 5-Point Star
-                    for (int i = 0; i < 10; ++i) {
-                        float r = (i % 2 == 0) ? 2.5f : 1.2f;
-                        float angle = i * 0.62831853f;
-                        profile.push_back({r * std::cos(angle), r * std::sin(angle)});
+                } else if (m_selectedShapeType == 1) {
+                    // Cylinder parameters
+                    ImGui::SliderFloat("Radius", &m_newCylinderRadius, 0.1f, 10.0f, "%.2f m");
+                    ImGui::SliderFloat("Height", &m_newCylinderHeight, 0.2f, 15.0f, "%.2f m");
+                    ImGui::SliderInt("Segments", &m_newCylinderSegments, 8, 96);
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("+ Create Parametric Cylinder", ImVec2(-1, 32))) {
+                        std::string name = "Cylinder_" + std::to_string(m_shapeCounter++);
+                        auto node = std::make_shared<CylinderNode>(name, m_newCylinderRadius, m_newCylinderHeight, m_newCylinderSegments);
+                        float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                        float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                        node->SetPosition(posX, 0.0f, posZ);
+                        graph.AddNode(node);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                        m_selectedNodeId = node->GetId();
                     }
-                } else {
-                    // T-Beam
-                    profile = {{-2.0f, 1.0f}, {2.0f, 1.0f}, {2.0f, 0.0f}, {0.5f, 0.0f}, {0.5f, -2.0f}, {-0.5f, -2.0f}, {-0.5f, 0.0f}, {-2.0f, 0.0f}};
+                } else if (m_selectedShapeType == 2) {
+                    // Sphere parameters
+                    ImGui::SliderFloat("Radius", &m_newSphereRadius, 0.2f, 10.0f, "%.2f m");
+                    ImGui::SliderInt("Rings",   &m_newSphereRings, 6, 48);
+                    ImGui::SliderInt("Sectors", &m_newSphereSectors, 8, 64);
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("+ Create Parametric Sphere", ImVec2(-1, 32))) {
+                        std::string name = "Sphere_" + std::to_string(m_shapeCounter++);
+                        auto node = std::make_shared<SphereNode>(name, m_newSphereRadius, m_newSphereRings, m_newSphereSectors);
+                        float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                        float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                        node->SetPosition(posX, 0.0f, posZ);
+                        graph.AddNode(node);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                        m_selectedNodeId = node->GetId();
+                    }
+                } else if (m_selectedShapeType == 3) {
+                    // Extrude Feature (CAD workflow: extrude from reference sketch)
+                    ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Extrude from Reference Sketch");
+                    ImGui::Separator();
+
+                    if (!sketchNodes.empty()) {
+                        std::vector<std::string> sketchNames;
+                        for (const auto& s : sketchNodes) {
+                            sketchNames.push_back("[" + std::to_string(s->GetId()) + "] " + s->GetName() + 
+                                                  " (" + std::to_string(s->GetProfile().size()) + " pts)");
+                        }
+                        if (m_selectedSketchIndex >= static_cast<int>(sketchNames.size())) {
+                            m_selectedSketchIndex = 0;
+                        }
+
+                        if (ImGui::BeginCombo("Reference Sketch", sketchNames[m_selectedSketchIndex].c_str())) {
+                            for (int i = 0; i < static_cast<int>(sketchNames.size()); ++i) {
+                                bool isSelected = (m_selectedSketchIndex == i);
+                                if (ImGui::Selectable(sketchNames[i].c_str(), isSelected)) {
+                                    m_selectedSketchIndex = i;
+                                }
+                                if (isSelected) {
+                                    ImGui::SetItemDefaultFocus();
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+
+                        ImGui::SliderFloat("Extrude Depth", &m_newExtrudeHeight, 0.2f, 15.0f, "%.2f m");
+
+                        ImGui::Spacing();
+                        if (ImGui::Button("+ Extrude from Selected Sketch", ImVec2(-1, 32))) {
+                            auto refSketch = sketchNodes[m_selectedSketchIndex];
+                            std::string name = "Extrude_" + std::to_string(m_shapeCounter++);
+                            auto node = std::make_shared<ExtrudeNode>(name, refSketch, m_newExtrudeHeight);
+                            graph.AddNode(node);
+                            graph.EvaluateDirtyNodes(device, exchange);
+                            m_selectedNodeId = node->GetId();
+                        }
+                    } else {
+                        ImGui::TextDisabled("No 2D Sketches exist in the Model Tree yet.");
+                        ImGui::Spacing();
+                        if (ImGui::Button("+ Create 2D Sketch to Extrude", ImVec2(-1, 30))) {
+                            std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
+                            auto sketch = std::make_shared<SketchNode>(name, SketchPlane::XZ_Ground);
+                            sketch->SetPresetLBracket(3.5f, 3.5f, 1.0f);
+                            graph.AddNode(sketch);
+                            graph.EvaluateDirtyNodes(device, exchange);
+                            m_selectedNodeId = sketch->GetId();
+                            m_activeSketchId = sketch->GetId();
+                            m_sketchModeActive = true;
+                        }
+                    }
                 }
 
-                std::string name = "Extrude_" + std::to_string(m_shapeCounter++);
-                auto node = std::make_shared<ExtrudeNode>(name, profile, m_newExtrudeHeight);
-                float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
-                float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
-                node->SetPosition(posX, 0.0f, posZ);
-                graph.AddNode(node);
-                graph.EvaluateDirtyNodes(device, exchange);
-                m_selectedNodeId = node->GetId();
+                ImGui::EndTabItem();
             }
+
+            // =================================================================
+            // TAB 2: 2D Sketch Mode
+            // =================================================================
+            if (ImGui::BeginTabItem("2D Sketch Mode")) {
+                ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Datum Planes & Profile Presets");
+                ImGui::Separator();
+
+                const char* planes[] = { "XZ Ground Plane (Top View)", "XY Front Plane", "YZ Right Plane" };
+                ImGui::Combo("Datum Plane", &m_newSketchPlane, planes, IM_ARRAYSIZE(planes));
+
+                const char* presets[] = { "Rectangle", "Regular Polygon", "L-Bracket", "5-Point Star", "T-Beam" };
+                ImGui::Combo("Initial Profile", &m_newSketchPreset, presets, IM_ARRAYSIZE(presets));
+
+                if (m_newSketchPreset == 0) {
+                    ImGui::SliderFloat("Width (U)",  &m_sketchRectDims[0], 0.5f, 15.0f, "%.2f m");
+                    ImGui::SliderFloat("Height (V)", &m_sketchRectDims[1], 0.5f, 15.0f, "%.2f m");
+                } else if (m_newSketchPreset == 1) {
+                    ImGui::SliderInt("Sides", &m_sketchPolySides, 3, 24);
+                    ImGui::SliderFloat("Radius", &m_sketchPolyRadius, 0.5f, 10.0f, "%.2f m");
+                } else if (m_newSketchPreset == 2) {
+                    ImGui::SliderFloat("Width (U)", &m_sketchLBracket[0], 1.0f, 12.0f, "%.2f m");
+                    ImGui::SliderFloat("Height (V)", &m_sketchLBracket[1], 1.0f, 12.0f, "%.2f m");
+                    ImGui::SliderFloat("Flange Thickness", &m_sketchLBracket[2], 0.2f, 4.0f, "%.2f m");
+                } else if (m_newSketchPreset == 3) {
+                    ImGui::SliderInt("Points", &m_sketchStarPoints, 3, 12);
+                    ImGui::SliderFloat("Outer Radius", &m_sketchStarRadii[0], 0.5f, 10.0f, "%.2f m");
+                    ImGui::SliderFloat("Inner Radius", &m_sketchStarRadii[1], 0.2f, 8.0f, "%.2f m");
+                } else if (m_newSketchPreset == 4) {
+                    ImGui::SliderFloat("Flange Width", &m_sketchTBeam[0], 1.0f, 12.0f, "%.2f m");
+                    ImGui::SliderFloat("Web Height",   &m_sketchTBeam[1], 1.0f, 12.0f, "%.2f m");
+                    ImGui::SliderFloat("Thickness",    &m_sketchTBeam[2], 0.2f, 3.0f, "%.2f m");
+                }
+
+                ImGui::Spacing();
+                if (ImGui::Button("+ Create 2D Sketch in Model Tree", ImVec2(-1, 32))) {
+                    std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
+                    auto sketch = std::make_shared<SketchNode>(name, static_cast<SketchPlane>(m_newSketchPlane));
+                    
+                    if (m_newSketchPreset == 0)      sketch->SetPresetRectangle(m_sketchRectDims[0], m_sketchRectDims[1]);
+                    else if (m_newSketchPreset == 1) sketch->SetPresetRegularPolygon(m_sketchPolySides, m_sketchPolyRadius);
+                    else if (m_newSketchPreset == 2) sketch->SetPresetLBracket(m_sketchLBracket[0], m_sketchLBracket[1], m_sketchLBracket[2]);
+                    else if (m_newSketchPreset == 3) sketch->SetPresetStar(m_sketchStarPoints, m_sketchStarRadii[0], m_sketchStarRadii[1]);
+                    else if (m_newSketchPreset == 4) sketch->SetPresetTBeam(m_sketchTBeam[0], m_sketchTBeam[1], m_sketchTBeam[2]);
+
+                    float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                    float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                    sketch->SetPosition(posX, 0.0f, posZ);
+
+                    graph.AddNode(sketch);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    m_selectedNodeId = sketch->GetId();
+                    m_activeSketchId = sketch->GetId();
+                    m_sketchModeActive = true;
+                }
+
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
         }
     }
     ImGui::End();
@@ -222,20 +310,28 @@ void CADGui::RenderUI(
     // -------------------------------------------------------------------------
     // PANEL 2: Model Tree & Interactive Property Inspector
     // -------------------------------------------------------------------------
-    ImGui::SetNextWindowPos(ImVec2(16.0f, 410.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(340.0f, 420.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(16.0f, 455.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 410.0f), ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("Model Tree & Property Inspector", nullptr)) {
-        ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "DAG Scene Objects (%zu)", graph.GetNodeCount());
+        ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "CAD Model Tree (%zu Objects)", graph.GetNodeCount());
         ImGui::Separator();
 
         auto nodes = graph.GetNodes();
         std::shared_ptr<DAGNode> selectedNode = nullptr;
 
-        ImGui::BeginChild("NodeList", ImVec2(0, 140), true);
+        ImGui::BeginChild("NodeList", ImVec2(0, 130), true);
         for (const auto& node : nodes) {
             bool isSelected = (node->GetId() == m_selectedNodeId);
-            std::string label = "[" + std::to_string(node->GetId()) + "] " + node->GetName();
+
+            std::string prefix = "[Solid] ";
+            if (auto s = std::dynamic_pointer_cast<SketchNode>(node)) {
+                prefix = "[Sketch] ";
+            } else if (auto e = std::dynamic_pointer_cast<ExtrudeNode>(node)) {
+                prefix = e->GetSketchReference() ? "[Extrude (Ref)] " : "[Extrude] ";
+            }
+
+            std::string label = prefix + node->GetName() + " (ID " + std::to_string(node->GetId()) + ")";
             if (ImGui::Selectable(label.c_str(), isSelected)) {
                 m_selectedNodeId = node->GetId();
             }
@@ -246,11 +342,11 @@ void CADGui::RenderUI(
         ImGui::EndChild();
 
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Live Shape Inspector:");
+        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Live Feature / Sketch Inspector:");
         ImGui::Separator();
 
         if (selectedNode) {
-            ImGui::Text("Editing: %s (Gen %llu)", selectedNode->GetName().c_str(), selectedNode->GetGeneration());
+            ImGui::Text("Selected: %s (Gen %llu)", selectedNode->GetName().c_str(), selectedNode->GetGeneration());
 
             float pos[3]{selectedNode->GetPosition()[0], selectedNode->GetPosition()[1], selectedNode->GetPosition()[2]};
             if (ImGui::DragFloat3("Position (X, Y, Z)", pos, 0.1f, -50.0f, 50.0f, "%.2f m")) {
@@ -259,7 +355,98 @@ void CADGui::RenderUI(
             }
             ImGui::Spacing();
 
-            if (auto box = std::dynamic_pointer_cast<BoxNode>(selectedNode)) {
+            // -----------------------------------------------------------------
+            // A. Sketch Node Inspector
+            // -----------------------------------------------------------------
+            if (auto sketch = std::dynamic_pointer_cast<SketchNode>(selectedNode)) {
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "2D Sketch Properties:");
+                
+                int currentPlane = static_cast<int>(sketch->GetPlane());
+                const char* planes[] = { "XZ Ground Plane (Top)", "XY Front Plane", "YZ Right Plane" };
+                if (ImGui::Combo("Datum Plane", &currentPlane, planes, IM_ARRAYSIZE(planes))) {
+                    sketch->SetPlane(static_cast<SketchPlane>(currentPlane));
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                bool visible = sketch->IsVisible();
+                if (ImGui::Checkbox("Show 2D Sketch Wireframe in 3D", &visible)) {
+                    sketch->SetVisible(visible);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Profile Presets Quick-Swap:");
+                if (ImGui::Button("Rectangle")) {
+                    sketch->SetPresetRectangle(3.0f, 2.0f);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Hexagon")) {
+                    sketch->SetPresetRegularPolygon(6, 2.0f);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("L-Bracket")) {
+                    sketch->SetPresetLBracket(3.5f, 3.5f, 1.0f);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Star")) {
+                    sketch->SetPresetStar(5, 2.5f, 1.2f);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                // Interactive 2D Points Editor
+                ImGui::Spacing();
+                const auto& profile = sketch->GetProfile();
+                ImGui::Text("Sketch Vertices (%zu points):", profile.size());
+
+                ImGui::BeginChild("PointEditor", ImVec2(0, 95), true);
+                for (size_t i = 0; i < profile.size(); ++i) {
+                    float pt[2]{profile[i][0], profile[i][1]};
+                    std::string label = "Pt #" + std::to_string(i);
+                    if (ImGui::DragFloat2(label.c_str(), pt, 0.05f, -20.0f, 20.0f, "%.2f")) {
+                        sketch->UpdatePoint(i, pt[0], pt[1]);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                    }
+                }
+                ImGui::EndChild();
+
+                if (ImGui::Button("+ Add Vertex")) {
+                    sketch->AddPoint(m_newPointCoord[0], m_newPointCoord[1]);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("- Delete Last Vertex") && profile.size() > 3) {
+                    sketch->RemovePoint(profile.size() - 1);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+            }
+            // -----------------------------------------------------------------
+            // B. Extrude Node Inspector
+            // -----------------------------------------------------------------
+            else if (auto extrude = std::dynamic_pointer_cast<ExtrudeNode>(selectedNode)) {
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Extrude Feature Properties:");
+                
+                if (auto refSketch = extrude->GetSketchReference()) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1.0f), "Linked to Sketch: %s", refSketch->GetName().c_str());
+                    if (ImGui::Button("Jump to Reference Sketch", ImVec2(-1, 24))) {
+                        m_selectedNodeId = refSketch->GetId();
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Standalone Profile (No Sketch Ref)");
+                }
+
+                float h = extrude->GetHeight();
+                if (ImGui::SliderFloat("Extrude Depth", &h, 0.2f, 15.0f, "%.2f m")) {
+                    extrude->SetHeight(h);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+            }
+            // -----------------------------------------------------------------
+            // C. Primitive Nodes (Box, Cylinder, Sphere)
+            // -----------------------------------------------------------------
+            else if (auto box = std::dynamic_pointer_cast<BoxNode>(selectedNode)) {
                 float w = box->GetWidth();
                 float h = box->GetHeight();
                 float d = box->GetDepth();
@@ -301,22 +488,16 @@ void CADGui::RenderUI(
                     sphere->SetParameters(r, rings, sectors);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
-            } else if (auto extrude = std::dynamic_pointer_cast<ExtrudeNode>(selectedNode)) {
-                float h = extrude->GetHeight();
-                if (ImGui::SliderFloat("Extrude Depth", &h, 0.2f, 15.0f, "%.2f m")) {
-                    extrude->SetHeight(h);
-                    graph.EvaluateDirtyNodes(device, exchange);
-                }
             }
 
             ImGui::Spacing();
-            if (ImGui::Button("Delete Selected Shape", ImVec2(-1, 26))) {
+            if (ImGui::Button("Delete Selected Object", ImVec2(-1, 26))) {
                 graph.RemoveNode(selectedNode->GetId());
                 graph.PublishCombinedSceneMesh(device, exchange);
                 m_selectedNodeId = 0;
             }
         } else {
-            ImGui::TextDisabled("Select a shape from the list above to modify.");
+            ImGui::TextDisabled("Select an object or sketch from the Model Tree above to inspect.");
         }
     }
     ImGui::End();

@@ -7,6 +7,7 @@
 #include "engine/graph/BoxNode.hpp"
 #include "engine/graph/CylinderNode.hpp"
 #include "engine/graph/SphereNode.hpp"
+#include "engine/graph/SketchNode.hpp"
 #include "engine/graph/ExtrudeNode.hpp"
 #include "engine/render/ViewportRenderer.hpp"
 #include "CADGui.hpp"
