@@ -17,6 +17,14 @@ struct GLFWwindow;
 
 namespace Tessera {
 
+enum class SketchMouseTool : uint8_t {
+    SelectMove = 0,
+    Line = 1,
+    Rectangle = 2,
+    Circle = 3,
+    Spline = 4
+};
+
 class CADGui {
 public:
     CADGui() = default;
@@ -42,9 +50,21 @@ public:
     [[nodiscard]] bool GetShowGrid() const noexcept { return m_showGrid; }
 
     [[nodiscard]] bool IsSketchModeActive() const noexcept { return m_sketchModeActive; }
+    void EnterSketchMode(uint64_t sketchId) noexcept { 
+        m_sketchModeActive = true; 
+        m_activeSketchId = sketchId;
+        m_paletteTab = 1; // Switch to 2D Sketching tab
+    }
     void ExitSketchMode() noexcept { m_sketchModeActive = false; }
 
 private:
+    void RenderSketchCanvas(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        std::shared_ptr<SketchNode> activeSketch
+    );
+
     bool m_initialized{false};
     RHI::RHIDevice* m_rhiDevice{nullptr};
 
@@ -52,6 +72,22 @@ private:
     int m_paletteTab{0}; // 0: 3D Features & Solids, 1: 2D Sketching
     bool m_sketchModeActive{false};
     uint64_t m_activeSketchId{0};
+
+    // 2D Mouse Drawing Tools & Canvas State
+    SketchMouseTool m_mouseTool{SketchMouseTool::Rectangle};
+    bool m_gridSnapEnable{true};
+    float m_gridSnapSize{0.5f};
+    float m_canvasPanX{320.0f};
+    float m_canvasPanY{240.0f};
+    float m_canvasZoom{35.0f}; // Pixels per meter
+
+    bool m_isDrawing{false};
+    float m_drawStartU{0.0f};
+    float m_drawStartV{0.0f};
+    std::vector<std::array<float, 2>> m_inProgressPoints;
+    std::vector<std::array<float, 2>> m_inProgressSplineControls;
+    int m_draggedVertexIdx{-1};
+    int m_hoveredVertexIdx{-1};
 
     // Shape creation state
     int m_selectedShapeType{0}; // 0: Box, 1: Cylinder, 2: Sphere, 3: Extrude from Sketch
