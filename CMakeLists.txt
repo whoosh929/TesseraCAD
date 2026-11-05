@@ -18,30 +18,49 @@ add_library(tessera_engine STATIC)
 
 target_sources(tessera_engine
     PRIVATE
+        # HAL Abstract Interfaces
         src/engine/hal/RHICommon.hpp
         src/engine/hal/RHI.hpp
+
+        # Concurrency & Lock-Free Primitives
         src/engine/concurrency/AtomicMeshExchange.hpp
+        src/engine/concurrency/ThreadPool.hpp
+        src/engine/concurrency/SpinLock.hpp
+
+        # Parametric DAG
+        src/engine/graph/Node.hpp
+        src/engine/graph/ParametricGraph.hpp
+        src/engine/graph/BoxNode.hpp
+
+        # Render Loop & Viewport
+        src/engine/render/Camera.hpp
+        src/engine/render/MeshRenderProxy.hpp
+        src/engine/render/ViewportRenderer.hpp
+        src/engine/render/ViewportRenderer.cpp
 )
 
 # Configure platform-specific HAL sources
 if(APPLE)
-    # Enable Objective-C++ compilation if using .mm, or C++20 for .cpp
     set_source_files_properties(
         src/engine/hal/metal/MetalDevice.cpp
+        src/engine/hal/metal/MetalBuffer.cpp
         PROPERTIES LANGUAGE CXX
     )
     target_sources(tessera_engine
         PRIVATE
-            # Backend translation units will be added as implemented
-            # src/engine/hal/metal/MetalDevice.cpp
-            # src/engine/hal/metal/MetalBuffer.cpp
+            src/engine/hal/metal/MetalDevice.hpp
+            src/engine/hal/metal/MetalDevice.cpp
+            src/engine/hal/metal/MetalBuffer.hpp
+            src/engine/hal/metal/MetalBuffer.cpp
     )
     target_link_libraries(tessera_engine PUBLIC MetalCpp::MetalCpp)
 elseif(WIN32)
     target_sources(tessera_engine
         PRIVATE
-            # src/engine/hal/vulkan/VulkanDevice.cpp
-            # src/engine/hal/vulkan/VulkanBuffer.cpp
+            src/engine/hal/vulkan/VulkanBuffer.hpp
+            src/engine/hal/vulkan/VulkanBuffer.cpp
+            src/engine/hal/vulkan/VulkanDevice.hpp
+            src/engine/hal/vulkan/VulkanDevice.cpp
     )
 endif()
 
@@ -78,7 +97,7 @@ target_link_libraries(tessera_cad
         glfw
 )
 
-target_compile_features(tessera_cad PRIVATE cxx_std_20)
+target_compile_features(tessera_cad PUBLIC cxx_std_20)
 
 set_target_properties(tessera_cad PROPERTIES
     OUTPUT_NAME "TesseraCAD"

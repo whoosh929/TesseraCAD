@@ -39,3 +39,4 @@ message(STATUS "[metal-cpp] Include directory: ${METAL_CPP_INCLUDE_DIR}")
 add_library(MetalCpp INTERFACE)
 add_library(MetalCpp::MetalCpp ALIAS MetalCpp)
 target_include_directories(MetalCpp INTERFACE ${METAL_CPP_INCLUDE_DIR})
+

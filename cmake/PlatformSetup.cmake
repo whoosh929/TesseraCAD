@@ -102,3 +102,4 @@ elseif(WIN32)
 else()
     message(FATAL_ERROR "[TesseraCAD] Unsupported platform. Only macOS and Windows are supported.")
 endif()
+
