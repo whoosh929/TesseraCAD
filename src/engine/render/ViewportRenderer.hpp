@@ -22,6 +22,9 @@ public:
     ViewportRenderer(const ViewportRenderer&) = delete;
     ViewportRenderer& operator=(const ViewportRenderer&) = delete;
 
+    /// Renders a single frame (unblocked presentation)
+    void RenderFrame();
+
     /// Spawns the dedicated 120 FPS presentation loop thread
     void Start();
 
@@ -53,6 +56,11 @@ private:
     AtomicMeshExchange& m_meshExchange;
     MeshRenderProxy m_renderProxy;
     CADGui* m_gui{nullptr};
+
+    std::unique_ptr<RHI::RHICommandList> m_cmdList;
+    uint64_t m_lastGenerationId{0};
+    bool m_pipelinesInitialized{false};
+    std::chrono::steady_clock::time_point m_lastFrameTime{std::chrono::steady_clock::now()};
 
     // CAD Multi-Pass Pipelines
     std::shared_ptr<RHI::RHIPipeline> m_shadedPipeline;

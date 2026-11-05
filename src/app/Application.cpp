@@ -174,15 +174,12 @@ void Application::SetBoxDimensions(float width, float height, float depth) {
 }
 
 void Application::Run() {
-    // Start presentation loop on dedicated render thread (locked at unblocked 120 FPS)
-    m_renderer->Start();
-
-    // Trigger initial DAG evaluation of initial Box
+    // Trigger initial DAG evaluation of initial Box on background worker pool
     m_graph->EvaluateDirtyNodes(m_rhiDevice.get(), m_meshExchange);
 
     std::cout << "\n[TesseraCAD] Interactive CAD GUI active. Waiting for user input in desktop window...\n";
 
-    // Main interactive UI & Event Pump
+    // Main interactive UI & Presentation Pump
     while (!glfwWindowShouldClose(m_window) && m_running.load()) {
         glfwPollEvents();
 
@@ -200,8 +197,10 @@ void Application::Run() {
             );
         }
 
-        // Render loop runs concurrently on m_renderThread without blocking!
-        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+        // 3. Render 3D CAD viewport and GUI frame to swapchain
+        if (m_renderer) {
+            m_renderer->RenderFrame();
+        }
     }
 
     std::cout << "\n[TesseraCAD] Window close requested. Initiating graceful shutdown...\n";

@@ -124,11 +124,15 @@ public:
     }
 
     void Draw(uint32_t vertexCount, uint32_t firstVertex) override {
-        vkCmdDraw(m_cmd, vertexCount, 1, firstVertex, 0);
+        if (m_activeVkPipeline != VK_NULL_HANDLE) {
+            vkCmdDraw(m_cmd, vertexCount, 1, firstVertex, 0);
+        }
     }
 
     void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t vertexOffset) override {
-        vkCmdDrawIndexed(m_cmd, indexCount, 1, firstIndex, vertexOffset, 0);
+        if (m_activeVkPipeline != VK_NULL_HANDLE) {
+            vkCmdDrawIndexed(m_cmd, indexCount, 1, firstIndex, vertexOffset, 0);
+        }
     }
 
     [[nodiscard]] VkCommandBuffer GetVkCommandBuffer() const noexcept { return m_cmd; }
@@ -140,6 +144,7 @@ private:
     VkCommandPool m_pool{VK_NULL_HANDLE};
     VkCommandBuffer m_cmd{VK_NULL_HANDLE};
     std::shared_ptr<RHIPipeline> m_activePipeline;
+    VkPipeline m_activeVkPipeline{VK_NULL_HANDLE};
 };
 
 // -----------------------------------------------------------------------------
