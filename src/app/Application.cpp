@@ -1,5 +1,6 @@
 #include "Application.hpp"
 #include <GLFW/glfw3.h>
+#include "backends/imgui_impl_glfw.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -95,22 +96,39 @@ void Application::SetupCallbacks() {
     });
 
     glfwSetMouseButtonCallback(m_window, [](GLFWwindow* window, int button, int action, int mods) {
-        (void)mods;
+        // Forward directly to Dear ImGui
+        ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
+
         auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
         if (!app) return;
 
+        // Always clear dragging on release
+        if (action == GLFW_RELEASE) {
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                app->m_leftMouseDown = false;
+            } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
+                app->m_rightMouseDown = false;
+            }
+        }
+
+        // If Dear ImGui captured the mouse click, do not activate viewport camera orbit/pan
         if (app->m_gui && app->m_gui->WantCaptureMouse()) {
             return;
         }
 
-        if (button == GLFW_MOUSE_BUTTON_LEFT) {
-            app->m_leftMouseDown = (action == GLFW_PRESS);
-        } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
-            app->m_rightMouseDown = (action == GLFW_PRESS);
+        if (action == GLFW_PRESS) {
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                app->m_leftMouseDown = true;
+            } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
+                app->m_rightMouseDown = true;
+            }
         }
     });
 
     glfwSetCursorPosCallback(m_window, [](GLFWwindow* window, double xpos, double ypos) {
+        // Forward directly to Dear ImGui
+        ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
+
         auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
         if (!app) return;
 
@@ -119,7 +137,8 @@ void Application::SetupCallbacks() {
         app->m_lastMouseX = xpos;
         app->m_lastMouseY = ypos;
 
-        if (app->m_gui && app->m_gui->WantCaptureMouse()) {
+        // If neither button is down and GUI wants mouse, ignore for camera
+        if (!app->m_leftMouseDown && !app->m_rightMouseDown && app->m_gui && app->m_gui->WantCaptureMouse()) {
             return;
         }
 
@@ -133,7 +152,9 @@ void Application::SetupCallbacks() {
     });
 
     glfwSetScrollCallback(m_window, [](GLFWwindow* window, double xoffset, double yoffset) {
-        (void)xoffset;
+        // Forward directly to Dear ImGui
+        ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
+
         auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
         if (!app) return;
 
@@ -144,6 +165,22 @@ void Application::SetupCallbacks() {
         if (app->m_renderer) {
             app->m_renderer->ZoomCamera(static_cast<float>(yoffset) * 0.4f);
         }
+    });
+
+    glfwSetKeyCallback(m_window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
+        ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
+    });
+
+    glfwSetCharCallback(m_window, [](GLFWwindow* window, unsigned int c) {
+        ImGui_ImplGlfw_CharCallback(window, c);
+    });
+
+    glfwSetWindowFocusCallback(m_window, [](GLFWwindow* window, int focused) {
+        ImGui_ImplGlfw_WindowFocusCallback(window, focused);
+    });
+
+    glfwSetCursorEnterCallback(m_window, [](GLFWwindow* window, int entered) {
+        ImGui_ImplGlfw_CursorEnterCallback(window, entered);
     });
 }
 

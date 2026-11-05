@@ -50,8 +50,8 @@ void CADGui::Init(GLFWwindow* window, RHI::RHIDevice* rhiDevice) {
     colors[ImGuiCol_SliderGrabActive] = ImVec4(0.45f, 0.70f, 1.00f, 1.00f);
     colors[ImGuiCol_CheckMark]        = ImVec4(0.40f, 0.75f, 1.00f, 1.00f);
 
-    // Initialize backend wrappers
-    ImGui_ImplGlfw_InitForVulkan(window, true);
+    // Initialize backend wrappers (false = manual forwarding via Application::SetupCallbacks)
+    ImGui_ImplGlfw_InitForVulkan(window, false);
 
     if (auto* vkDevice = dynamic_cast<RHI::VulkanDevice*>(rhiDevice)) {
         ImGui_ImplVulkan_InitInfo initInfo{};

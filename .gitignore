@@ -5,4 +5,5 @@ bin/
 *.user
 *.suo
 compile_commands.json
+imgui.ini
 
