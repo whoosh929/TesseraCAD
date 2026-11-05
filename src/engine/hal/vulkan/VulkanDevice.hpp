@@ -39,7 +39,16 @@ public:
     [[nodiscard]] uint32_t GetSwapchainHeight() const noexcept override { return m_height; }
 
     [[nodiscard]] VkDevice GetVkDevice() const noexcept { return m_device; }
+    [[nodiscard]] VkPhysicalDevice GetVkPhysicalDevice() const noexcept { return m_physicalDevice; }
+    [[nodiscard]] VkInstance GetVkInstance() const noexcept { return m_instance; }
     [[nodiscard]] VkQueue GetGraphicsQueue() const noexcept { return m_graphicsQueue; }
+    [[nodiscard]] uint32_t GetGraphicsQueueFamily() const noexcept { return m_graphicsQueueFamily; }
+    [[nodiscard]] VkRenderPass GetRenderPass() const noexcept { return m_renderPass; }
+    [[nodiscard]] VkDescriptorPool GetDescriptorPool() const noexcept { return m_descriptorPool; }
+    [[nodiscard]] uint32_t GetImageCount() const noexcept { return static_cast<uint32_t>(m_swapchainImages.size()); }
+    [[nodiscard]] VkFramebuffer GetCurrentFramebuffer() const noexcept {
+        return (m_imageIndex < m_framebuffers.size()) ? m_framebuffers[m_imageIndex] : VK_NULL_HANDLE;
+    }
 
 private:
     void InitInstance();
@@ -48,6 +57,9 @@ private:
     void CreateLogicalDevice();
     void CreateSwapchain();
     void CleanupSwapchain();
+    void CreateRenderPass();
+    void CreateFramebuffers();
+    void CreateDescriptorPool();
     void CreateSyncObjects();
 
     uint32_t m_width{1920};
@@ -70,6 +82,9 @@ private:
     VkFormat m_swapchainFormat{VK_FORMAT_B8G8R8A8_UNORM};
 
     VkCommandPool m_commandPool{VK_NULL_HANDLE};
+    VkRenderPass m_renderPass{VK_NULL_HANDLE};
+    std::vector<VkFramebuffer> m_framebuffers;
+    VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
 
     static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
     uint32_t m_currentFrame{0};

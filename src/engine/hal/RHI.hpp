@@ -71,6 +71,8 @@ public:
 
     virtual void Draw(uint32_t vertexCount, uint32_t firstVertex = 0) = 0;
     virtual void DrawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t vertexOffset = 0) = 0;
+
+    [[nodiscard]] virtual void* GetNativeCommandBuffer() noexcept { return nullptr; }
 };
 
 // -----------------------------------------------------------------------------

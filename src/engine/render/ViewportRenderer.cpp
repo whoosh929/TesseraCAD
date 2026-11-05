@@ -1,5 +1,6 @@
 #include "ViewportRenderer.hpp"
 #include "engine/graph/GeometryTypes.hpp"
+#include "app/CADGui.hpp"
 #include <iostream>
 #include <iomanip>
 
@@ -270,6 +271,11 @@ void ViewportRenderer::RenderLoop(std::stop_token stopToken) {
                         cmdList->SetIndexBuffer(m_renderProxy.GetEdgeIndexBuffer(), 0, RHI::IndexFormat::UInt32);
                         cmdList->DrawIndexed(m_renderProxy.GetEdgeIndexCount());
                     }
+                }
+
+                // --- PASS 4: Dear ImGui CAD Tooling UI ---
+                if (m_gui) {
+                    m_gui->EndFrameAndDraw(cmdList.get());
                 }
 
                 cmdList->EndRenderPass();

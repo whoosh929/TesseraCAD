@@ -1,9 +1,24 @@
 #include "Application.hpp"
+#include <GLFW/glfw3.h>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <windows.h>
+#endif
+
 #include <iostream>
 #include <thread>
 #include <chrono>
 
 namespace Tessera {
+
+static void GLFWErrorCallback(int error, const char* description) {
+    std::cerr << "[GLFW Error " << error << "]: " << description << "\n";
+}
 
 Application::Application() {
     std::cout << "[Application] Bootstrapping TesseraCAD Engine Subsystems...\n";
@@ -15,42 +30,121 @@ Application::Application() {
     m_graph = std::make_unique<ParametricGraph>(m_threadPool);
 
     // 3. Create initial parametric primitives
-    m_testBoxNode = std::make_shared<BoxNode>("ParametricBox_01", 2.0f, 1.0f, 3.0f);
+    m_testBoxNode = std::make_shared<BoxNode>("ParametricBox_01", 3.0f, 1.5f, 4.0f);
     m_graph->AddNode(m_testBoxNode);
 
-    m_testCylinderNode = std::make_shared<CylinderNode>("ParametricCylinder_01", 1.5f, 3.0f, 32);
-    m_graph->AddNode(m_testCylinderNode);
-
-    // 2D L-bracket profile for ExtrudeNode
-    std::vector<std::array<float, 2>> lBracketProfile = {
-        {-2.0f, -2.0f},
-        { 2.0f, -2.0f},
-        { 2.0f, -1.0f},
-        {-1.0f, -1.0f},
-        {-1.0f,  2.0f},
-        {-2.0f,  2.0f}
-    };
-    m_testExtrudeNode = std::make_shared<ExtrudeNode>("ParametricExtrude_01", lBracketProfile, 2.0f);
-    m_graph->AddNode(m_testExtrudeNode);
-
-    m_testSphereNode = std::make_shared<SphereNode>("ParametricSphere_01", 1.8f, 16, 32);
-    m_graph->AddNode(m_testSphereNode);
-
-    // 4. Initialize Hardware RHI Device (or mock/headless if running in automated CI)
-    RHI::NativeWindowHandle windowHandle{};
-    try {
-        m_rhiDevice = RHI::RHIDevice::Create(windowHandle, 1920, 1080);
-    } catch (const std::exception& e) {
-        std::cout << "[Application] Native GPU device unavailable (" << e.what() 
-                  << "); running in headless simulation mode.\n";
-    }
-
-    // 5. Initialize Viewport Renderer
-    m_renderer = std::make_unique<ViewportRenderer>(m_rhiDevice.get(), m_meshExchange);
+    // 4. Initialize Desktop Window & Native Graphics HAL
+    InitWindow();
 }
 
 Application::~Application() {
     Stop();
+}
+
+void Application::InitWindow() {
+    glfwSetErrorCallback(GLFWErrorCallback);
+    if (!glfwInit()) {
+        throw std::runtime_error("Failed to initialize GLFW!");
+    }
+
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+
+    m_window = glfwCreateWindow(m_width, m_height, "TesseraCAD - 3D Parametric CAD Workstation", nullptr, nullptr);
+    if (!m_window) {
+        glfwTerminate();
+        throw std::runtime_error("Failed to create GLFW desktop window!");
+    }
+
+    RHI::NativeWindowHandle windowHandle{};
+#if defined(_WIN32)
+    HWND hwnd = glfwGetWin32Window(m_window);
+    windowHandle.windowHandle = hwnd;
+    windowHandle.displayHandle = GetModuleHandle(nullptr);
+#endif
+
+    try {
+        m_rhiDevice = RHI::RHIDevice::Create(windowHandle, m_width, m_height);
+    } catch (const std::exception& e) {
+        std::cerr << "[Application] Native GPU device initialization failed: " << e.what() << "\n";
+    }
+
+    // 5. Initialize Viewport Renderer
+    m_renderer = std::make_unique<ViewportRenderer>(m_rhiDevice.get(), m_meshExchange);
+
+    // 6. Initialize Dear ImGui CAD Interface
+    m_gui = std::make_unique<CADGui>();
+    m_gui->Init(m_window, m_rhiDevice.get());
+    m_renderer->SetGui(m_gui.get());
+
+    SetupCallbacks();
+}
+
+void Application::SetupCallbacks() {
+    glfwSetWindowUserPointer(m_window, this);
+
+    glfwSetFramebufferSizeCallback(m_window, [](GLFWwindow* window, int width, int height) {
+        auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+        if (app && width > 0 && height > 0) {
+            app->m_width = static_cast<uint32_t>(width);
+            app->m_height = static_cast<uint32_t>(height);
+            if (app->m_renderer) {
+                app->m_renderer->OnResize(app->m_width, app->m_height);
+            }
+        }
+    });
+
+    glfwSetMouseButtonCallback(m_window, [](GLFWwindow* window, int button, int action, int mods) {
+        (void)mods;
+        auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+        if (!app) return;
+
+        if (app->m_gui && app->m_gui->WantCaptureMouse()) {
+            return;
+        }
+
+        if (button == GLFW_MOUSE_BUTTON_LEFT) {
+            app->m_leftMouseDown = (action == GLFW_PRESS);
+        } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
+            app->m_rightMouseDown = (action == GLFW_PRESS);
+        }
+    });
+
+    glfwSetCursorPosCallback(m_window, [](GLFWwindow* window, double xpos, double ypos) {
+        auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+        if (!app) return;
+
+        double dx = xpos - app->m_lastMouseX;
+        double dy = ypos - app->m_lastMouseY;
+        app->m_lastMouseX = xpos;
+        app->m_lastMouseY = ypos;
+
+        if (app->m_gui && app->m_gui->WantCaptureMouse()) {
+            return;
+        }
+
+        if (app->m_leftMouseDown && app->m_renderer) {
+            // Orbit camera
+            app->m_renderer->OrbitCamera(static_cast<float>(dx) * 0.005f, static_cast<float>(dy) * 0.005f);
+        } else if (app->m_rightMouseDown && app->m_renderer) {
+            // Pan camera
+            app->m_renderer->PanCamera(static_cast<float>(-dx) * 0.005f, static_cast<float>(dy) * 0.005f);
+        }
+    });
+
+    glfwSetScrollCallback(m_window, [](GLFWwindow* window, double xoffset, double yoffset) {
+        (void)xoffset;
+        auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+        if (!app) return;
+
+        if (app->m_gui && app->m_gui->WantCaptureMouse()) {
+            return;
+        }
+
+        if (app->m_renderer) {
+            app->m_renderer->ZoomCamera(static_cast<float>(yoffset) * 0.4f);
+        }
+    });
 }
 
 void Application::Stop() {
@@ -58,8 +152,16 @@ void Application::Stop() {
         if (m_renderer) {
             m_renderer->Stop();
         }
+        if (m_gui) {
+            m_gui->Shutdown();
+        }
         if (m_threadPool) {
             m_threadPool->Shutdown();
+        }
+        if (m_window) {
+            glfwDestroyWindow(m_window);
+            m_window = nullptr;
+            glfwTerminate();
         }
     }
 }
@@ -72,55 +174,37 @@ void Application::SetBoxDimensions(float width, float height, float depth) {
 }
 
 void Application::Run() {
-    // Start presentation loop on dedicated render thread
+    // Start presentation loop on dedicated render thread (locked at unblocked 120 FPS)
     m_renderer->Start();
 
-    // Trigger initial DAG evaluation of the Box
+    // Trigger initial DAG evaluation of initial Box
     m_graph->EvaluateDirtyNodes(m_rhiDevice.get(), m_meshExchange);
 
-    std::cout << "\n[Application] Simulation running. Dispatching interactive parametric edits...\n";
+    std::cout << "\n[TesseraCAD] Interactive CAD GUI active. Waiting for user input in desktop window...\n";
 
-    // 1. Interactive Box modification
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    std::cout << "\n>>> [User Action] Parametric Box edit -> (5.0, 3.0, 2.0)...\n";
-    SetBoxDimensions(5.0f, 3.0f, 2.0f);
+    // Main interactive UI & Event Pump
+    while (!glfwWindowShouldClose(m_window) && m_running.load()) {
+        glfwPollEvents();
 
-    for (int i = 0; i < 4; ++i) {
-        m_renderer->OrbitCamera(0.04f, 0.01f);
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        // 1. Begin ImGui frame
+        if (m_gui) {
+            m_gui->BeginFrame();
+
+            // 2. Render CAD Tool Palette, Shape Creation, and Live Model Tree
+            m_gui->RenderUI(
+                *m_graph, 
+                m_rhiDevice.get(), 
+                m_meshExchange, 
+                m_renderer->GetCamera(), 
+                *m_renderer
+            );
+        }
+
+        // Render loop runs concurrently on m_renderThread without blocking!
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
 
-    // 2. Interactive Cylinder modification
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    std::cout << "\n>>> [User Action] Parametric Cylinder edit -> Radius: 2.0, Height: 4.0, Segments: 48...\n";
-    m_testCylinderNode->SetParameters(2.0f, 4.0f, 48);
-    m_graph->EvaluateDirtyNodes(m_rhiDevice.get(), m_meshExchange);
-
-    for (int i = 0; i < 4; ++i) {
-        m_renderer->OrbitCamera(0.04f, -0.01f);
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
-    }
-
-    // 3. Interactive Extrude (L-Bracket) height adjustment
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    std::cout << "\n>>> [User Action] Parametric Extrude edit -> L-Bracket Height: 3.5...\n";
-    m_testExtrudeNode->SetHeight(3.5f);
-    m_graph->EvaluateDirtyNodes(m_rhiDevice.get(), m_meshExchange);
-
-    for (int i = 0; i < 4; ++i) {
-        m_renderer->PanCamera(0.02f, -0.01f);
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
-    }
-
-    // 4. Interactive Sphere modification
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    std::cout << "\n>>> [User Action] Parametric Sphere edit -> Radius: 2.5, Rings: 24, Sectors: 48...\n";
-    m_testSphereNode->SetParameters(2.5f, 24, 48);
-    m_graph->EvaluateDirtyNodes(m_rhiDevice.get(), m_meshExchange);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    std::cout << "\n[Application] Evaluation complete. Initiating graceful shutdown...\n";
-
+    std::cout << "\n[TesseraCAD] Window close requested. Initiating graceful shutdown...\n";
     Stop();
 }
 

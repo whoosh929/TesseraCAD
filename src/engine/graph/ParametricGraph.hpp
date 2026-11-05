@@ -50,6 +50,23 @@ public:
         return m_nodes.size();
     }
 
+    [[nodiscard]] std::vector<std::shared_ptr<DAGNode>> GetNodes() const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        return m_nodes;
+    }
+
+    void RemoveNode(uint64_t id) {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        m_nodes.erase(std::remove_if(m_nodes.begin(), m_nodes.end(), [id](const auto& n) {
+            return n->GetId() == id;
+        }), m_nodes.end());
+    }
+
+    void ClearNodes() {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        m_nodes.clear();
+    }
+
 private:
     std::shared_ptr<ThreadPool> m_threadPool;
     std::vector<std::shared_ptr<DAGNode>> m_nodes;

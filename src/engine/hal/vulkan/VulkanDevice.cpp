@@ -22,8 +22,8 @@ private:
 // -----------------------------------------------------------------------------
 class VulkanCommandList final : public RHICommandList {
 public:
-    VulkanCommandList(VkDevice device, VkCommandPool pool)
-        : m_device(device), m_pool(pool) {
+    VulkanCommandList(VulkanDevice* device, VkCommandPool pool)
+        : m_vulkanDevice(device), m_device(device->GetVkDevice()), m_pool(pool) {
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.commandPool = pool;
@@ -50,12 +50,29 @@ public:
     }
 
     void BeginRenderPass(const RenderPassDesc& passDesc) override {
-        (void)passDesc;
-        // In full pipeline, begins VkRenderPass
+        VkRenderPass renderPass = m_vulkanDevice->GetRenderPass();
+        VkFramebuffer framebuffer = m_vulkanDevice->GetCurrentFramebuffer();
+        if (renderPass != VK_NULL_HANDLE && framebuffer != VK_NULL_HANDLE) {
+            VkRenderPassBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            beginInfo.renderPass = renderPass;
+            beginInfo.framebuffer = framebuffer;
+            beginInfo.renderArea.offset = {0, 0};
+            beginInfo.renderArea.extent = {m_vulkanDevice->GetSwapchainWidth(), m_vulkanDevice->GetSwapchainHeight()};
+
+            VkClearValue clearValue{};
+            clearValue.color = {{passDesc.clearColor.r, passDesc.clearColor.g, passDesc.clearColor.b, passDesc.clearColor.a}};
+            beginInfo.clearValueCount = 1;
+            beginInfo.pClearValues = &clearValue;
+
+            vkCmdBeginRenderPass(m_cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        }
     }
 
     void EndRenderPass() override {
-        // vkCmdEndRenderPass(m_cmd);
+        if (m_vulkanDevice->GetRenderPass() != VK_NULL_HANDLE) {
+            vkCmdEndRenderPass(m_cmd);
+        }
     }
 
     void SetViewport(const Viewport& viewport) override {
@@ -115,8 +132,10 @@ public:
     }
 
     [[nodiscard]] VkCommandBuffer GetVkCommandBuffer() const noexcept { return m_cmd; }
+    [[nodiscard]] void* GetNativeCommandBuffer() noexcept override { return static_cast<void*>(m_cmd); }
 
 private:
+    VulkanDevice* m_vulkanDevice{nullptr};
     VkDevice m_device{VK_NULL_HANDLE};
     VkCommandPool m_pool{VK_NULL_HANDLE};
     VkCommandBuffer m_cmd{VK_NULL_HANDLE};
@@ -140,6 +159,9 @@ VulkanDevice::VulkanDevice(const NativeWindowHandle& windowHandle, uint32_t widt
     PickPhysicalDevice();
     CreateLogicalDevice();
     CreateSwapchain();
+    CreateRenderPass();
+    CreateFramebuffers();
+    CreateDescriptorPool();
     CreateSyncObjects();
 
     std::cout << "[VulkanDevice] Vulkan 1.3 Device & Swapchain initialized (" 
@@ -149,6 +171,11 @@ VulkanDevice::VulkanDevice(const NativeWindowHandle& windowHandle, uint32_t widt
 VulkanDevice::~VulkanDevice() {
     WaitIdle();
     CleanupSwapchain();
+
+    if (m_descriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
+        m_descriptorPool = VK_NULL_HANDLE;
+    }
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(m_device, m_imageAvailableSemaphores[i], nullptr);
@@ -330,9 +357,128 @@ void VulkanDevice::CreateSwapchain() {
     vkGetSwapchainImagesKHR(m_device, m_swapchain, &imageCount, nullptr);
     m_swapchainImages.resize(imageCount);
     vkGetSwapchainImagesKHR(m_device, m_swapchain, &imageCount, m_swapchainImages.data());
+
+    m_swapchainImageViews.resize(imageCount);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_swapchainImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_swapchainFormat;
+        viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_swapchainImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create swapchain image view!");
+        }
+    }
+}
+
+void VulkanDevice::CreateRenderPass() {
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = m_swapchainFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create Vulkan render pass!");
+    }
+}
+
+void VulkanDevice::CreateFramebuffers() {
+    m_framebuffers.resize(m_swapchainImageViews.size());
+    for (size_t i = 0; i < m_swapchainImageViews.size(); i++) {
+        VkImageView attachments[] = { m_swapchainImageViews[i] };
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = m_renderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.width = m_width;
+        framebufferInfo.height = m_height;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create Vulkan framebuffer!");
+        }
+    }
+}
+
+void VulkanDevice::CreateDescriptorPool() {
+    VkDescriptorPoolSize pool_sizes[] = {
+        { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+        { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+    };
+    VkDescriptorPoolCreateInfo pool_info{};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pool_info.maxSets = 1000 * 11;
+    pool_info.poolSizeCount = static_cast<uint32_t>(sizeof(pool_sizes)/sizeof(pool_sizes[0]));
+    pool_info.pPoolSizes = pool_sizes;
+
+    if (vkCreateDescriptorPool(m_device, &pool_info, nullptr, &m_descriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create Vulkan descriptor pool!");
+    }
 }
 
 void VulkanDevice::CleanupSwapchain() {
+    for (auto fb : m_framebuffers) {
+        vkDestroyFramebuffer(m_device, fb, nullptr);
+    }
+    m_framebuffers.clear();
+
+    if (m_renderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(m_device, m_renderPass, nullptr);
+        m_renderPass = VK_NULL_HANDLE;
+    }
+
     for (auto imageView : m_swapchainImageViews) {
         vkDestroyImageView(m_device, imageView, nullptr);
     }
@@ -376,7 +522,7 @@ std::shared_ptr<RHIPipeline> VulkanDevice::CreatePipeline(const RHIPipelineDesc&
 }
 
 std::unique_ptr<RHICommandList> VulkanDevice::CreateCommandList() {
-    return std::make_unique<VulkanCommandList>(m_device, m_commandPool);
+    return std::make_unique<VulkanCommandList>(this, m_commandPool);
 }
 
 void VulkanDevice::ResizeSwapchain(uint32_t width, uint32_t height) {
@@ -385,6 +531,8 @@ void VulkanDevice::ResizeSwapchain(uint32_t width, uint32_t height) {
     WaitIdle();
     CleanupSwapchain();
     CreateSwapchain();
+    CreateRenderPass();
+    CreateFramebuffers();
 }
 
 bool VulkanDevice::BeginFrame() {

@@ -12,6 +12,8 @@
 
 namespace Tessera {
 
+class CADGui;
+
 class ViewportRenderer {
 public:
     ViewportRenderer(RHI::RHIDevice* device, AtomicMeshExchange& meshExchange);
@@ -25,6 +27,9 @@ public:
 
     /// Stops the render thread
     void Stop();
+
+    void SetGui(CADGui* gui) noexcept { m_gui = gui; }
+    [[nodiscard]] Camera& GetCamera() noexcept { return m_camera; }
 
     /// Thread-safe camera inputs from UI / Windowing thread
     void OrbitCamera(float deltaAzimuth, float deltaElevation);
@@ -47,6 +52,7 @@ private:
     RHI::RHIDevice* m_device;
     AtomicMeshExchange& m_meshExchange;
     MeshRenderProxy m_renderProxy;
+    CADGui* m_gui{nullptr};
 
     // CAD Multi-Pass Pipelines
     std::shared_ptr<RHI::RHIPipeline> m_shadedPipeline;

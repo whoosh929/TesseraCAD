@@ -12,6 +12,30 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(PlatformSetup)
 
 # -----------------------------------------------------------------------------
+# Dear ImGui Library Target
+# -----------------------------------------------------------------------------
+add_library(imgui STATIC
+    external/imgui/imgui.cpp
+    external/imgui/imgui_draw.cpp
+    external/imgui/imgui_tables.cpp
+    external/imgui/imgui_widgets.cpp
+    external/imgui/backends/imgui_impl_glfw.cpp
+    external/imgui/backends/imgui_impl_vulkan.cpp
+)
+
+target_include_directories(imgui PUBLIC
+    external/imgui
+    external/imgui/backends
+)
+
+target_compile_definitions(imgui PUBLIC
+    IMGUI_IMPL_VULKAN_USE_VOLK
+    VK_USE_PLATFORM_WIN32_KHR
+)
+
+target_link_libraries(imgui PUBLIC glfw volk Vulkan-Headers)
+
+# -----------------------------------------------------------------------------
 # Engine Target (tessera_engine)
 # -----------------------------------------------------------------------------
 add_library(tessera_engine STATIC)
@@ -73,12 +97,15 @@ endif()
 target_include_directories(tessera_engine
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/imgui>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/imgui/backends>
         $<INSTALL_INTERFACE:include>
 )
 
 target_link_libraries(tessera_engine
     PUBLIC
         ${PLATFORM_GRAPHICS_LIBS}
+        imgui
 )
 
 target_compile_features(tessera_engine PUBLIC cxx_std_20)
@@ -90,17 +117,24 @@ add_executable(tessera_cad
     src/app/main.cpp
     src/app/Application.hpp
     src/app/Application.cpp
+    src/app/CADGui.hpp
+    src/app/CADGui.cpp
 )
 
 target_include_directories(tessera_cad
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui/backends
 )
 
 target_link_libraries(tessera_cad
     PRIVATE
         tessera_engine
+        imgui
         glfw
+        volk
+        Vulkan-Headers
 )
 
 target_compile_features(tessera_cad PUBLIC cxx_std_20)
