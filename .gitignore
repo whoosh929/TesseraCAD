@@ -6,4 +6,5 @@ bin/
 *.suo
 compile_commands.json
 imgui.ini
+external/tools/
 

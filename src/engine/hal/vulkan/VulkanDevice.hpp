@@ -57,10 +57,13 @@ private:
     void CreateLogicalDevice();
     void CreateSwapchain();
     void CleanupSwapchain();
+    void CreateDepthResources();
+    void CleanupDepthResources();
     void CreateRenderPass();
     void CreateFramebuffers();
     void CreateDescriptorPool();
     void CreateSyncObjects();
+    uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
     uint32_t m_width{1920};
     uint32_t m_height{1080};
@@ -80,6 +83,10 @@ private:
     std::vector<VkImage> m_swapchainImages;
     std::vector<VkImageView> m_swapchainImageViews;
     VkFormat m_swapchainFormat{VK_FORMAT_B8G8R8A8_UNORM};
+
+    VkImage m_depthImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_depthImageMemory{VK_NULL_HANDLE};
+    VkImageView m_depthImageView{VK_NULL_HANDLE};
 
     VkCommandPool m_commandPool{VK_NULL_HANDLE};
     VkRenderPass m_renderPass{VK_NULL_HANDLE};

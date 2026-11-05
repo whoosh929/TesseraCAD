@@ -101,6 +101,16 @@ public:
         // Extract sharp feature edges (dihedral angle = 90 deg > 30 deg threshold)
         std::vector<uint32_t> featureEdges = TessellationUtils::ExtractFeatureEdges(vertices, indices, 30.0f);
 
+        for (auto& v : vertices) {
+            v.position[0] += m_position[0];
+            v.position[1] += m_position[1];
+            v.position[2] += m_position[2];
+        }
+
+        m_cachedVertices = vertices;
+        m_cachedIndices = indices;
+        m_cachedEdges = featureEdges;
+
         std::shared_ptr<RHI::RHIBuffer> vb;
         std::shared_ptr<RHI::RHIBuffer> ib;
         std::shared_ptr<RHI::RHIBuffer> edgeIb;

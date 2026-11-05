@@ -1,4 +1,5 @@
 #include "ViewportRenderer.hpp"
+#include "CADSpvBytecode.hpp"
 #include "engine/graph/GeometryTypes.hpp"
 #include "app/CADGui.hpp"
 #include <iostream>
@@ -69,10 +70,14 @@ void ViewportRenderer::InitPipelines() {
     RHI::RHIPipelineDesc shadedDesc{
         .vertexShaderSource = CADShaders::Vulkan_ShadedVertex,
         .fragmentShaderSource = CADShaders::Vulkan_ShadedFragment,
+        .spvVertexBytes = SpvBytecode::ShadedVertex,
+        .spvVertexSize = SpvBytecode::ShadedVertexSize,
+        .spvFragmentBytes = SpvBytecode::ShadedFragment,
+        .spvFragmentSize = SpvBytecode::ShadedFragmentSize,
         .vertexLayout = cadVertexLayout,
         .topology = RHI::PrimitiveTopology::TriangleList,
         .rasterizer = {
-            .cullMode = RHI::CullMode::Back,
+            .cullMode = RHI::CullMode::None,
             .frontFace = RHI::FrontFace::CounterClockwise,
             .wireframe = false
         },
@@ -90,12 +95,16 @@ void ViewportRenderer::InitPipelines() {
     RHI::RHIPipelineDesc wireframeDesc{
         .vertexShaderSource = CADShaders::Vulkan_WireframeVertex,
         .fragmentShaderSource = CADShaders::Vulkan_WireframeFragment,
+        .spvVertexBytes = SpvBytecode::WireframeVertex,
+        .spvVertexSize = SpvBytecode::WireframeVertexSize,
+        .spvFragmentBytes = SpvBytecode::WireframeFragment,
+        .spvFragmentSize = SpvBytecode::WireframeFragmentSize,
         .vertexLayout = cadVertexLayout,
         .topology = RHI::PrimitiveTopology::LineList,
         .rasterizer = {
             .cullMode = RHI::CullMode::None,
             .frontFace = RHI::FrontFace::CounterClockwise,
-            .wireframe = true,
+            .wireframe = false,
             .depthBiasConstant = -1.0f,
             .depthBiasSlope = -1.0f
         },
@@ -113,6 +122,10 @@ void ViewportRenderer::InitPipelines() {
     RHI::RHIPipelineDesc gridDesc{
         .vertexShaderSource = CADShaders::Vulkan_GridVertex,
         .fragmentShaderSource = CADShaders::Vulkan_GridFragment,
+        .spvVertexBytes = SpvBytecode::GridVertex,
+        .spvVertexSize = SpvBytecode::GridVertexSize,
+        .spvFragmentBytes = SpvBytecode::GridFragment,
+        .spvFragmentSize = SpvBytecode::GridFragmentSize,
         .vertexLayout = {}, // Fullscreen procedural quad, no vertex buffer input
         .topology = RHI::PrimitiveTopology::TriangleList,
         .rasterizer = {
@@ -123,7 +136,7 @@ void ViewportRenderer::InitPipelines() {
         .depthStencil = {
             .depthTestEnable = true,
             .depthWriteEnable = false, // Ground grid does not occlude objects behind it
-            .depthCompareOp = RHI::CompareOp::Less
+            .depthCompareOp = RHI::CompareOp::LessOrEqual
         },
         .blendState = {.blendEnable = true},
         .debugName = "CAD_Grid_Pipeline"
@@ -208,7 +221,52 @@ void ViewportRenderer::RenderFrame() {
             };
             m_cmdList->SetScissor(scissor);
 
-            // Draw Dear ImGui CAD Tooling UI into the swapchain renderpass
+            // 1. Draw Infinite Ground Datum Grid (if enabled in UI)
+            if ((!m_gui || m_gui->GetShowGrid()) && m_gridPipeline) {
+                CADGridUniforms gridUniforms{};
+                gridUniforms.viewProjection = cameraUniforms.viewProjection;
+                gridUniforms.invViewProjection = cameraUniforms.invViewProjection;
+                gridUniforms.cameraPosition = cameraUniforms.eyePosition;
+                gridUniforms.nearPlane = 0.1f;
+                gridUniforms.farPlane = 1000.0f;
+                gridUniforms.gridScale = 1.0f;
+
+                m_cmdList->SetPipeline(m_gridPipeline);
+                m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &gridUniforms, sizeof(gridUniforms));
+                m_cmdList->Draw(6, 0);
+            }
+
+            // 2. Draw active 3D CAD mesh (shaded surface)
+            if (m_renderProxy.GetVertexBuffer() && m_renderProxy.GetIndexBuffer() && m_renderProxy.GetIndexCount() > 0 && m_shadedPipeline) {
+                CADModelUniforms modelUniforms{};
+                modelUniforms.modelViewProjection = cameraUniforms.viewProjection;
+                modelUniforms.cameraPosition = cameraUniforms.eyePosition;
+                modelUniforms.lightDirection = {0.577f, 0.707f, 0.408f, 0.0f}; // Directional light
+                modelUniforms.surfaceColor = {0.68f, 0.74f, 0.82f, 1.0f};      // CAD machine aluminum / steel
+                modelUniforms.lightingParams = {0.30f, 0.70f, 0.40f, 32.0f};    // ambient, diff, spec, shininess
+
+                m_cmdList->SetPipeline(m_shadedPipeline);
+                m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &modelUniforms, sizeof(modelUniforms));
+                m_cmdList->SetVertexBuffer(0, m_renderProxy.GetVertexBuffer());
+                m_cmdList->SetIndexBuffer(m_renderProxy.GetIndexBuffer());
+                m_cmdList->DrawIndexed(m_renderProxy.GetIndexCount());
+
+                // 3. Draw sharp feature edges / wireframe overlay (if enabled in UI)
+                if ((!m_gui || m_gui->GetShowWireframe()) && m_wireframePipeline && 
+                    m_renderProxy.GetEdgeIndexBuffer() && m_renderProxy.GetEdgeIndexCount() > 0) {
+                    CADWireframeUniforms wireUniforms{};
+                    wireUniforms.modelViewProjection = cameraUniforms.viewProjection;
+                    wireUniforms.edgeColor = {0.10f, 0.12f, 0.16f, 1.0f}; // Sharp dark charcoal CAD edge
+
+                    m_cmdList->SetPipeline(m_wireframePipeline);
+                    m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &wireUniforms, sizeof(wireUniforms));
+                    m_cmdList->SetVertexBuffer(0, m_renderProxy.GetVertexBuffer());
+                    m_cmdList->SetIndexBuffer(m_renderProxy.GetEdgeIndexBuffer());
+                    m_cmdList->DrawIndexed(m_renderProxy.GetEdgeIndexCount());
+                }
+            }
+
+            // 4. Draw Dear ImGui CAD Tooling UI into the swapchain renderpass
             if (m_gui) {
                 m_gui->EndFrameAndDraw(m_cmdList.get());
             }

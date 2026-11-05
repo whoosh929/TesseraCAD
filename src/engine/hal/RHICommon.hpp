@@ -155,6 +155,10 @@ struct RHIBufferDesc {
 struct RHIPipelineDesc {
     std::string vertexShaderSource;
     std::string fragmentShaderSource;
+    const void* spvVertexBytes{nullptr};
+    size_t spvVertexSize{0};
+    const void* spvFragmentBytes{nullptr};
+    size_t spvFragmentSize{0};
     std::string vertexEntryPoint{"main"};
     std::string fragmentEntryPoint{"main"};
     VertexLayout vertexLayout;

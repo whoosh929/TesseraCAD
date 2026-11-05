@@ -135,6 +135,9 @@ void CADGui::RenderUI(
             if (ImGui::Button("+ Create Parametric Box", ImVec2(-1, 32))) {
                 std::string name = "Box_" + std::to_string(m_shapeCounter++);
                 auto node = std::make_shared<BoxNode>(name, m_newBoxDims[0], m_newBoxDims[1], m_newBoxDims[2]);
+                float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                node->SetPosition(posX, 0.0f, posZ);
                 graph.AddNode(node);
                 graph.EvaluateDirtyNodes(device, exchange);
                 m_selectedNodeId = node->GetId();
@@ -149,6 +152,9 @@ void CADGui::RenderUI(
             if (ImGui::Button("+ Create Parametric Cylinder", ImVec2(-1, 32))) {
                 std::string name = "Cylinder_" + std::to_string(m_shapeCounter++);
                 auto node = std::make_shared<CylinderNode>(name, m_newCylinderRadius, m_newCylinderHeight, m_newCylinderSegments);
+                float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                node->SetPosition(posX, 0.0f, posZ);
                 graph.AddNode(node);
                 graph.EvaluateDirtyNodes(device, exchange);
                 m_selectedNodeId = node->GetId();
@@ -163,6 +169,9 @@ void CADGui::RenderUI(
             if (ImGui::Button("+ Create Parametric Sphere", ImVec2(-1, 32))) {
                 std::string name = "Sphere_" + std::to_string(m_shapeCounter++);
                 auto node = std::make_shared<SphereNode>(name, m_newSphereRadius, m_newSphereRings, m_newSphereSectors);
+                float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                node->SetPosition(posX, 0.0f, posZ);
                 graph.AddNode(node);
                 graph.EvaluateDirtyNodes(device, exchange);
                 m_selectedNodeId = node->GetId();
@@ -199,6 +208,9 @@ void CADGui::RenderUI(
 
                 std::string name = "Extrude_" + std::to_string(m_shapeCounter++);
                 auto node = std::make_shared<ExtrudeNode>(name, profile, m_newExtrudeHeight);
+                float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                node->SetPosition(posX, 0.0f, posZ);
                 graph.AddNode(node);
                 graph.EvaluateDirtyNodes(device, exchange);
                 m_selectedNodeId = node->GetId();
@@ -239,6 +251,13 @@ void CADGui::RenderUI(
 
         if (selectedNode) {
             ImGui::Text("Editing: %s (Gen %llu)", selectedNode->GetName().c_str(), selectedNode->GetGeneration());
+
+            float pos[3]{selectedNode->GetPosition()[0], selectedNode->GetPosition()[1], selectedNode->GetPosition()[2]};
+            if (ImGui::DragFloat3("Position (X, Y, Z)", pos, 0.1f, -50.0f, 50.0f, "%.2f m")) {
+                selectedNode->SetPosition(pos[0], pos[1], pos[2]);
+                graph.EvaluateDirtyNodes(device, exchange);
+            }
+            ImGui::Spacing();
 
             if (auto box = std::dynamic_pointer_cast<BoxNode>(selectedNode)) {
                 float w = box->GetWidth();
@@ -293,6 +312,7 @@ void CADGui::RenderUI(
             ImGui::Spacing();
             if (ImGui::Button("Delete Selected Shape", ImVec2(-1, 26))) {
                 graph.RemoveNode(selectedNode->GetId());
+                graph.PublishCombinedSceneMesh(device, exchange);
                 m_selectedNodeId = 0;
             }
         } else {

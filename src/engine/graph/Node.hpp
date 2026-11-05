@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GeometryTypes.hpp"
 #include "engine/concurrency/AtomicMeshExchange.hpp"
 #include <string>
 #include <vector>
@@ -23,6 +24,18 @@ public:
     [[nodiscard]] const std::string& GetName() const noexcept { return m_name; }
     [[nodiscard]] bool IsDirty() const noexcept { return m_isDirty.load(std::memory_order_acquire); }
     [[nodiscard]] uint64_t GetGeneration() const noexcept { return m_generation.load(std::memory_order_acquire); }
+
+    [[nodiscard]] const std::vector<CADVertex>& GetCachedVertices() const noexcept { return m_cachedVertices; }
+    [[nodiscard]] const std::vector<uint32_t>& GetCachedIndices() const noexcept { return m_cachedIndices; }
+    [[nodiscard]] const std::vector<uint32_t>& GetCachedEdges() const noexcept { return m_cachedEdges; }
+
+    void SetPosition(float x, float y, float z) {
+        m_position[0] = x;
+        m_position[1] = y;
+        m_position[2] = z;
+        MarkDirty();
+    }
+    [[nodiscard]] const float* GetPosition() const noexcept { return m_position; }
 
     /// Connects this node to depend on an upstream parent
     void AddInput(std::shared_ptr<DAGNode> parent) {
@@ -58,6 +71,11 @@ protected:
     uint64_t m_id;
     std::atomic<bool> m_isDirty;
     std::atomic<uint64_t> m_generation;
+
+    float m_position[3]{0.0f, 0.0f, 0.0f};
+    std::vector<CADVertex> m_cachedVertices;
+    std::vector<uint32_t> m_cachedIndices;
+    std::vector<uint32_t> m_cachedEdges;
 
     std::vector<std::shared_ptr<DAGNode>> m_inputs;
     std::vector<std::weak_ptr<DAGNode>> m_dependents;

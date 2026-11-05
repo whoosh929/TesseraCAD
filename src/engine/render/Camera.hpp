@@ -111,7 +111,7 @@ private:
 
         std::array<float, 16> P = {0.0f};
         P[0]  = 1.0f / (m_aspect * tanHalfFov);
-        P[5]  = 1.0f / tanHalfFov;
+        P[5]  = -1.0f / tanHalfFov; // Vulkan NDC Y points downwards; negate to keep world +Y pointing up
         P[10] = farP / (nearP - farP);
         P[11] = -1.0f;
         P[14] = -(farP * nearP) / (farP - nearP);
@@ -160,7 +160,7 @@ private:
     float m_target[3]{0.0f, 0.0f, 0.0f};
     float m_azimuth{0.785f};    // 45 degrees
     float m_elevation{0.523f};  // 30 degrees
-    float m_distance{6.0f};
+    float m_distance{10.0f};
 
     float m_fovY{0.785f};       // 45 degrees
     float m_aspect{16.0f / 9.0f};
