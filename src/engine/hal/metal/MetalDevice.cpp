@@ -246,3 +246,4 @@ std::unique_ptr<RHIDevice> RHIDevice::Create(
 }
 
 #endif
+

@@ -27,10 +27,15 @@ target_sources(tessera_engine
         src/engine/concurrency/ThreadPool.hpp
         src/engine/concurrency/SpinLock.hpp
 
-        # Parametric DAG
+        # Parametric DAG & Tessellation Kernel
+        src/engine/graph/GeometryTypes.hpp
+        src/engine/graph/Tessellation.hpp
         src/engine/graph/Node.hpp
         src/engine/graph/ParametricGraph.hpp
         src/engine/graph/BoxNode.hpp
+        src/engine/graph/CylinderNode.hpp
+        src/engine/graph/SphereNode.hpp
+        src/engine/graph/ExtrudeNode.hpp
 
         # Render Loop & Viewport
         src/engine/render/Camera.hpp

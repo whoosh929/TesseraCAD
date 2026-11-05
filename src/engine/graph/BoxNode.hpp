@@ -1,18 +1,14 @@
 #pragma once
 
 #include "Node.hpp"
+#include "Tessellation.hpp"
 #include "engine/hal/RHI.hpp"
 #include <thread>
 #include <chrono>
 #include <iostream>
-#include <array>
+#include <vector>
 
 namespace Tessera {
-
-struct CADVertex {
-    float position[3];
-    float normal[3];
-};
 
 class BoxNode : public DAGNode {
 public:
@@ -45,7 +41,7 @@ public:
         float h = m_height;
         float d = m_depth;
 
-        std::cout << "[BoxNode::Evaluate] Starting 100ms B-Rep boolean & tessellation kernel for Node '" 
+        std::cout << "[BoxNode::Evaluate] Starting 100ms CAD tessellation for Node '" 
                   << m_name << "' (Gen " << currentGen << " | Dimensions: " 
                   << w << "x" << h << "x" << d << ")...\n";
 
@@ -102,11 +98,16 @@ public:
             indices.push_back(base + 0);
         }
 
+        // Extract sharp feature edges (dihedral angle = 90 deg > 30 deg threshold)
+        std::vector<uint32_t> featureEdges = TessellationUtils::ExtractFeatureEdges(vertices, indices, 30.0f);
+
         std::shared_ptr<RHI::RHIBuffer> vb;
         std::shared_ptr<RHI::RHIBuffer> ib;
+        std::shared_ptr<RHI::RHIBuffer> edgeIb;
 
         size_t vbBytes = vertices.size() * sizeof(CADVertex);
         size_t ibBytes = indices.size() * sizeof(uint32_t);
+        size_t edgeBytes = featureEdges.size() * sizeof(uint32_t);
 
         if (device) {
             RHI::RHIBufferDesc vbDesc{
@@ -123,15 +124,33 @@ public:
             };
             vb = device->CreateBuffer(vbDesc, vertices.data());
             ib = device->CreateBuffer(ibDesc, indices.data());
+
+            if (!featureEdges.empty()) {
+                RHI::RHIBufferDesc edgeDesc{
+                    .sizeInBytes = edgeBytes,
+                    .usage = RHI::BufferUsage::Index,
+                    .memory = RHI::MemoryUsage::CpuToGpu,
+                    .debugName = m_name + "_EdgeIB"
+                };
+                edgeIb = device->CreateBuffer(edgeDesc, featureEdges.data());
+            }
         }
 
-        // Publish to lock-free atomic exchange
-        exchange.Publish(vb, ib, static_cast<uint32_t>(indices.size()), currentGen);
+        exchange.Publish(
+            vb, 
+            ib, 
+            static_cast<uint32_t>(indices.size()), 
+            currentGen,
+            edgeIb,
+            static_cast<uint32_t>(featureEdges.size())
+        );
+
         ClearDirty();
 
         std::cout << "[BoxNode::Evaluate] Node '" << m_name 
-                  << "' published new mesh to exchange (Gen " << currentGen 
-                  << ", Vertices: 24, Indices: 36).\n";
+                  << "' published mesh (Gen " << currentGen 
+                  << ", Verts: 24, TriIndices: 36, FeatureEdgeIndices: " 
+                  << featureEdges.size() << ").\n";
     }
 
 private:

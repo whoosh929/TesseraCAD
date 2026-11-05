@@ -107,3 +107,4 @@ uint32_t VulkanBuffer::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags
 }
 
 } // namespace Tessera::RHI
+

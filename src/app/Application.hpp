@@ -5,6 +5,9 @@
 #include "engine/concurrency/ThreadPool.hpp"
 #include "engine/graph/ParametricGraph.hpp"
 #include "engine/graph/BoxNode.hpp"
+#include "engine/graph/CylinderNode.hpp"
+#include "engine/graph/SphereNode.hpp"
+#include "engine/graph/ExtrudeNode.hpp"
 #include "engine/render/ViewportRenderer.hpp"
 #include <memory>
 #include <atomic>
@@ -36,6 +39,9 @@ private:
     AtomicMeshExchange m_meshExchange;
     std::unique_ptr<ParametricGraph> m_graph;
     std::shared_ptr<BoxNode> m_testBoxNode;
+    std::shared_ptr<CylinderNode> m_testCylinderNode;
+    std::shared_ptr<ExtrudeNode> m_testExtrudeNode;
+    std::shared_ptr<SphereNode> m_testSphereNode;
     std::unique_ptr<ViewportRenderer> m_renderer;
 };
 

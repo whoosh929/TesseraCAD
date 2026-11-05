@@ -84,7 +84,9 @@ void ViewportRenderer::RenderLoop(std::stop_token stopToken) {
                 latestMesh->vertexBuffer,
                 latestMesh->indexBuffer,
                 latestMesh->indexCount,
-                latestMesh->generationId
+                latestMesh->generationId,
+                latestMesh->edgeIndexBuffer,
+                latestMesh->edgeIndexCount
             );
             std::cout << "  [ViewportRenderer] Render proxy swapped to Gen " 
                       << lastGenerationId << " (" << latestMesh->indexCount << " indices)\n";
@@ -176,3 +178,4 @@ void ViewportRenderer::RenderLoop(std::stop_token stopToken) {
 }
 
 } // namespace Tessera
+

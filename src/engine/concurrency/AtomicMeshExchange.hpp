@@ -17,6 +17,8 @@ struct RenderMeshData {
     std::shared_ptr<RHI::RHIBuffer> vertexBuffer;
     std::shared_ptr<RHI::RHIBuffer> indexBuffer;
     uint32_t indexCount{0};
+    std::shared_ptr<RHI::RHIBuffer> edgeIndexBuffer{nullptr};
+    uint32_t edgeIndexCount{0};
     uint64_t generationId{0};
 };
 
@@ -46,12 +48,16 @@ public:
         std::shared_ptr<RHI::RHIBuffer> vb,
         std::shared_ptr<RHI::RHIBuffer> ib,
         uint32_t indexCount,
-        uint64_t generationId
+        uint64_t generationId,
+        std::shared_ptr<RHI::RHIBuffer> edgeIb = nullptr,
+        uint32_t edgeIndexCount = 0
     ) {
         auto payload = std::make_shared<RenderMeshData>(RenderMeshData{
             .vertexBuffer = std::move(vb),
             .indexBuffer = std::move(ib),
             .indexCount = indexCount,
+            .edgeIndexBuffer = std::move(edgeIb),
+            .edgeIndexCount = edgeIndexCount,
             .generationId = generationId
         });
         Publish(std::move(payload));
