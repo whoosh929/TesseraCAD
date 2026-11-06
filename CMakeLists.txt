@@ -46,6 +46,11 @@ target_sources(tessera_engine
         src/engine/hal/RHICommon.hpp
         src/engine/hal/RHI.hpp
 
+        # Geometric & Analytical Kernel Foundations
+        src/engine/geom/Transform3D.hpp
+        src/engine/geom/Axis3D.hpp
+        src/engine/geom/Plane.hpp
+
         # Concurrency & Lock-Free Primitives
         src/engine/concurrency/AtomicMeshExchange.hpp
         src/engine/concurrency/ThreadPool.hpp
@@ -144,3 +149,30 @@ set_target_properties(tessera_cad PROPERTIES
     OUTPUT_NAME "TesseraCAD"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# -----------------------------------------------------------------------------
+# Test Suite Target (test_geom)
+# -----------------------------------------------------------------------------
+enable_testing()
+
+add_executable(test_geom
+    tests/test_geom.cpp
+)
+
+target_include_directories(test_geom
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(test_geom
+    PRIVATE
+        tessera_engine
+)
+
+target_compile_features(test_geom PUBLIC cxx_std_20)
+
+set_target_properties(test_geom PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_test(NAME GeomTests COMMAND test_geom)
