@@ -205,12 +205,19 @@ void ViewportRenderer::RenderFrame() {
             latestMesh->sketchIndexBuffer,
             latestMesh->sketchIndexCount,
             latestMesh->sketchEdgeIndexBuffer,
-            latestMesh->sketchEdgeIndexCount
+            latestMesh->sketchEdgeIndexCount,
+            latestMesh->selectedVertexBuffer,
+            latestMesh->selectedIndexBuffer,
+            latestMesh->selectedIndexCount,
+            latestMesh->selectedEdgeIndexBuffer,
+            latestMesh->selectedEdgeIndexCount
         );
         std::cout << "  [ViewportRenderer] Render proxy swapped to Gen " 
                   << m_lastGenerationId << " (" << latestMesh->indexCount 
-                  << " tri indices, " << latestMesh->edgeIndexCount << " edge indices | Sketch: "
-                  << latestMesh->sketchIndexCount << " tri, " << latestMesh->sketchEdgeIndexCount << " edge)\n";
+                  << " tri indices, " << latestMesh->edgeIndexCount << " edge indices | Selected: "
+                  << latestMesh->selectedIndexCount << " tri, " << latestMesh->selectedEdgeIndexCount
+                  << " edge | Sketch: " << latestMesh->sketchIndexCount << " tri, " 
+                  << latestMesh->sketchEdgeIndexCount << " edge)\n";
     }
 
     // 3. Acquire camera uniforms under short lock
@@ -267,7 +274,7 @@ void ViewportRenderer::RenderFrame() {
                 m_cmdList->Draw(6, 0);
             }
 
-            // 2. Draw active 3D CAD mesh (shaded surface)
+            // 2. Draw unselected 3D CAD meshes (neutral machine aluminum / steel)
             if (m_renderProxy.GetVertexBuffer() && m_renderProxy.GetIndexBuffer() && m_renderProxy.GetIndexCount() > 0 && m_shadedPipeline) {
                 CADModelUniforms modelUniforms{};
                 modelUniforms.modelViewProjection = cameraUniforms.viewProjection;
@@ -282,7 +289,7 @@ void ViewportRenderer::RenderFrame() {
                 m_cmdList->SetIndexBuffer(m_renderProxy.GetIndexBuffer());
                 m_cmdList->DrawIndexed(m_renderProxy.GetIndexCount());
 
-                // 3. Draw sharp feature edges / wireframe overlay (if enabled in UI)
+                // Unselected sharp feature edges / wireframe overlay (if enabled in UI)
                 if ((!m_gui || m_gui->GetShowWireframe()) && m_wireframePipeline && 
                     m_renderProxy.GetEdgeIndexBuffer() && m_renderProxy.GetEdgeIndexCount() > 0) {
                     CADWireframeUniforms wireUniforms{};
@@ -294,6 +301,40 @@ void ViewportRenderer::RenderFrame() {
                     m_cmdList->SetVertexBuffer(0, m_renderProxy.GetVertexBuffer());
                     m_cmdList->SetIndexBuffer(m_renderProxy.GetEdgeIndexBuffer());
                     m_cmdList->DrawIndexed(m_renderProxy.GetEdgeIndexCount());
+                }
+            }
+
+            // 3. Draw SELECTED 3D CAD model:
+            // - Subtly highlighted surface with luminous cyan / steel tone
+            // - Prominently highlighted outer feature edges (vibrant electric cyan)
+            if (m_renderProxy.GetSelectedVertexBuffer() && m_renderProxy.GetSelectedIndexBuffer() && 
+                m_renderProxy.GetSelectedIndexCount() > 0 && m_shadedPipeline) {
+                CADModelUniforms selUniforms{};
+                selUniforms.modelViewProjection = cameraUniforms.viewProjection;
+                selUniforms.cameraPosition = cameraUniforms.eyePosition;
+                selUniforms.lightDirection = {0.577f, 0.707f, 0.408f, 0.0f};
+                // Subtle selection tint: soft luminous cyan-steel sheen
+                selUniforms.surfaceColor = {0.45f, 0.72f, 0.92f, 1.0f};
+                selUniforms.lightingParams = {0.42f, 0.68f, 0.55f, 48.0f};
+
+                m_cmdList->SetPipeline(m_shadedPipeline);
+                m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &selUniforms, sizeof(selUniforms));
+                m_cmdList->SetVertexBuffer(0, m_renderProxy.GetSelectedVertexBuffer());
+                m_cmdList->SetIndexBuffer(m_renderProxy.GetSelectedIndexBuffer());
+                m_cmdList->DrawIndexed(m_renderProxy.GetSelectedIndexCount());
+
+                // Highlighted outer feature edges of the selected model (vibrant electric cyan highlight)
+                if (m_wireframePipeline && m_renderProxy.GetSelectedEdgeIndexBuffer() && 
+                    m_renderProxy.GetSelectedEdgeIndexCount() > 0) {
+                    CADWireframeUniforms selWireUniforms{};
+                    selWireUniforms.modelViewProjection = cameraUniforms.viewProjection;
+                    selWireUniforms.edgeColor = {0.0f, 0.88f, 1.0f, 1.0f}; // Vibrant electric cyan selection edge highlight!
+
+                    m_cmdList->SetPipeline(m_wireframePipeline);
+                    m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &selWireUniforms, sizeof(selWireUniforms));
+                    m_cmdList->SetVertexBuffer(0, m_renderProxy.GetSelectedVertexBuffer());
+                    m_cmdList->SetIndexBuffer(m_renderProxy.GetSelectedEdgeIndexBuffer());
+                    m_cmdList->DrawIndexed(m_renderProxy.GetSelectedEdgeIndexCount());
                 }
             }
 

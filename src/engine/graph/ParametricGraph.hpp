@@ -129,6 +129,10 @@ public:
         std::vector<uint32_t> combinedIndices;
         std::vector<uint32_t> combinedEdges;
 
+        std::vector<CADVertex> selectedVertices;
+        std::vector<uint32_t> selectedIndices;
+        std::vector<uint32_t> selectedEdges;
+
         std::vector<CADVertex> sketchVertices;
         std::vector<uint32_t> sketchIndices;
         std::vector<uint32_t> sketchEdges;
@@ -160,19 +164,26 @@ public:
                     sketchEdges.push_back(edgeIdx + vOffset);
                 }
             } else {
-                // Solid 3D features (Extrude, Revolve, etc.)
+                // Solid 3D features (Extrude, Revolve, Cylinder, Sphere, etc.)
                 const auto& verts = node->GetCachedVertices();
                 const auto& indices = node->GetCachedIndices();
                 const auto& edges = node->GetCachedEdges();
+                if (verts.empty() || indices.empty()) continue;
 
-                uint32_t vOffset = static_cast<uint32_t>(combinedVertices.size());
-                combinedVertices.insert(combinedVertices.end(), verts.begin(), verts.end());
+                bool isSelected = (node->GetId() == m_selectedNodeId);
+
+                auto& targetVerts = isSelected ? selectedVertices : combinedVertices;
+                auto& targetIndices = isSelected ? selectedIndices : combinedIndices;
+                auto& targetEdges = isSelected ? selectedEdges : combinedEdges;
+
+                uint32_t vOffset = static_cast<uint32_t>(targetVerts.size());
+                targetVerts.insert(targetVerts.end(), verts.begin(), verts.end());
 
                 for (uint32_t idx : indices) {
-                    combinedIndices.push_back(idx + vOffset);
+                    targetIndices.push_back(idx + vOffset);
                 }
                 for (uint32_t edgeIdx : edges) {
-                    combinedEdges.push_back(edgeIdx + vOffset);
+                    targetEdges.push_back(edgeIdx + vOffset);
                 }
             }
         }
@@ -209,6 +220,42 @@ public:
                 };
                 edgeIb = device->CreateBuffer(edgeDesc, combinedEdges.data());
                 edgeCount = static_cast<uint32_t>(combinedEdges.size());
+            }
+        }
+
+        // Selected 3D Model Buffers (for subtle surface highlight + outer edge highlight)
+        std::shared_ptr<RHI::RHIBuffer> selVb = nullptr;
+        std::shared_ptr<RHI::RHIBuffer> selIb = nullptr;
+        std::shared_ptr<RHI::RHIBuffer> selEdgeIb = nullptr;
+        uint32_t selTriCount = 0;
+        uint32_t selEdgeCount = 0;
+
+        if (!selectedVertices.empty() && !selectedIndices.empty()) {
+            RHI::RHIBufferDesc selVbDesc{
+                .sizeInBytes = selectedVertices.size() * sizeof(CADVertex),
+                .usage = RHI::BufferUsage::Vertex,
+                .memory = RHI::MemoryUsage::CpuToGpu,
+                .debugName = "Selected_Model_VB"
+            };
+            RHI::RHIBufferDesc selIbDesc{
+                .sizeInBytes = selectedIndices.size() * sizeof(uint32_t),
+                .usage = RHI::BufferUsage::Index,
+                .memory = RHI::MemoryUsage::CpuToGpu,
+                .debugName = "Selected_Model_IB"
+            };
+            selVb = device->CreateBuffer(selVbDesc, selectedVertices.data());
+            selIb = device->CreateBuffer(selIbDesc, selectedIndices.data());
+            selTriCount = static_cast<uint32_t>(selectedIndices.size());
+
+            if (!selectedEdges.empty()) {
+                RHI::RHIBufferDesc selEdgeDesc{
+                    .sizeInBytes = selectedEdges.size() * sizeof(uint32_t),
+                    .usage = RHI::BufferUsage::Index,
+                    .memory = RHI::MemoryUsage::CpuToGpu,
+                    .debugName = "Selected_Model_EdgeIB"
+                };
+                selEdgeIb = device->CreateBuffer(selEdgeDesc, selectedEdges.data());
+                selEdgeCount = static_cast<uint32_t>(selectedEdges.size());
             }
         }
 
@@ -258,7 +305,12 @@ public:
             sketchIb,
             sketchTriCount,
             sketchEdgeIb,
-            sketchEdgeCount
+            sketchEdgeCount,
+            selVb,
+            selIb,
+            selTriCount,
+            selEdgeIb,
+            selEdgeCount
         );
     }
 

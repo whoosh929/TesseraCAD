@@ -21,7 +21,12 @@ public:
         std::shared_ptr<RHI::RHIBuffer> sketchIb = nullptr,
         uint32_t sketchIndexCount = 0,
         std::shared_ptr<RHI::RHIBuffer> sketchEdgeIb = nullptr,
-        uint32_t sketchEdgeIndexCount = 0
+        uint32_t sketchEdgeIndexCount = 0,
+        std::shared_ptr<RHI::RHIBuffer> selVb = nullptr,
+        std::shared_ptr<RHI::RHIBuffer> selIb = nullptr,
+        uint32_t selIndexCount = 0,
+        std::shared_ptr<RHI::RHIBuffer> selEdgeIb = nullptr,
+        uint32_t selEdgeIndexCount = 0
     ) {
         m_vertexBuffer = std::move(vb);
         m_indexBuffer = std::move(ib);
@@ -34,10 +39,16 @@ public:
         m_sketchIndexCount = sketchIndexCount;
         m_sketchEdgeIndexBuffer = std::move(sketchEdgeIb);
         m_sketchEdgeIndexCount = sketchEdgeIndexCount;
+        m_selectedVertexBuffer = std::move(selVb);
+        m_selectedIndexBuffer = std::move(selIb);
+        m_selectedIndexCount = selIndexCount;
+        m_selectedEdgeIndexBuffer = std::move(selEdgeIb);
+        m_selectedEdgeIndexCount = selEdgeIndexCount;
     }
 
     [[nodiscard]] bool IsValid() const noexcept {
         return (m_vertexBuffer != nullptr && m_indexCount > 0) ||
+               (m_selectedVertexBuffer != nullptr && m_selectedIndexCount > 0) ||
                (m_sketchVertexBuffer != nullptr && m_sketchIndexCount > 0);
     }
 
@@ -47,6 +58,12 @@ public:
     [[nodiscard]] std::shared_ptr<RHI::RHIBuffer> GetEdgeIndexBuffer() const noexcept { return m_edgeIndexBuffer; }
     [[nodiscard]] uint32_t GetEdgeIndexCount() const noexcept { return m_edgeIndexCount; }
     [[nodiscard]] uint64_t GetGenerationId() const noexcept { return m_generationId; }
+
+    [[nodiscard]] std::shared_ptr<RHI::RHIBuffer> GetSelectedVertexBuffer() const noexcept { return m_selectedVertexBuffer; }
+    [[nodiscard]] std::shared_ptr<RHI::RHIBuffer> GetSelectedIndexBuffer() const noexcept { return m_selectedIndexBuffer; }
+    [[nodiscard]] uint32_t GetSelectedIndexCount() const noexcept { return m_selectedIndexCount; }
+    [[nodiscard]] std::shared_ptr<RHI::RHIBuffer> GetSelectedEdgeIndexBuffer() const noexcept { return m_selectedEdgeIndexBuffer; }
+    [[nodiscard]] uint32_t GetSelectedEdgeIndexCount() const noexcept { return m_selectedEdgeIndexCount; }
 
     [[nodiscard]] std::shared_ptr<RHI::RHIBuffer> GetSketchVertexBuffer() const noexcept { return m_sketchVertexBuffer; }
     [[nodiscard]] std::shared_ptr<RHI::RHIBuffer> GetSketchIndexBuffer() const noexcept { return m_sketchIndexBuffer; }
@@ -60,6 +77,12 @@ private:
     uint32_t m_indexCount{0};
     std::shared_ptr<RHI::RHIBuffer> m_edgeIndexBuffer{nullptr};
     uint32_t m_edgeIndexCount{0};
+
+    std::shared_ptr<RHI::RHIBuffer> m_selectedVertexBuffer{nullptr};
+    std::shared_ptr<RHI::RHIBuffer> m_selectedIndexBuffer{nullptr};
+    uint32_t m_selectedIndexCount{0};
+    std::shared_ptr<RHI::RHIBuffer> m_selectedEdgeIndexBuffer{nullptr};
+    uint32_t m_selectedEdgeIndexCount{0};
     uint64_t m_generationId{0};
 
     std::shared_ptr<RHI::RHIBuffer> m_sketchVertexBuffer{nullptr};

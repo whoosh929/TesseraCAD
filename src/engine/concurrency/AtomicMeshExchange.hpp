@@ -27,6 +27,13 @@ struct RenderMeshData {
     uint32_t sketchIndexCount{0};
     std::shared_ptr<RHI::RHIBuffer> sketchEdgeIndexBuffer{nullptr};
     uint32_t sketchEdgeIndexCount{0};
+
+    // Selected 3D model geometry (subtle surface highlight + highlighted outer edges)
+    std::shared_ptr<RHI::RHIBuffer> selectedVertexBuffer{nullptr};
+    std::shared_ptr<RHI::RHIBuffer> selectedIndexBuffer{nullptr};
+    uint32_t selectedIndexCount{0};
+    std::shared_ptr<RHI::RHIBuffer> selectedEdgeIndexBuffer{nullptr};
+    uint32_t selectedEdgeIndexCount{0};
 };
 
 // -----------------------------------------------------------------------------
@@ -62,21 +69,31 @@ public:
         std::shared_ptr<RHI::RHIBuffer> sketchIb = nullptr,
         uint32_t sketchIndexCount = 0,
         std::shared_ptr<RHI::RHIBuffer> sketchEdgeIb = nullptr,
-        uint32_t sketchEdgeIndexCount = 0
+        uint32_t sketchEdgeIndexCount = 0,
+        std::shared_ptr<RHI::RHIBuffer> selVb = nullptr,
+        std::shared_ptr<RHI::RHIBuffer> selIb = nullptr,
+        uint32_t selIndexCount = 0,
+        std::shared_ptr<RHI::RHIBuffer> selEdgeIb = nullptr,
+        uint32_t selEdgeIndexCount = 0
     ) {
-        auto payload = std::make_shared<RenderMeshData>(RenderMeshData{
-            .vertexBuffer = std::move(vb),
-            .indexBuffer = std::move(ib),
-            .indexCount = indexCount,
-            .edgeIndexBuffer = std::move(edgeIb),
-            .edgeIndexCount = edgeIndexCount,
-            .generationId = generationId,
-            .sketchVertexBuffer = std::move(sketchVb),
-            .sketchIndexBuffer = std::move(sketchIb),
-            .sketchIndexCount = sketchIndexCount,
-            .sketchEdgeIndexBuffer = std::move(sketchEdgeIb),
-            .sketchEdgeIndexCount = sketchEdgeIndexCount
-        });
+        auto payload = std::make_shared<RenderMeshData>();
+        payload->vertexBuffer = std::move(vb);
+        payload->indexBuffer = std::move(ib);
+        payload->indexCount = indexCount;
+        payload->edgeIndexBuffer = std::move(edgeIb);
+        payload->edgeIndexCount = edgeIndexCount;
+        payload->generationId = generationId;
+        payload->sketchVertexBuffer = std::move(sketchVb);
+        payload->sketchIndexBuffer = std::move(sketchIb);
+        payload->sketchIndexCount = sketchIndexCount;
+        payload->sketchEdgeIndexBuffer = std::move(sketchEdgeIb);
+        payload->sketchEdgeIndexCount = sketchEdgeIndexCount;
+        payload->selectedVertexBuffer = std::move(selVb);
+        payload->selectedIndexBuffer = std::move(selIb);
+        payload->selectedIndexCount = selIndexCount;
+        payload->selectedEdgeIndexBuffer = std::move(selEdgeIb);
+        payload->selectedEdgeIndexCount = selEdgeIndexCount;
+
         Publish(std::move(payload));
     }
 

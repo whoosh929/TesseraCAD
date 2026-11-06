@@ -678,6 +678,85 @@ bool TestRevolveCylindricalThicknessAndNoBoxFeature() {
     return true;
 }
 
+bool TestModelClickSelectionHighlightAndOuterEdges() {
+    std::cout << "[Test] Model Click Selection Surface Highlight & Outer Edge Highlight...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create Model A (Extrude feature) at (0, 0, 0)
+    auto sketchA = std::make_shared<SketchNode>("Sketch_A", SketchPlane::XY_Front);
+    sketchA->SetPresetRectangle(2.0f, 2.0f);
+    sketchA->SetPosition(0.0f, 0.0f, 0.0f);
+    sketchA->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketchA);
+
+    auto modelA = std::make_shared<ExtrudeNode>("Model_ExtrudeA", sketchA, 2.0f);
+    modelA->SetPosition(0.0f, 0.0f, 0.0f);
+    modelA->Evaluate(&mockDevice, exchange);
+    graph.AddNode(modelA);
+
+    // 2. Create Model B (Revolve cylinder feature) at (6, 0, 0)
+    auto sketchB = std::make_shared<SketchNode>("Sketch_B", SketchPlane::XY_Front);
+    sketchB->SetProfile({ {1.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 3.0f}, {1.0f, 3.0f} });
+    sketchB->SetPosition(6.0f, 0.0f, 0.0f);
+    sketchB->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketchB);
+
+    auto modelB = std::make_shared<RevolveNode>("Model_RevolveB", sketchB, 360.0f, RevolveAxisMode::Sketch_V_Axis);
+    modelB->SetPosition(6.0f, 0.0f, 0.0f);
+    modelB->Evaluate(&mockDevice, exchange);
+    graph.AddNode(modelB);
+
+    // 3. Ray pick Model A in 3D viewport at (0, 0, 0)
+    Point3D rayOrigA(0.0, 0.0, 10.0);
+    Vector3D rayDirA(0.0, 0.0, -1.0);
+    double dist = 0.0;
+    uint64_t pickedA = graph.PickNode(rayOrigA, rayDirA, &dist);
+    TEST_ASSERT(pickedA == modelA->GetId(), "Clicking 3D Model A must return Model A's ID");
+
+    // Publish scene with Model A selected
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, pickedA);
+    auto meshA = exchange.AcquireLatest();
+    TEST_ASSERT(meshA != nullptr, "Published mesh must not be null");
+    TEST_ASSERT(meshA->selectedIndexCount == modelA->GetCachedIndices().size(), 
+                "Selected Model A surface must have triangles for subtle highlight");
+    TEST_ASSERT(meshA->selectedEdgeIndexCount == modelA->GetCachedEdges().size(), 
+                "Selected Model A outer edges must have line indices for edge highlight");
+    TEST_ASSERT(meshA->indexCount == modelB->GetCachedIndices().size(), 
+                "Unselected Model B must remain in unselected surface buffer");
+    TEST_ASSERT(meshA->edgeIndexCount == modelB->GetCachedEdges().size(), 
+                "Unselected Model B must remain in unselected edge buffer");
+
+    // 4. Ray pick Model B in 3D viewport at (6, 0, 0)
+    Point3D rayOrigB(7.5, 1.5, 10.0);
+    Vector3D rayDirB(0.0, 0.0, -1.0);
+    uint64_t pickedB = graph.PickNode(rayOrigB, rayDirB, &dist);
+    TEST_ASSERT(pickedB == modelB->GetId(), "Clicking 3D Model B must return Model B's ID");
+
+    // Publish scene with Model B selected
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, pickedB);
+    auto meshB = exchange.AcquireLatest();
+    TEST_ASSERT(meshB != nullptr, "Published mesh must not be null");
+    TEST_ASSERT(meshB->selectedIndexCount == modelB->GetCachedIndices().size(), 
+                "Selected Model B surface must be partitioned to selected buffer");
+    TEST_ASSERT(meshB->selectedEdgeIndexCount == modelB->GetCachedEdges().size(), 
+                "Selected Model B outer edges must be partitioned to selected edge buffer");
+    TEST_ASSERT(meshB->indexCount == modelA->GetCachedIndices().size(), 
+                "Unselected Model A must be in unselected surface buffer");
+
+    // 5. Deselect all models (click empty space or Deselect)
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, 0);
+    auto meshNone = exchange.AcquireLatest();
+    TEST_ASSERT(meshNone->selectedIndexCount == 0, "Deselected scene has 0 selected triangles");
+    TEST_ASSERT(meshNone->selectedEdgeIndexCount == 0, "Deselected scene has 0 selected edges");
+    TEST_ASSERT(meshNone->indexCount == (modelA->GetCachedIndices().size() + modelB->GetCachedIndices().size()),
+                "All models return to standard unselected buffer");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -694,6 +773,7 @@ int main() {
     pass &= TestStandaloneSketchVisibilityAndVisualStyling();
     pass &= TestTopBarReferenceGeometryAndFeatureWorkflows();
     pass &= TestRevolveCylindricalThicknessAndNoBoxFeature();
+    pass &= TestModelClickSelectionHighlightAndOuterEdges();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

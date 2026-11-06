@@ -155,6 +155,7 @@ void Application::SetupCallbacks() {
                         );
                         uint64_t hitNodeId = app->m_graph->PickNode(ray.origin, ray.direction);
                         app->m_gui->SetSelectedNodeId(hitNodeId);
+                        app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, hitNodeId);
                     }
                 }
             } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
