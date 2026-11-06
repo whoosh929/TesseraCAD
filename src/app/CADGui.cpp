@@ -555,19 +555,67 @@ void CADGui::RenderUI(
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
 
-                // Interactive 2D Points Editor
+                // Interactive 2D Shapes & Points Editor
                 ImGui::Spacing();
-                const auto& profile = sketch->GetProfile();
-                ImGui::Text("Sketch Vertices (%zu points):", profile.size());
+                const auto& shapes = sketch->GetShapes();
+                if (shapes.size() > 1) {
+                    ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Shapes in Sketch (%zu):", shapes.size());
+                    for (size_t s = 0; s < shapes.size(); ++s) {
+                        ImGui::PushID(static_cast<int>(s + 1000));
+                        ImGui::BulletText("Shape %zu (%zu vertices)", s + 1, shapes[s].size());
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.25f, 0.25f, 1.0f));
+                        if (ImGui::Button("🗑 Delete Shape")) {
+                            sketch->RemoveShape(s);
+                            graph.EvaluateDirtyNodes(device, exchange);
+                            ImGui::PopStyleColor(2);
+                            ImGui::PopID();
+                            break;
+                        }
+                        ImGui::PopStyleColor(2);
+                        ImGui::PopID();
+                    }
+                    ImGui::Spacing();
+                }
 
-                ImGui::BeginChild("PointEditor", ImVec2(0, 95), true);
+                const auto& profile = sketch->GetProfile();
+                ImGui::Text("Active Profile Vertices (%zu points):", profile.size());
+
+                ImGui::BeginChild("PointEditor", ImVec2(0, 115), true);
                 for (size_t i = 0; i < profile.size(); ++i) {
+                    ImGui::PushID(static_cast<int>(i));
                     float pt[2]{profile[i][0], profile[i][1]};
                     std::string label = "Pt #" + std::to_string(i);
+                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 36.0f);
                     if (ImGui::DragFloat2(label.c_str(), pt, 0.05f, -20.0f, 20.0f, "%.2f")) {
                         sketch->UpdatePoint(i, pt[0], pt[1]);
                         graph.EvaluateDirtyNodes(device, exchange);
                     }
+                    ImGui::SameLine();
+                    if (profile.size() > 3) {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.2f, 0.2f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.25f, 0.25f, 1.0f));
+                        if (ImGui::Button("✕", ImVec2(24, 0))) {
+                            sketch->RemovePoint(i);
+                            graph.EvaluateDirtyNodes(device, exchange);
+                            ImGui::PopStyleColor(2);
+                            ImGui::PopID();
+                            break;
+                        }
+                        ImGui::PopStyleColor(2);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Delete vertex #%zu", i);
+                        }
+                    } else {
+                        ImGui::BeginDisabled();
+                        ImGui::Button("✕", ImVec2(24, 0));
+                        ImGui::EndDisabled();
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                            ImGui::SetTooltip("A polygon must have at least 3 vertices.");
+                        }
+                    }
+                    ImGui::PopID();
                 }
                 ImGui::EndChild();
 
@@ -1019,6 +1067,50 @@ void CADGui::RenderSketchCanvas(
     }
     ImGui::SameLine();
 
+    // Delete controls in ribbon for selected vertex or shape
+    if (m_selectedShapeIdx >= 0 && m_selectedShapeIdx < static_cast<int>(m_canvasShapes.size())) {
+        auto& selShape = m_canvasShapes[m_selectedShapeIdx];
+        if (m_selectedVertexIdx >= 0 && m_selectedVertexIdx < static_cast<int>(selShape.points.size())) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.28f, 0.28f, 1.0f));
+            if (ImGui::Button("🗑 Del Vertex", ImVec2(96, 28))) {
+                selShape.points.erase(selShape.points.begin() + m_selectedVertexIdx);
+                m_selectedVertexIdx = -1;
+                if (selShape.points.size() < 3) selShape.isClosed = false;
+                if (selShape.points.empty()) {
+                    m_canvasShapes.erase(m_canvasShapes.begin() + m_selectedShapeIdx);
+                    m_selectedShapeIdx = -1;
+                }
+            }
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete selected vertex handle (Del)");
+            ImGui::SameLine();
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.28f, 0.28f, 1.0f));
+            if (ImGui::Button("🗑 Del Shape", ImVec2(92, 28))) {
+                m_canvasShapes.erase(m_canvasShapes.begin() + m_selectedShapeIdx);
+                m_selectedShapeIdx = -1;
+                m_selectedVertexIdx = -1;
+            }
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete selected shape (Del)");
+            ImGui::SameLine();
+        }
+    }
+
+    if (!m_canvasShapes.empty()) {
+        if (ImGui::Button("Clear All", ImVec2(70, 28))) {
+            m_canvasShapes.clear();
+            m_selectedShapeIdx = -1;
+            m_selectedVertexIdx = -1;
+            m_inProgressPoints.clear();
+            m_inProgressSplineControls.clear();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear all shapes from sketch canvas");
+        ImGui::SameLine();
+    }
+
     // Closure Status Badge
     if (isSketchClosed) {
         ImGui::TextColored(ImVec4(0.2f, 0.95f, 0.4f, 1.0f), "● Closed Loop(s)");
@@ -1110,6 +1202,26 @@ void CADGui::RenderSketchCanvas(
         if (ImGui::IsKeyPressed(ImGuiKey_L)) m_mouseTool = SketchMouseTool::Line;
         if (ImGui::IsKeyPressed(ImGuiKey_S)) m_mouseTool = SketchMouseTool::Spline;
 
+        // Delete / Backspace key to delete selected vertex or selected shape
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
+            if (m_selectedShapeIdx >= 0 && m_selectedShapeIdx < static_cast<int>(m_canvasShapes.size())) {
+                auto& selShape = m_canvasShapes[m_selectedShapeIdx];
+                if (m_selectedVertexIdx >= 0 && m_selectedVertexIdx < static_cast<int>(selShape.points.size())) {
+                    selShape.points.erase(selShape.points.begin() + m_selectedVertexIdx);
+                    m_selectedVertexIdx = -1;
+                    if (selShape.points.size() < 3) selShape.isClosed = false;
+                    if (selShape.points.empty()) {
+                        m_canvasShapes.erase(m_canvasShapes.begin() + m_selectedShapeIdx);
+                        m_selectedShapeIdx = -1;
+                    }
+                } else {
+                    m_canvasShapes.erase(m_canvasShapes.begin() + m_selectedShapeIdx);
+                    m_selectedShapeIdx = -1;
+                    m_selectedVertexIdx = -1;
+                }
+            }
+        }
+
         if (io.MouseWheel != 0.0f) {
             float oldZoom = m_canvasZoom;
             float factor = (io.MouseWheel > 0.0f) ? 1.15f : (1.0f / 1.15f);
@@ -1190,6 +1302,8 @@ void CADGui::RenderSketchCanvas(
             screenPts.push_back(ToScreen(pt[0], pt[1]));
         }
 
+        bool isShapeSelected = (m_selectedShapeIdx == static_cast<int>(s));
+
         if (shape.isClosed && shape.points.size() >= 3) {
             // ENCLOSED SHAPE: Signified by shaded area!
             auto triIndices = TessellationUtils::TriangulatePolygon2D(shape.points);
@@ -1198,14 +1312,17 @@ void CADGui::RenderSketchCanvas(
                     screenPts[triIndices[t]],
                     screenPts[triIndices[t + 1]],
                     screenPts[triIndices[t + 2]],
-                    IM_COL32(0, 160, 255, 45) // Translucent blue shaded area
+                    isShapeSelected ? IM_COL32(255, 195, 30, 48) : IM_COL32(0, 160, 255, 45)
                 );
             }
-            // Solid cyan boundary
-            drawList->AddPolyline(screenPts.data(), static_cast<int>(screenPts.size()), IM_COL32(0, 210, 255, 255), ImDrawFlags_Closed, 2.5f);
+            // Boundary contour
+            ImU32 boundaryColor = isShapeSelected ? IM_COL32(255, 215, 0, 255) : IM_COL32(0, 210, 255, 255);
+            float boundaryThickness = isShapeSelected ? 3.5f : 2.5f;
+            drawList->AddPolyline(screenPts.data(), static_cast<int>(screenPts.size()), boundaryColor, ImDrawFlags_Closed, boundaryThickness);
         } else {
             // OPEN / UNCLOSED SHAPE: NO shaded area!
-            drawList->AddPolyline(screenPts.data(), static_cast<int>(screenPts.size()), IM_COL32(255, 140, 20, 240), 0, 2.5f);
+            ImU32 openColor = isShapeSelected ? IM_COL32(255, 215, 0, 255) : IM_COL32(255, 140, 20, 240);
+            drawList->AddPolyline(screenPts.data(), static_cast<int>(screenPts.size()), openColor, 0, 2.5f);
             // Highlight open endpoints
             drawList->AddCircleFilled(screenPts.front(), 6.0f, IM_COL32(255, 60, 60, 255));
             drawList->AddCircleFilled(screenPts.back(), 6.0f, IM_COL32(255, 60, 60, 255));
@@ -1213,23 +1330,32 @@ void CADGui::RenderSketchCanvas(
             drawList->AddText(ImVec2(screenPts.back().x + 8.0f, screenPts.back().y - 14.0f), IM_COL32(255, 90, 90, 255), "Open");
         }
 
+        // Selected shape banner
+        if (isShapeSelected && m_selectedVertexIdx < 0 && !screenPts.empty()) {
+            drawList->AddText(ImVec2(screenPts[0].x - 10.0f, screenPts[0].y - 28.0f), IM_COL32(255, 220, 50, 255), "[Selected Shape: Del to remove]");
+        }
+
         // Draw vertex handles
         for (size_t i = 0; i < shape.points.size(); ++i) {
             ImVec2 ptScr = screenPts[i];
             bool isHoveredPt = (m_hoveredShapeIdx == static_cast<int>(s) && m_hoveredVertexIdx == static_cast<int>(i));
             bool isDraggedPt = (m_draggedShapeIdx == static_cast<int>(s) && m_draggedVertexIdx == static_cast<int>(i));
+            bool isSelectedPt = (m_selectedShapeIdx == static_cast<int>(s) && m_selectedVertexIdx == static_cast<int>(i));
 
-            float radius = (isHoveredPt || isDraggedPt) ? 7.0f : 4.5f;
+            float radius = (isHoveredPt || isDraggedPt || isSelectedPt) ? 7.0f : 4.5f;
             ImU32 color = isDraggedPt ? IM_COL32(255, 80, 80, 255) : 
+                          isSelectedPt ? IM_COL32(255, 230, 0, 255) :
                           isHoveredPt ? IM_COL32(255, 215, 0, 255) : 
                                         IM_COL32(255, 255, 255, 230);
 
             drawList->AddCircleFilled(ptScr, radius, color);
-            drawList->AddCircle(ptScr, radius + 1.0f, IM_COL32(10, 10, 10, 200), 12, 1.5f);
+            drawList->AddCircle(ptScr, radius + 1.5f, isSelectedPt ? IM_COL32(255, 230, 0, 255) : IM_COL32(10, 10, 10, 200), 16, 1.5f);
 
-            if (isHoveredPt || isDraggedPt) {
+            if (isSelectedPt) {
+                drawList->AddText(ImVec2(ptScr.x + 10.0f, ptScr.y - 16.0f), IM_COL32(255, 230, 50, 255), "Selected (Del/RMB to remove)");
+            } else if (isHoveredPt || isDraggedPt) {
                 char buf[64];
-                snprintf(buf, sizeof(buf), "%s #%zu (%.2f, %.2f)", shape.name.c_str(), i, shape.points[i][0], shape.points[i][1]);
+                snprintf(buf, sizeof(buf), "%s #%zu (%.2f, %.2f) [RMB: Del]", shape.name.c_str(), i, shape.points[i][0], shape.points[i][1]);
                 drawList->AddText(ImVec2(ptScr.x + 8.0f, ptScr.y - 14.0f), IM_COL32(255, 255, 100, 255), buf);
             }
         }
@@ -1275,6 +1401,17 @@ void CADGui::RenderSketchCanvas(
     // -------------------------------------------------------------------------
     // Tool Interactions
     // -------------------------------------------------------------------------
+    auto DistToSegment = [](const ImVec2& p, const ImVec2& a, const ImVec2& b) -> float {
+        float dx = b.x - a.x;
+        float dy = b.y - a.y;
+        float lenSq = dx * dx + dy * dy;
+        if (lenSq < 1e-6f) return std::hypot(p.x - a.x, p.y - a.y);
+        float t = std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq, 0.0f, 1.0f);
+        float projX = a.x + t * dx;
+        float projY = a.y + t * dy;
+        return std::hypot(p.x - projX, p.y - projY);
+    };
+
     // 1. Select / Move Tool
     if (m_mouseTool == SketchMouseTool::SelectMove) {
         if (m_draggedShapeIdx < 0) {
@@ -1292,9 +1429,65 @@ void CADGui::RenderSketchCanvas(
                     }
                 }
             }
-            if (m_hoveredShapeIdx >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
-                m_draggedShapeIdx = m_hoveredShapeIdx;
-                m_draggedVertexIdx = m_hoveredVertexIdx;
+
+            // If no vertex handle is hovered, check if cursor is over a shape body or edge
+            if (m_hoveredVertexIdx < 0) {
+                for (int s = static_cast<int>(m_canvasShapes.size()) - 1; s >= 0; --s) {
+                    const auto& sh = m_canvasShapes[s];
+                    if (sh.points.size() >= 3 && Sketch::PointInPolygon2D({rawU, rawV}, sh.points)) {
+                        m_hoveredShapeIdx = s;
+                        break;
+                    }
+                    for (size_t i = 0; i < sh.points.size(); ++i) {
+                        size_t next = (i + 1) % sh.points.size();
+                        ImVec2 p0 = ToScreen(sh.points[i][0], sh.points[i][1]);
+                        ImVec2 p1 = ToScreen(sh.points[next][0], sh.points[next][1]);
+                        if (DistToSegment(io.MousePos, p0, p1) < 10.0f) {
+                            m_hoveredShapeIdx = s;
+                            break;
+                        }
+                    }
+                    if (m_hoveredShapeIdx >= 0) break;
+                }
+            }
+
+            // Left Click: select / start dragging
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
+                if (m_hoveredVertexIdx >= 0) {
+                    m_selectedShapeIdx = m_hoveredShapeIdx;
+                    m_selectedVertexIdx = m_hoveredVertexIdx;
+                    m_draggedShapeIdx = m_hoveredShapeIdx;
+                    m_draggedVertexIdx = m_hoveredVertexIdx;
+                } else if (m_hoveredShapeIdx >= 0) {
+                    m_selectedShapeIdx = m_hoveredShapeIdx;
+                    m_selectedVertexIdx = -1;
+                } else {
+                    m_selectedShapeIdx = -1;
+                    m_selectedVertexIdx = -1;
+                }
+            }
+
+            // Right Click in SelectMove mode: instant delete of hovered vertex or hovered shape
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && isHovered) {
+                if (m_hoveredShapeIdx >= 0 && m_hoveredShapeIdx < static_cast<int>(m_canvasShapes.size())) {
+                    auto& shape = m_canvasShapes[m_hoveredShapeIdx];
+                    if (m_hoveredVertexIdx >= 0 && m_hoveredVertexIdx < static_cast<int>(shape.points.size())) {
+                        shape.points.erase(shape.points.begin() + m_hoveredVertexIdx);
+                        if (m_selectedShapeIdx == m_hoveredShapeIdx) m_selectedVertexIdx = -1;
+                        if (shape.points.size() < 3) shape.isClosed = false;
+                        if (shape.points.empty()) {
+                            m_canvasShapes.erase(m_canvasShapes.begin() + m_hoveredShapeIdx);
+                            m_selectedShapeIdx = -1;
+                        }
+                        m_hoveredShapeIdx = -1;
+                        m_hoveredVertexIdx = -1;
+                    } else {
+                        m_canvasShapes.erase(m_canvasShapes.begin() + m_hoveredShapeIdx);
+                        m_selectedShapeIdx = -1;
+                        m_selectedVertexIdx = -1;
+                        m_hoveredShapeIdx = -1;
+                    }
+                }
             }
         } else {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -1556,30 +1749,19 @@ void CADGui::RenderSketchCanvas(
     // -------------------------------------------------------------------------
     // HUD Overlays
     // -------------------------------------------------------------------------
-    // 1. Shapes Summary Chip Bar
-    float chipY = canvasP1.y - 56.0f;
-    std::string chipSummary = "Shapes (" + std::to_string(m_canvasShapes.size()) + "): ";
-    for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
-        chipSummary += m_canvasShapes[s].name + (m_canvasShapes[s].isClosed ? " [Closed]" : " [OPEN]");
-        if (s + 1 < m_canvasShapes.size()) chipSummary += " | ";
-    }
-    if (m_canvasShapes.empty()) chipSummary += "None (draw shapes using Rectangle/Circle/Line tools)";
-    drawList->AddRectFilled(ImVec2(canvasP0.x + 8.0f, chipY - 2.0f), ImVec2(canvasP0.x + 480.0f, chipY + 22.0f), IM_COL32(15, 17, 20, 200), 4.0f);
-    drawList->AddText(ImVec2(canvasP0.x + 14.0f, chipY + 2.0f), isSketchClosed ? IM_COL32(0, 230, 200, 255) : IM_COL32(255, 160, 50, 255), chipSummary.c_str());
-
-    // 2. Coordinate Readout HUD
+    // 1. Coordinate Readout HUD
     char coordBuf[128];
     snprintf(coordBuf, sizeof(coordBuf), "Cursor: (U: %+.2f m, V: %+.2f m) | Grid Snap: %.2f m", snapU, snapV, m_gridSnapSize);
     drawList->AddRectFilled(ImVec2(canvasP0.x + 8.0f, canvasP1.y - 28.0f), ImVec2(canvasP0.x + 380.0f, canvasP1.y - 6.0f), IM_COL32(15, 17, 20, 200), 4.0f);
     drawList->AddText(ImVec2(canvasP0.x + 14.0f, canvasP1.y - 25.0f), IM_COL32(0, 230, 255, 255), coordBuf);
 
-    // 3. Tool quick tip
+    // 2. Tool quick tip
     const char* toolTipText = "";
     switch (m_mouseTool) {
-        case SketchMouseTool::SelectMove: toolTipText = "[Select/Move] Click & drag vertex handles to reshape (V)"; break;
+        case SketchMouseTool::SelectMove: toolTipText = "[Select/Move] Click vertex/shape to select. Drag to move. Del/RMB: Delete"; break;
         case SketchMouseTool::Rectangle:  toolTipText = "[Rectangle] Click & drag diagonally to draw rectangle (R)"; break;
         case SketchMouseTool::Circle:     toolTipText = "[Circle] Click center & drag outward to draw circle (C)"; break;
-        case SketchMouseTool::Line:       toolTipText = "[Line/Poly] Click vertices. Click first point / double-click to close (RMB: Cancel)"; break;
+        case SketchMouseTool::Line:       toolTipText = "[Line/Poly] Click vertices. Click first / double-click to close (RMB: Cancel)"; break;
         case SketchMouseTool::Spline:     toolTipText = "[Spline] Click control points. Click first / double-click to close (RMB: Cancel)"; break;
     }
     ImVec2 tipSz = ImGui::CalcTextSize(toolTipText);
@@ -1587,6 +1769,71 @@ void CADGui::RenderSketchCanvas(
     drawList->AddText(ImVec2(canvasP1.x - tipSz.x - 14.0f, canvasP0.y + 11.0f), IM_COL32(230, 230, 230, 230), toolTipText);
 
     drawList->PopClipRect();
+
+    // -------------------------------------------------------------------------
+    // Interactive Shape Chips Bar (Click chip to select, ✕ to delete shape)
+    // -------------------------------------------------------------------------
+    ImGui::SetCursorScreenPos(ImVec2(canvasP0.x + 8.0f, canvasP1.y - 68.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(18, 22, 28, 225));
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(50, 60, 75, 200));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+    ImGui::BeginChild("CanvasShapeChips", ImVec2(canvasSz.x - 16.0f, 34.0f), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Shapes (%zu):", m_canvasShapes.size());
+    ImGui::SameLine();
+
+    for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
+        ImGui::PushID(static_cast<int>(s + 7000));
+        bool isSel = (m_selectedShapeIdx == static_cast<int>(s));
+        if (isSel) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.52f, 0.12f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.62f, 0.18f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.24f, 0.30f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.34f, 0.42f, 1.0f));
+        }
+
+        std::string label = m_canvasShapes[s].name + " (" + std::to_string(m_canvasShapes[s].points.size()) + " pts)" + 
+                            (m_canvasShapes[s].isClosed ? " ✓" : " ⚠");
+        if (ImGui::Button(label.c_str())) {
+            m_selectedShapeIdx = static_cast<int>(s);
+            m_selectedVertexIdx = -1;
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Select %s on canvas (Del to delete)", m_canvasShapes[s].name.c_str());
+        }
+        ImGui::SameLine(0.0f, 2.0f);
+
+        // Delete button for this shape
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.18f, 0.18f, 0.9f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("✕", ImVec2(22, 0))) {
+            m_canvasShapes.erase(m_canvasShapes.begin() + s);
+            if (m_selectedShapeIdx == static_cast<int>(s)) {
+                m_selectedShapeIdx = -1;
+                m_selectedVertexIdx = -1;
+            } else if (m_selectedShapeIdx > static_cast<int>(s)) {
+                m_selectedShapeIdx--;
+            }
+            ImGui::PopStyleColor(2);
+            ImGui::PopID();
+            break;
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Delete %s", m_canvasShapes[s].name.c_str());
+        }
+        ImGui::SameLine(0.0f, 8.0f);
+        ImGui::PopID();
+    }
+    if (m_canvasShapes.empty()) {
+        ImGui::TextDisabled("No shapes on canvas. Use Rectangle, Circle, or Line tools above to draw.");
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
+
     ImGui::End();
 }
 

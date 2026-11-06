@@ -106,6 +106,8 @@ private:
     int m_draggedVertexIdx{-1};
     int m_hoveredShapeIdx{-1};
     int m_hoveredVertexIdx{-1};
+    int m_selectedShapeIdx{-1};
+    int m_selectedVertexIdx{-1};
 
     std::vector<CanvasShape> m_canvasShapes;
     uint64_t m_currentEditingSketchId{0};

@@ -181,6 +181,33 @@ public:
         }
     }
 
+    void RemoveShape(size_t shapeIndex) {
+        if (shapeIndex < m_shapes.size()) {
+            m_shapes.erase(m_shapes.begin() + shapeIndex);
+            if (!m_shapes.empty()) {
+                m_profile = m_shapes[0];
+            } else {
+                m_profile.clear();
+            }
+            m_preset = SketchPreset::Custom;
+            MarkDirty();
+        }
+    }
+
+    void RemoveVertexFromShape(size_t shapeIndex, size_t vertexIndex) {
+        if (shapeIndex < m_shapes.size()) {
+            auto& shape = m_shapes[shapeIndex];
+            if (vertexIndex < shape.size() && shape.size() > 3) {
+                shape.erase(shape.begin() + vertexIndex);
+                if (shapeIndex == 0) {
+                    m_profile = shape;
+                }
+                m_preset = SketchPreset::Custom;
+                MarkDirty();
+            }
+        }
+    }
+
     void UpdatePoint(size_t index, float x, float y) {
         if (index < m_profile.size()) {
             m_profile[index] = {x, y};

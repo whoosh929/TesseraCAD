@@ -331,6 +331,82 @@ bool TestMultiShapeSketchAndStitching() {
     return true;
 }
 
+bool TestSketchShapeAndVertexDeletion() {
+    std::cout << "[Test] 2D Sketch Shape & Vertex Deletion...\n";
+
+    // 1. Test deleting individual vertices from single-profile sketch
+    auto sketch = std::make_shared<SketchNode>("DeleteTestSketch", SketchPlane::XZ_Ground);
+    sketch->SetPresetRegularPolygon(6, 2.0f); // 6 vertices
+    TEST_ASSERT(sketch->GetProfile().size() == 6, "Initial hexagon should have 6 vertices");
+
+    // Remove vertex at index 2
+    sketch->RemovePoint(2);
+    TEST_ASSERT(sketch->GetProfile().size() == 5, "After deletion, sketch should have 5 vertices");
+    TEST_ASSERT(sketch->IsDirty(), "Sketch must be dirty after vertex deletion");
+
+    // Remove down to 3 vertices (minimum closed loop)
+    sketch->RemovePoint(0);
+    sketch->RemovePoint(0);
+    TEST_ASSERT(sketch->GetProfile().size() == 3, "After deletions, sketch should have 3 vertices");
+
+    // Attempting to remove below 3 via RemovePoint should safely retain 3 vertices
+    sketch->RemovePoint(0);
+    TEST_ASSERT(sketch->GetProfile().size() == 3, "RemovePoint preserves minimum 3 vertices for closed polygon");
+
+    // 2. Test multi-shape deletion
+    std::vector<std::vector<std::array<float, 2>>> multiShapes = {
+        { {-3.0f, -1.0f}, {-1.0f, -1.0f}, {-1.0f, 1.0f}, {-3.0f, 1.0f} }, // Shape 0
+        { { 1.0f, -1.0f}, { 3.0f, -1.0f}, { 3.0f, 1.0f}, { 1.0f, 1.0f} }, // Shape 1
+        { { 5.0f, -1.0f}, { 7.0f, -1.0f}, { 7.0f, 1.0f}, { 5.0f, 1.0f} }  // Shape 2
+    };
+    sketch->SetShapes(multiShapes);
+    TEST_ASSERT(sketch->GetShapes().size() == 3, "Sketch should have 3 shapes");
+
+    // Delete Shape 1
+    sketch->RemoveShape(1);
+    TEST_ASSERT(sketch->GetShapes().size() == 2, "After deleting shape 1, sketch should have 2 shapes");
+    TEST_ASSERT(sketch->IsDirty(), "Sketch must be dirty after shape deletion");
+
+    // Delete Shape 0 (head shape)
+    sketch->RemoveShape(0);
+    TEST_ASSERT(sketch->GetShapes().size() == 1, "After deleting shape 0, sketch should have 1 shape");
+    // Verify active profile was updated to the remaining shape (originally Shape 2 at x=5..7)
+    TEST_ASSERT(std::abs(sketch->GetProfile()[0][0] - 5.0f) < 1e-4f, "Active profile should now be remaining shape");
+
+    // Delete last remaining shape
+    sketch->RemoveShape(0);
+    TEST_ASSERT(sketch->GetShapes().empty(), "All shapes should be deleted");
+    TEST_ASSERT(sketch->GetProfile().empty(), "Profile should be empty after deleting all shapes");
+
+    // 3. Test DAG Extrude update when shape is deleted
+    ParametricGraph graph(nullptr);
+    AtomicMeshExchange exchange;
+
+    auto sketch2 = std::make_shared<SketchNode>("ExtrudeDeleteTest", SketchPlane::XZ_Ground);
+    sketch2->SetShapes({
+        { {-3.0f, -1.0f}, {-1.0f, -1.0f}, {-1.0f, 1.0f}, {-3.0f, 1.0f} },
+        { { 1.0f, -1.0f}, { 3.0f, -1.0f}, { 3.0f, 1.0f}, { 1.0f, 1.0f} }
+    });
+    graph.AddNode(sketch2);
+
+    auto extrude = std::make_shared<ExtrudeNode>("ExtrudeNode", sketch2, 2.0f);
+    graph.AddNode(extrude);
+
+    sketch2->Evaluate(nullptr, exchange);
+    extrude->Evaluate(nullptr, exchange);
+
+    TEST_ASSERT(extrude->GetCachedVertices().size() == 48, "Initial extrude should have 48 vertices for 2 shapes");
+
+    // Delete one shape from sketch
+    sketch2->RemoveShape(1);
+    TEST_ASSERT(extrude->IsDirty(), "Parent feature must be marked dirty when shape is deleted");
+
+    graph.EvaluateDirtyNodes(nullptr, exchange);
+    TEST_ASSERT(extrude->GetCachedVertices().size() == 24, "Extrude should update to 24 vertices for 1 remaining shape");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -343,6 +419,7 @@ int main() {
     pass &= TestFeatureSketchChildAndPromotion();
     pass &= TestSketchChangePropagationToFeature();
     pass &= TestMultiShapeSketchAndStitching();
+    pass &= TestSketchShapeAndVertexDeletion();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";
