@@ -114,6 +114,11 @@ void CADGui::RenderUI(
 ) {
     if (!m_initialized) return;
 
+    if (m_selectedNodeId != m_lastPublishedSelectedNodeId) {
+        m_lastPublishedSelectedNodeId = m_selectedNodeId;
+        graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
+    }
+
     // -------------------------------------------------------------------------
     // PANEL 1: CAD Tool Palette - Shape Creation & 2D Sketching
     // -------------------------------------------------------------------------
@@ -439,7 +444,11 @@ void CADGui::RenderUI(
 
             std::string prefix = "[Solid] ";
             if (std::dynamic_pointer_cast<SketchNode>(node)) {
-                prefix = "[Sketch] ";
+                if (isSelected) {
+                    prefix = "[Sketch ✦ Outline/Shaded] ";
+                } else {
+                    prefix = "[Sketch 👁 Hidden] ";
+                }
             } else if (auto e = std::dynamic_pointer_cast<ExtrudeNode>(node)) {
                 prefix = e->GetSketchReference() ? "[Extrude] " : "[Extrude] ";
             } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
@@ -480,10 +489,20 @@ void CADGui::RenderUI(
                 if (ImGui::Selectable(label.c_str(), isSelected)) {
                     m_selectedNodeId = node->GetId();
                 }
+                if (std::dynamic_pointer_cast<SketchNode>(node) && ImGui::IsItemHovered()) {
+                    if (isSelected) {
+                        ImGui::SetTooltip("Standalone Sketch is SELECTED:\nRendered in 3D viewport as a vibrant outline with transparent shading.");
+                    } else {
+                        ImGui::SetTooltip("Standalone Sketch is NOT selected:\nHidden from 3D viewport. Click to select on feature tree and display with outline & transparent shading.");
+                    }
+                }
                 if (isSelected && m_selectionScrollPending) {
                     ImGui::SetScrollHereY(0.5f);
                 }
             }
+        }
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemHovered()) {
+            m_selectedNodeId = 0; // Deselect on clicking empty background in Model Tree
         }
         m_selectionScrollPending = false;
         ImGui::EndChild();
@@ -527,10 +546,15 @@ void CADGui::RenderUI(
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
 
-                bool visible = sketch->IsVisible();
-                if (ImGui::Checkbox("Show 2D Sketch Wireframe in 3D", &visible)) {
-                    sketch->SetVisible(visible);
-                    graph.EvaluateDirtyNodes(device, exchange);
+                if (!sketch->HasParentFeature()) {
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(0.0f, 0.85f, 1.0f, 1.0f), "● 3D Viewport Display:");
+                    ImGui::BulletText("Outline with transparent shading (active when selected).");
+                    ImGui::BulletText("Deselect in feature tree to hide from 3D viewport.");
+                } else if (auto parent = sketch->GetParentFeature()) {
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "● Associated with 3D Feature:");
+                    ImGui::BulletText("Child sketch of: %s", parent->GetName().c_str());
                 }
 
                 ImGui::Spacing();
@@ -761,12 +785,13 @@ void CADGui::RenderUI(
                     auto child = selectedNode->GetChildSketch();
                     graph.RemoveNode(delId);
                     graph.EvaluateDirtyNodes(device, exchange);
-                    graph.PublishCombinedSceneMesh(device, exchange);
                     if (child) {
                         m_selectedNodeId = child->GetId();
                     } else {
                         m_selectedNodeId = 0;
                     }
+                    m_lastPublishedSelectedNodeId = m_selectedNodeId;
+                    graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
                 }
             }
 
@@ -776,12 +801,13 @@ void CADGui::RenderUI(
                     auto child = selectedNode->GetChildSketch();
                     graph.RemoveNode(delId);
                     graph.EvaluateDirtyNodes(device, exchange);
-                    graph.PublishCombinedSceneMesh(device, exchange);
                     if (child) {
                         m_selectedNodeId = child->GetId();
                     } else {
                         m_selectedNodeId = 0;
                     }
+                    m_lastPublishedSelectedNodeId = m_selectedNodeId;
+                    graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
                 }
             }
         } else {

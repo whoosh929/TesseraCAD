@@ -95,37 +95,93 @@ public:
                 // Submit to background thread pool
                 m_threadPool->Enqueue([this, node, device, &exchange]() {
                     node->Evaluate(device, exchange);
-                    PublishCombinedSceneMesh(device, exchange);
+                    PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
                 });
             } else {
                 node->Evaluate(device, exchange);
-                PublishCombinedSceneMesh(device, exchange);
+                PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
             }
         }
     }
 
-    void PublishCombinedSceneMesh(RHI::RHIDevice* device, AtomicMeshExchange& exchange) {
+    void SetSelectedNodeId(uint64_t id) {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        m_selectedNodeId = id;
+    }
+
+    [[nodiscard]] uint64_t GetSelectedNodeId() const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        return m_selectedNodeId;
+    }
+
+    void PublishCombinedSceneMesh(
+        RHI::RHIDevice* device, 
+        AtomicMeshExchange& exchange,
+        std::optional<uint64_t> selectedNodeIdOverride = std::nullopt
+    ) {
         if (!device) return;
         std::lock_guard<std::mutex> lock(m_graphMutex);
+        if (selectedNodeIdOverride.has_value()) {
+            m_selectedNodeId = *selectedNodeIdOverride;
+        }
+
         std::vector<CADVertex> combinedVertices;
         std::vector<uint32_t> combinedIndices;
         std::vector<uint32_t> combinedEdges;
 
+        std::vector<CADVertex> sketchVertices;
+        std::vector<uint32_t> sketchIndices;
+        std::vector<uint32_t> sketchEdges;
+
         for (const auto& node : m_nodes) {
-            const auto& verts = node->GetCachedVertices();
-            const auto& indices = node->GetCachedIndices();
-            const auto& edges = node->GetCachedEdges();
+            if (!node) continue;
 
-            uint32_t vOffset = static_cast<uint32_t>(combinedVertices.size());
-            combinedVertices.insert(combinedVertices.end(), verts.begin(), verts.end());
+            if (auto sketch = std::dynamic_pointer_cast<SketchNode>(node)) {
+                // Child sketches do not render standalone (parent solid feature renders)
+                if (sketch->HasParentFeature()) {
+                    continue;
+                }
+                // Sketches not associated with a feature must NOT show up unless selected on the feature tree
+                if (sketch->GetId() != m_selectedNodeId) {
+                    continue;
+                }
 
-            for (uint32_t idx : indices) {
-                combinedIndices.push_back(idx + vOffset);
-            }
-            for (uint32_t edgeIdx : edges) {
-                combinedEdges.push_back(edgeIdx + vOffset);
+                const auto& verts = sketch->GetCachedVertices();
+                const auto& indices = sketch->GetCachedIndices();
+                const auto& edges = sketch->GetCachedEdges();
+
+                uint32_t vOffset = static_cast<uint32_t>(sketchVertices.size());
+                sketchVertices.insert(sketchVertices.end(), verts.begin(), verts.end());
+
+                for (uint32_t idx : indices) {
+                    sketchIndices.push_back(idx + vOffset);
+                }
+                for (uint32_t edgeIdx : edges) {
+                    sketchEdges.push_back(edgeIdx + vOffset);
+                }
+            } else {
+                // Solid 3D features (Extrude, Revolve, Box, etc.)
+                const auto& verts = node->GetCachedVertices();
+                const auto& indices = node->GetCachedIndices();
+                const auto& edges = node->GetCachedEdges();
+
+                uint32_t vOffset = static_cast<uint32_t>(combinedVertices.size());
+                combinedVertices.insert(combinedVertices.end(), verts.begin(), verts.end());
+
+                for (uint32_t idx : indices) {
+                    combinedIndices.push_back(idx + vOffset);
+                }
+                for (uint32_t edgeIdx : edges) {
+                    combinedEdges.push_back(edgeIdx + vOffset);
+                }
             }
         }
+
+        std::shared_ptr<RHI::RHIBuffer> vb = nullptr;
+        std::shared_ptr<RHI::RHIBuffer> ib = nullptr;
+        std::shared_ptr<RHI::RHIBuffer> edgeIb = nullptr;
+        uint32_t triCount = 0;
+        uint32_t edgeCount = 0;
 
         if (!combinedVertices.empty() && !combinedIndices.empty()) {
             RHI::RHIBufferDesc vbDesc{
@@ -140,10 +196,10 @@ public:
                 .memory = RHI::MemoryUsage::CpuToGpu,
                 .debugName = "Scene_Combined_IB"
             };
-            auto vb = device->CreateBuffer(vbDesc, combinedVertices.data());
-            auto ib = device->CreateBuffer(ibDesc, combinedIndices.data());
+            vb = device->CreateBuffer(vbDesc, combinedVertices.data());
+            ib = device->CreateBuffer(ibDesc, combinedIndices.data());
+            triCount = static_cast<uint32_t>(combinedIndices.size());
 
-            std::shared_ptr<RHI::RHIBuffer> edgeIb = nullptr;
             if (!combinedEdges.empty()) {
                 RHI::RHIBufferDesc edgeDesc{
                     .sizeInBytes = combinedEdges.size() * sizeof(uint32_t),
@@ -152,19 +208,58 @@ public:
                     .debugName = "Scene_Combined_EdgeIB"
                 };
                 edgeIb = device->CreateBuffer(edgeDesc, combinedEdges.data());
+                edgeCount = static_cast<uint32_t>(combinedEdges.size());
             }
-
-            exchange.Publish(
-                vb, 
-                ib, 
-                static_cast<uint32_t>(combinedIndices.size()), 
-                s_sceneGen.fetch_add(1, std::memory_order_relaxed),
-                edgeIb,
-                static_cast<uint32_t>(combinedEdges.size())
-            );
-        } else {
-            exchange.Publish(nullptr, nullptr, 0, s_sceneGen.fetch_add(1, std::memory_order_relaxed), nullptr, 0);
         }
+
+        std::shared_ptr<RHI::RHIBuffer> sketchVb = nullptr;
+        std::shared_ptr<RHI::RHIBuffer> sketchIb = nullptr;
+        std::shared_ptr<RHI::RHIBuffer> sketchEdgeIb = nullptr;
+        uint32_t sketchTriCount = 0;
+        uint32_t sketchEdgeCount = 0;
+
+        if (!sketchVertices.empty() && !sketchIndices.empty()) {
+            RHI::RHIBufferDesc svbDesc{
+                .sizeInBytes = sketchVertices.size() * sizeof(CADVertex),
+                .usage = RHI::BufferUsage::Vertex,
+                .memory = RHI::MemoryUsage::CpuToGpu,
+                .debugName = "Sketch_Transparent_VB"
+            };
+            RHI::RHIBufferDesc sibDesc{
+                .sizeInBytes = sketchIndices.size() * sizeof(uint32_t),
+                .usage = RHI::BufferUsage::Index,
+                .memory = RHI::MemoryUsage::CpuToGpu,
+                .debugName = "Sketch_Transparent_IB"
+            };
+            sketchVb = device->CreateBuffer(svbDesc, sketchVertices.data());
+            sketchIb = device->CreateBuffer(sibDesc, sketchIndices.data());
+            sketchTriCount = static_cast<uint32_t>(sketchIndices.size());
+
+            if (!sketchEdges.empty()) {
+                RHI::RHIBufferDesc sedgeDesc{
+                    .sizeInBytes = sketchEdges.size() * sizeof(uint32_t),
+                    .usage = RHI::BufferUsage::Index,
+                    .memory = RHI::MemoryUsage::CpuToGpu,
+                    .debugName = "Sketch_Outline_EdgeIB"
+                };
+                sketchEdgeIb = device->CreateBuffer(sedgeDesc, sketchEdges.data());
+                sketchEdgeCount = static_cast<uint32_t>(sketchEdges.size());
+            }
+        }
+
+        exchange.Publish(
+            vb, 
+            ib, 
+            triCount, 
+            s_sceneGen.fetch_add(1, std::memory_order_relaxed),
+            edgeIb,
+            edgeCount,
+            sketchVb,
+            sketchIb,
+            sketchTriCount,
+            sketchEdgeIb,
+            sketchEdgeCount
+        );
     }
 
     [[nodiscard]] size_t GetNodeCount() const {
@@ -209,9 +304,12 @@ public:
         for (const auto& node : m_nodes) {
             if (!node) continue;
 
-            // If it's a sketch node and not visible, skip picking
+            // If it's a sketch node:
+            // 1) Child sketches under a feature are picked via the feature's 3D solid
+            // 2) Parentless sketches do not show up unless selected on the feature tree
             if (auto sketch = std::dynamic_pointer_cast<SketchNode>(node)) {
-                if (!sketch->IsVisible()) continue;
+                if (sketch->HasParentFeature()) continue;
+                if (sketch->GetId() != m_selectedNodeId) continue;
             }
 
             const auto& verts = node->GetCachedVertices();
@@ -253,6 +351,7 @@ public:
 private:
     std::shared_ptr<ThreadPool> m_threadPool;
     std::vector<std::shared_ptr<DAGNode>> m_nodes;
+    uint64_t m_selectedNodeId{0};
     mutable std::mutex m_graphMutex;
     static inline std::atomic<uint64_t> s_sceneGen{1};
 };

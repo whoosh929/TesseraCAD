@@ -407,6 +407,123 @@ bool TestSketchShapeAndVertexDeletion() {
     return true;
 }
 
+class MockTestBuffer : public RHI::RHIBuffer {
+public:
+    MockTestBuffer(size_t size, RHI::BufferUsage usage) : m_size(size), m_usage(usage), m_data(size) {}
+    size_t GetSize() const noexcept override { return m_size; }
+    RHI::BufferUsage GetUsage() const noexcept override { return m_usage; }
+    RHI::MemoryUsage GetMemoryUsage() const noexcept override { return RHI::MemoryUsage::CpuToGpu; }
+    void* Map() override { return m_data.data(); }
+    void Unmap() override {}
+private:
+    size_t m_size;
+    RHI::BufferUsage m_usage;
+    std::vector<uint8_t> m_data;
+};
+
+class MockTestDevice : public RHI::RHIDevice {
+public:
+    std::shared_ptr<RHI::RHIBuffer> CreateBuffer(const RHI::RHIBufferDesc& desc, const void* initialData = nullptr) override {
+        auto buf = std::make_shared<MockTestBuffer>(desc.sizeInBytes, desc.usage);
+        if (initialData) buf->UpdateData(initialData, desc.sizeInBytes);
+        return buf;
+    }
+    std::shared_ptr<RHI::RHIPipeline> CreatePipeline(const RHI::RHIPipelineDesc&) override { return nullptr; }
+    std::unique_ptr<RHI::RHICommandList> CreateCommandList() override { return nullptr; }
+    void Submit(RHI::RHICommandList*) override {}
+    bool BeginFrame() override { return true; }
+    void PresentFrame() override {}
+    void ResizeSwapchain(uint32_t, uint32_t) override {}
+    void WaitIdle() override {}
+    uint32_t GetSwapchainWidth() const noexcept override { return 1920; }
+    uint32_t GetSwapchainHeight() const noexcept override { return 1080; }
+};
+
+bool TestStandaloneSketchVisibilityAndVisualStyling() {
+    std::cout << "[Test] Standalone Sketch Selection Visibility & Visual Styling (Outline + Shading)...\n";
+
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    // 1. Create a parentless sketch (e.g. 4.0 x 3.0 rectangle on XZ Ground Plane)
+    auto sketch = std::make_shared<SketchNode>("Sketch_Standalone", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(4.0f, 3.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    TEST_ASSERT(!sketch->HasParentFeature(), "Sketch must be parentless");
+
+    // 2. Initially, nothing is selected (selectedNodeId = 0)
+    // Sketches that are not associated with a feature MUST NOT show up unless selected on feature tree
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, 0);
+    auto meshUnselected = exchange.AcquireLatest();
+    TEST_ASSERT(meshUnselected != nullptr, "Mesh payload must be published");
+    TEST_ASSERT(meshUnselected->sketchIndexCount == 0, "Unselected parentless sketch must NOT publish sketch triangle indices (hidden in 3D)");
+    TEST_ASSERT(meshUnselected->sketchEdgeIndexCount == 0, "Unselected parentless sketch must NOT publish sketch outline edges");
+    TEST_ASSERT(meshUnselected->indexCount == 0, "Unselected parentless sketch must NOT publish solid mesh indices");
+
+    // Viewport raycast should NOT pick the sketch while it is hidden
+    Point3D rayAtSketch(0.0, 5.0, 0.0);
+    Vector3D rayDown(0.0, -1.0, 0.0);
+    double dist = 0.0;
+    uint64_t pickedHidden = graph.PickNode(rayAtSketch, rayDown, &dist);
+    TEST_ASSERT(pickedHidden == 0, "Hidden unselected sketch must NOT be pickable by viewport raycast");
+
+    // 3. Select the sketch on the feature tree
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, sketch->GetId());
+    auto meshSelected = exchange.AcquireLatest();
+    TEST_ASSERT(meshSelected != nullptr, "Mesh payload must be published");
+    // When selected on the feature tree, it SHOWS UP with outline + transparent shading
+    TEST_ASSERT(meshSelected->sketchVertexBuffer != nullptr, "Selected sketch must publish sketch vertex buffer");
+    TEST_ASSERT(meshSelected->sketchIndexBuffer != nullptr, "Selected sketch must publish sketch index buffer (for transparent shading)");
+    TEST_ASSERT(meshSelected->sketchIndexCount > 0, "Selected sketch must have triangle indices for transparent planar fill");
+    TEST_ASSERT(meshSelected->sketchEdgeIndexBuffer != nullptr, "Selected sketch must publish sketch edge buffer (for vibrant outline)");
+    TEST_ASSERT(meshSelected->sketchEdgeIndexCount > 0, "Selected sketch must have edge indices for crisp outline");
+    TEST_ASSERT(meshSelected->indexCount == 0, "Sketch must NOT be published into the opaque solid body buffer");
+
+    // Viewport raycast SHOULD now pick the sketch because it is visible
+    uint64_t pickedVisible = graph.PickNode(rayAtSketch, rayDown, &dist);
+    TEST_ASSERT(pickedVisible == sketch->GetId(), "Selected visible sketch MUST be pickable by viewport raycast");
+    TEST_ASSERT(std::abs(dist - 5.0) < 0.1, "Ray intersection distance should match Y=0 plane (~5.0)");
+
+    // 4. Deselect the sketch (selectedNodeId = 0)
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, 0);
+    auto meshDeselected = exchange.AcquireLatest();
+    TEST_ASSERT(meshDeselected->sketchIndexCount == 0, "Deselected sketch must be hidden again (0 sketch indices)");
+    TEST_ASSERT(meshDeselected->sketchEdgeIndexCount == 0, "Deselected sketch outline must be hidden (0 edge indices)");
+    TEST_ASSERT(graph.PickNode(rayAtSketch, rayDown) == 0, "Deselected sketch must not be pickable");
+
+    // 5. Associate sketch with an Extrude feature (now it has a parent feature)
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_Feature", sketch, 3.0f);
+    extrude->Evaluate(&mockDevice, exchange);
+    graph.AddNode(extrude);
+    TEST_ASSERT(sketch->HasParentFeature(), "Sketch must now have a parent feature");
+
+    // When sketch has a parent feature, it is NOT rendered standalone even if selected
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, sketch->GetId());
+    auto meshChildSketch = exchange.AcquireLatest();
+    TEST_ASSERT(meshChildSketch->indexCount > 0, "Solid extrude body must be published to solid mesh buffer");
+    TEST_ASSERT(meshChildSketch->sketchIndexCount == 0, "Child sketch associated with feature must not render standalone");
+
+    // 6. Delete Extrude feature: sketch is promoted back to parentless
+    graph.RemoveNode(extrude->GetId());
+    TEST_ASSERT(!sketch->HasParentFeature(), "Sketch must be promoted back to parentless on feature deletion");
+
+    // When promoted and not selected: hidden
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, 0);
+    auto meshPromotedUnselected = exchange.AcquireLatest();
+    TEST_ASSERT(meshPromotedUnselected->sketchIndexCount == 0, "Promoted sketch must not show up when unselected");
+
+    // When promoted and selected: shows up with outline + transparent shading
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, sketch->GetId());
+    auto meshPromotedSelected = exchange.AcquireLatest();
+    TEST_ASSERT(meshPromotedSelected->sketchIndexCount > 0, "Promoted sketch must show up when selected on feature tree");
+    TEST_ASSERT(meshPromotedSelected->sketchEdgeIndexCount > 0, "Promoted sketch outline must show up when selected");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -420,6 +537,7 @@ int main() {
     pass &= TestSketchChangePropagationToFeature();
     pass &= TestMultiShapeSketchAndStitching();
     pass &= TestSketchShapeAndVertexDeletion();
+    pass &= TestStandaloneSketchVisibilityAndVisualStyling();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

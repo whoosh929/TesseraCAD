@@ -143,6 +143,31 @@ void ViewportRenderer::InitPipelines() {
     };
     m_gridPipeline = m_device->CreatePipeline(gridDesc);
 
+    // 4. Sketch Transparent Shading Pipeline (Alpha-blended planar surface)
+    RHI::RHIPipelineDesc sketchShadedDesc{
+        .vertexShaderSource = CADShaders::Vulkan_ShadedVertex,
+        .fragmentShaderSource = CADShaders::Vulkan_ShadedFragment,
+        .spvVertexBytes = SpvBytecode::ShadedVertex,
+        .spvVertexSize = SpvBytecode::ShadedVertexSize,
+        .spvFragmentBytes = SpvBytecode::ShadedFragment,
+        .spvFragmentSize = SpvBytecode::ShadedFragmentSize,
+        .vertexLayout = cadVertexLayout,
+        .topology = RHI::PrimitiveTopology::TriangleList,
+        .rasterizer = {
+            .cullMode = RHI::CullMode::None,
+            .frontFace = RHI::FrontFace::CounterClockwise,
+            .wireframe = false
+        },
+        .depthStencil = {
+            .depthTestEnable = true,
+            .depthWriteEnable = false, // Transparent sketch does not occlude objects behind it
+            .depthCompareOp = RHI::CompareOp::LessOrEqual
+        },
+        .blendState = {.blendEnable = true},
+        .debugName = "CAD_Sketch_Transparent_Pipeline"
+    };
+    m_sketchShadedPipeline = m_device->CreatePipeline(sketchShadedDesc);
+
     std::cout << "[ViewportRenderer] Multi-pass CAD shaders compiled & pipelines ready.\n";
 }
 
@@ -175,11 +200,17 @@ void ViewportRenderer::RenderFrame() {
             latestMesh->indexCount,
             latestMesh->generationId,
             latestMesh->edgeIndexBuffer,
-            latestMesh->edgeIndexCount
+            latestMesh->edgeIndexCount,
+            latestMesh->sketchVertexBuffer,
+            latestMesh->sketchIndexBuffer,
+            latestMesh->sketchIndexCount,
+            latestMesh->sketchEdgeIndexBuffer,
+            latestMesh->sketchEdgeIndexCount
         );
         std::cout << "  [ViewportRenderer] Render proxy swapped to Gen " 
                   << m_lastGenerationId << " (" << latestMesh->indexCount 
-                  << " tri indices, " << latestMesh->edgeIndexCount << " edge indices)\n";
+                  << " tri indices, " << latestMesh->edgeIndexCount << " edge indices | Sketch: "
+                  << latestMesh->sketchIndexCount << " tri, " << latestMesh->sketchEdgeIndexCount << " edge)\n";
     }
 
     // 3. Acquire camera uniforms under short lock
@@ -266,7 +297,39 @@ void ViewportRenderer::RenderFrame() {
                 }
             }
 
-            // 4. Draw Dear ImGui CAD Tooling UI into the swapchain renderpass
+            // 4. Draw standalone selected 2D sketch (visually distinct: outline with transparent shading)
+            if (m_renderProxy.GetSketchVertexBuffer() && m_renderProxy.GetSketchIndexBuffer() && 
+                m_renderProxy.GetSketchIndexCount() > 0 && m_sketchShadedPipeline) {
+                CADModelUniforms sketchUniforms{};
+                sketchUniforms.modelViewProjection = cameraUniforms.viewProjection;
+                sketchUniforms.cameraPosition = cameraUniforms.eyePosition;
+                sketchUniforms.lightDirection = {0.577f, 0.707f, 0.408f, 0.0f};
+                // Transparent shading: translucent vibrant sky blue with alpha blending
+                sketchUniforms.surfaceColor = {0.12f, 0.65f, 1.0f, 0.28f};
+                sketchUniforms.lightingParams = {0.75f, 0.25f, 0.10f, 16.0f};
+
+                m_cmdList->SetPipeline(m_sketchShadedPipeline);
+                m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &sketchUniforms, sizeof(sketchUniforms));
+                m_cmdList->SetVertexBuffer(0, m_renderProxy.GetSketchVertexBuffer());
+                m_cmdList->SetIndexBuffer(m_renderProxy.GetSketchIndexBuffer());
+                m_cmdList->DrawIndexed(m_renderProxy.GetSketchIndexCount());
+            }
+
+            // Sketch Outline (crisp vibrant cyan feature boundary)
+            if (m_renderProxy.GetSketchVertexBuffer() && m_renderProxy.GetSketchEdgeIndexBuffer() && 
+                m_renderProxy.GetSketchEdgeIndexCount() > 0 && m_wireframePipeline) {
+                CADWireframeUniforms sketchWireUniforms{};
+                sketchWireUniforms.modelViewProjection = cameraUniforms.viewProjection;
+                sketchWireUniforms.edgeColor = {0.0f, 0.85f, 1.0f, 1.0f}; // Vibrant electric cyan outline
+
+                m_cmdList->SetPipeline(m_wireframePipeline);
+                m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &sketchWireUniforms, sizeof(sketchWireUniforms));
+                m_cmdList->SetVertexBuffer(0, m_renderProxy.GetSketchVertexBuffer());
+                m_cmdList->SetIndexBuffer(m_renderProxy.GetSketchEdgeIndexBuffer());
+                m_cmdList->DrawIndexed(m_renderProxy.GetSketchEdgeIndexCount());
+            }
+
+            // 5. Draw Dear ImGui CAD Tooling UI into the swapchain renderpass
             if (m_gui) {
                 m_gui->EndFrameAndDraw(m_cmdList.get());
             }

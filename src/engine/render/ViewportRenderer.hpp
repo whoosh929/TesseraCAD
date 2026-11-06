@@ -71,6 +71,7 @@ private:
     std::shared_ptr<RHI::RHIPipeline> m_shadedPipeline;
     std::shared_ptr<RHI::RHIPipeline> m_wireframePipeline;
     std::shared_ptr<RHI::RHIPipeline> m_gridPipeline;
+    std::shared_ptr<RHI::RHIPipeline> m_sketchShadedPipeline;
 
     Camera m_camera;
     std::mutex m_cameraMutex;

@@ -20,6 +20,13 @@ struct RenderMeshData {
     std::shared_ptr<RHI::RHIBuffer> edgeIndexBuffer{nullptr};
     uint32_t edgeIndexCount{0};
     uint64_t generationId{0};
+
+    // Standalone selected sketch geometry (outline + transparent shading)
+    std::shared_ptr<RHI::RHIBuffer> sketchVertexBuffer{nullptr};
+    std::shared_ptr<RHI::RHIBuffer> sketchIndexBuffer{nullptr};
+    uint32_t sketchIndexCount{0};
+    std::shared_ptr<RHI::RHIBuffer> sketchEdgeIndexBuffer{nullptr};
+    uint32_t sketchEdgeIndexCount{0};
 };
 
 // -----------------------------------------------------------------------------
@@ -50,7 +57,12 @@ public:
         uint32_t indexCount,
         uint64_t generationId,
         std::shared_ptr<RHI::RHIBuffer> edgeIb = nullptr,
-        uint32_t edgeIndexCount = 0
+        uint32_t edgeIndexCount = 0,
+        std::shared_ptr<RHI::RHIBuffer> sketchVb = nullptr,
+        std::shared_ptr<RHI::RHIBuffer> sketchIb = nullptr,
+        uint32_t sketchIndexCount = 0,
+        std::shared_ptr<RHI::RHIBuffer> sketchEdgeIb = nullptr,
+        uint32_t sketchEdgeIndexCount = 0
     ) {
         auto payload = std::make_shared<RenderMeshData>(RenderMeshData{
             .vertexBuffer = std::move(vb),
@@ -58,7 +70,12 @@ public:
             .indexCount = indexCount,
             .edgeIndexBuffer = std::move(edgeIb),
             .edgeIndexCount = edgeIndexCount,
-            .generationId = generationId
+            .generationId = generationId,
+            .sketchVertexBuffer = std::move(sketchVb),
+            .sketchIndexBuffer = std::move(sketchIb),
+            .sketchIndexCount = sketchIndexCount,
+            .sketchEdgeIndexBuffer = std::move(sketchEdgeIb),
+            .sketchEdgeIndexCount = sketchEdgeIndexCount
         });
         Publish(std::move(payload));
     }

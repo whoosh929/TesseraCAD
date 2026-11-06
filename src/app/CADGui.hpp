@@ -144,6 +144,7 @@ private:
 
     // Selection
     uint64_t m_selectedNodeId{0};
+    uint64_t m_lastPublishedSelectedNodeId{std::numeric_limits<uint64_t>::max()};
     bool m_selectionScrollPending{false};
     uint32_t m_shapeCounter{1};
 

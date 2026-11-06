@@ -241,7 +241,6 @@ public:
     [[nodiscard]] bool IsVisible() const noexcept { return m_visible; }
     void SetVisible(bool visible) noexcept { 
         m_visible = visible;
-        MarkDirty();
     }
 
     void Evaluate(RHI::RHIDevice* device, AtomicMeshExchange& exchange) override {
@@ -258,55 +257,53 @@ public:
         std::vector<uint32_t> indices;
         std::vector<uint32_t> featureEdges;
 
-        if (m_visible) {
-            const auto& shapesToRender = GetShapes();
-            for (const auto& poly : shapesToRender) {
-                if (poly.size() < 3) continue;
+        const auto& shapesToRender = GetShapes();
+        for (const auto& poly : shapesToRender) {
+            if (poly.size() < 3) continue;
 
-                uint32_t baseIdx = static_cast<uint32_t>(vertices.size());
-                const size_t ptCount = poly.size();
+            uint32_t baseIdx = static_cast<uint32_t>(vertices.size());
+            const size_t ptCount = poly.size();
 
-                for (size_t i = 0; i < ptCount; ++i) {
-                    float u = poly[i][0];
-                    float v = poly[i][1];
-                    CADVertex vert{};
+            for (size_t i = 0; i < ptCount; ++i) {
+                float u = poly[i][0];
+                float v = poly[i][1];
+                CADVertex vert{};
 
-                    switch (m_plane) {
-                        case SketchPlane::XZ_Ground:
-                            vert.position[0] = u + m_position[0];
-                            vert.position[1] = m_position[1] + 0.005f;
-                            vert.position[2] = v + m_position[2];
-                            vert.normal[0] = 0.0f;
-                            vert.normal[1] = 1.0f;
-                            vert.normal[2] = 0.0f;
-                            break;
-                        case SketchPlane::XY_Front:
-                            vert.position[0] = u + m_position[0];
-                            vert.position[1] = v + m_position[1];
-                            vert.position[2] = m_position[2] + 0.005f;
-                            vert.normal[0] = 0.0f;
-                            vert.normal[1] = 0.0f;
-                            vert.normal[2] = 1.0f;
-                            break;
-                        case SketchPlane::YZ_Right:
-                            vert.position[0] = m_position[0] + 0.005f;
-                            vert.position[1] = v + m_position[1];
-                            vert.position[2] = u + m_position[2];
-                            vert.normal[0] = 1.0f;
-                            vert.normal[1] = 0.0f;
-                            vert.normal[2] = 0.0f;
-                            break;
-                    }
-                    vertices.push_back(vert);
-
-                    featureEdges.push_back(baseIdx + static_cast<uint32_t>(i));
-                    featureEdges.push_back(baseIdx + static_cast<uint32_t>((i + 1) % ptCount));
+                switch (m_plane) {
+                    case SketchPlane::XZ_Ground:
+                        vert.position[0] = u + m_position[0];
+                        vert.position[1] = m_position[1] + 0.005f;
+                        vert.position[2] = v + m_position[2];
+                        vert.normal[0] = 0.0f;
+                        vert.normal[1] = 1.0f;
+                        vert.normal[2] = 0.0f;
+                        break;
+                    case SketchPlane::XY_Front:
+                        vert.position[0] = u + m_position[0];
+                        vert.position[1] = v + m_position[1];
+                        vert.position[2] = m_position[2] + 0.005f;
+                        vert.normal[0] = 0.0f;
+                        vert.normal[0] = 0.0f;
+                        vert.normal[2] = 1.0f;
+                        break;
+                    case SketchPlane::YZ_Right:
+                        vert.position[0] = m_position[0] + 0.005f;
+                        vert.position[1] = v + m_position[1];
+                        vert.position[2] = u + m_position[2];
+                        vert.normal[0] = 1.0f;
+                        vert.normal[1] = 0.0f;
+                        vert.normal[2] = 0.0f;
+                        break;
                 }
+                vertices.push_back(vert);
 
-                auto polyIndices = TessellationUtils::TriangulatePolygon2D(poly);
-                for (uint32_t idx : polyIndices) {
-                    indices.push_back(baseIdx + idx);
-                }
+                featureEdges.push_back(baseIdx + static_cast<uint32_t>(i));
+                featureEdges.push_back(baseIdx + static_cast<uint32_t>((i + 1) % ptCount));
+            }
+
+            auto polyIndices = TessellationUtils::TriangulatePolygon2D(poly);
+            for (uint32_t idx : polyIndices) {
+                indices.push_back(baseIdx + idx);
             }
         }
 
