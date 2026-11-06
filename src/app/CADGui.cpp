@@ -1,4 +1,5 @@
 #include "CADGui.hpp"
+#include "engine/sketch/PolygonBool2D.hpp"
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -871,8 +872,64 @@ void CADGui::RenderSketchCanvas(
 ) {
     if (!activeSketch) return;
 
+    // -------------------------------------------------------------------------
+    // Synchronize Canvas Shapes from Active Sketch Node
+    // -------------------------------------------------------------------------
+    if (m_currentEditingSketchId != activeSketch->GetId()) {
+        m_currentEditingSketchId = activeSketch->GetId();
+        m_canvasShapes.clear();
+        m_inProgressPoints.clear();
+        m_inProgressSplineControls.clear();
+        m_draggedShapeIdx = -1;
+        m_draggedVertexIdx = -1;
+        m_hoveredShapeIdx = -1;
+        m_hoveredVertexIdx = -1;
+
+        const auto& shapes = activeSketch->GetShapes();
+        if (!shapes.empty()) {
+            for (size_t i = 0; i < shapes.size(); ++i) {
+                m_canvasShapes.push_back({
+                    "Shape " + std::to_string(i + 1),
+                    shapes[i],
+                    true
+                });
+            }
+        } else if (!activeSketch->GetProfile().empty()) {
+            m_canvasShapes.push_back({
+                "Shape 1",
+                activeSketch->GetProfile(),
+                true
+            });
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Evaluate Sketch Closure
+    // -------------------------------------------------------------------------
+    bool isSketchClosed = true;
+    std::string unclosedReason;
+
+    if (!m_inProgressPoints.empty()) {
+        isSketchClosed = false;
+        unclosedReason = "Line/Polyline drawing in progress is not closed.";
+    } else if (!m_inProgressSplineControls.empty()) {
+        isSketchClosed = false;
+        unclosedReason = "Spline drawing in progress is not closed.";
+    } else if (m_canvasShapes.empty()) {
+        isSketchClosed = false;
+        unclosedReason = "Sketch has no shapes yet. Draw an enclosed shape to confirm.";
+    } else {
+        for (size_t i = 0; i < m_canvasShapes.size(); ++i) {
+            if (!m_canvasShapes[i].isClosed || m_canvasShapes[i].points.size() < 3) {
+                isSketchClosed = false;
+                unclosedReason = m_canvasShapes[i].name + " is open (not a closed loop).";
+                break;
+            }
+        }
+    }
+
     ImGui::SetNextWindowPos(ImVec2(390.0f, 16.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(820.0f, 650.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(840.0f, 660.0f), ImGuiCond_FirstUseEver);
 
     std::string winTitle = "2D Sketch Canvas - " + activeSketch->GetName() + " (" + GetSketchPlaneName(activeSketch->GetPlane()) + ")###SketchCanvas";
     bool isOpen = true;
@@ -896,12 +953,13 @@ void CADGui::RenderSketchCanvas(
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.50f, 0.85f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.58f, 0.95f, 1.0f));
         }
-        if (ImGui::Button(label, ImVec2(84, 28))) {
+        if (ImGui::Button(label, ImVec2(80, 28))) {
             if (m_mouseTool != tool) {
                 m_mouseTool = tool;
                 m_isDrawing = false;
                 m_inProgressPoints.clear();
                 m_inProgressSplineControls.clear();
+                m_draggedShapeIdx = -1;
                 m_draggedVertexIdx = -1;
             }
         }
@@ -924,15 +982,36 @@ void CADGui::RenderSketchCanvas(
     ToolBtn(SketchMouseTool::Spline, "Spline", "Click control points for smooth spline, click first / double click to close (S)");
     ImGui::SameLine();
 
-    ImGui::Spacing();
-    ImGui::SameLine();
-    ImGui::Checkbox("Snap", &m_gridSnapEnable);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90.0f);
-    ImGui::SliderFloat("Grid", &m_gridSnapSize, 0.1f, 2.0f, "%.1f m");
+    // Stitching button
+    if (ImGui::Button("⚡ Stitch", ImVec2(76, 28))) {
+        if (m_canvasShapes.size() > 1) {
+            std::vector<std::vector<std::array<float, 2>>> loops;
+            for (const auto& sh : m_canvasShapes) {
+                if (sh.isClosed && sh.points.size() >= 3) {
+                    loops.push_back(sh.points);
+                }
+            }
+            if (loops.size() > 1) {
+                auto stitched = Sketch::StitchMultipleShapes(loops);
+                if (stitched.size() >= 3) {
+                    m_canvasShapes.clear();
+                    m_canvasShapes.push_back({ "Stitched Boundary", std::move(stitched), true });
+                }
+            }
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Boolean stitch & union overlapping shapes into a single closed boundary profile");
+    }
     ImGui::SameLine();
 
-    if (ImGui::Button("Center View", ImVec2(90, 28))) {
+    ImGui::Checkbox("Snap", &m_gridSnapEnable);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70.0f);
+    ImGui::SliderFloat("##Grid", &m_gridSnapSize, 0.1f, 2.0f, "%.1fm");
+    ImGui::SameLine();
+
+    if (ImGui::Button("Center", ImVec2(56, 28))) {
         ImVec2 avail = ImGui::GetContentRegionAvail();
         m_canvasPanX = avail.x * 0.5f;
         m_canvasPanY = avail.y * 0.5f;
@@ -940,12 +1019,67 @@ void CADGui::RenderSketchCanvas(
     }
     ImGui::SameLine();
 
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.60f, 0.35f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.70f, 0.42f, 1.0f));
-    if (ImGui::Button("✓ Finish Sketch", ImVec2(105, 28))) {
+    // Closure Status Badge
+    if (isSketchClosed) {
+        ImGui::TextColored(ImVec4(0.2f, 0.95f, 0.4f, 1.0f), "● Closed Loop(s)");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.25f, 1.0f), "▲ Unclosed");
+    }
+    ImGui::SameLine();
+
+    // Quick loop close button if in-progress has points
+    if (!m_inProgressPoints.empty() && m_inProgressPoints.size() >= 3) {
+        if (ImGui::Button("Close Loop", ImVec2(80, 28))) {
+            m_canvasShapes.push_back({
+                "Polyline " + std::to_string(m_canvasShapes.size() + 1),
+                m_inProgressPoints,
+                true
+            });
+            m_inProgressPoints.clear();
+        }
+        ImGui::SameLine();
+    } else if (!m_inProgressSplineControls.empty() && m_inProgressSplineControls.size() >= 3) {
+        if (ImGui::Button("Close Spline", ImVec2(84, 28))) {
+            auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 12);
+            m_canvasShapes.push_back({
+                "Spline " + std::to_string(m_canvasShapes.size() + 1),
+                std::move(denseSpline),
+                true
+            });
+            m_inProgressSplineControls.clear();
+        }
+        ImGui::SameLine();
+    }
+
+    // Confirmation Button: Disabled when unclosed!
+    ImGui::BeginDisabled(!isSketchClosed);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.62f, 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.72f, 0.42f, 1.0f));
+    if (ImGui::Button("✓ Confirm Changes", ImVec2(130, 28))) {
+        std::vector<std::vector<std::array<float, 2>>> outShapes;
+        for (const auto& sh : m_canvasShapes) {
+            if (sh.isClosed && sh.points.size() >= 3) {
+                outShapes.push_back(sh.points);
+            }
+        }
+        activeSketch->SetShapes(std::move(outShapes));
+        graph.EvaluateDirtyNodes(device, exchange);
         m_sketchModeActive = false;
     }
     ImGui::PopStyleColor(2);
+    ImGui::EndDisabled();
+
+    if (!isSketchClosed && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Cannot confirm sketch:\n%s\nAll shapes must be closed loops to apply.", unclosedReason.c_str());
+    }
+    ImGui::SameLine();
+
+    if (ImGui::Button("✕ Cancel", ImVec2(65, 28))) {
+        m_sketchModeActive = false;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Discard changes and close sketch canvas.");
+    }
 
     ImGui::Separator();
 
@@ -970,7 +1104,6 @@ void CADGui::RenderSketchCanvas(
 
     // Canvas navigation: Pan & Zoom
     if (isHovered) {
-        // Keyboard tool switching shortcuts
         if (ImGui::IsKeyPressed(ImGuiKey_V)) m_mouseTool = SketchMouseTool::SelectMove;
         if (ImGui::IsKeyPressed(ImGuiKey_R)) m_mouseTool = SketchMouseTool::Rectangle;
         if (ImGui::IsKeyPressed(ImGuiKey_C)) m_mouseTool = SketchMouseTool::Circle;
@@ -1044,22 +1177,47 @@ void CADGui::RenderSketchCanvas(
         drawList->AddText(ImVec2(originScrX + 6.0f, originScrY + 4.0f), IM_COL32(200, 200, 200, 220), "(0, 0)");
     }
 
-    // Existing profile
-    const auto& profile = activeSketch->GetProfile();
-    if (profile.size() >= 3) {
+    // -------------------------------------------------------------------------
+    // Render Canvas Shapes (Enclosed shapes signified by shaded area)
+    // -------------------------------------------------------------------------
+    for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
+        const auto& shape = m_canvasShapes[s];
+        if (shape.points.empty()) continue;
+
         std::vector<ImVec2> screenPts;
-        screenPts.reserve(profile.size());
-        for (const auto& pt : profile) {
+        screenPts.reserve(shape.points.size());
+        for (const auto& pt : shape.points) {
             screenPts.push_back(ToScreen(pt[0], pt[1]));
         }
 
-        drawList->AddConvexPolyFilled(screenPts.data(), static_cast<int>(screenPts.size()), IM_COL32(20, 140, 255, 35));
-        drawList->AddPolyline(screenPts.data(), static_cast<int>(screenPts.size()), IM_COL32(0, 210, 255, 255), ImDrawFlags_Closed, 2.5f);
+        if (shape.isClosed && shape.points.size() >= 3) {
+            // ENCLOSED SHAPE: Signified by shaded area!
+            auto triIndices = TessellationUtils::TriangulatePolygon2D(shape.points);
+            for (size_t t = 0; t + 2 < triIndices.size(); t += 3) {
+                drawList->AddTriangleFilled(
+                    screenPts[triIndices[t]],
+                    screenPts[triIndices[t + 1]],
+                    screenPts[triIndices[t + 2]],
+                    IM_COL32(0, 160, 255, 45) // Translucent blue shaded area
+                );
+            }
+            // Solid cyan boundary
+            drawList->AddPolyline(screenPts.data(), static_cast<int>(screenPts.size()), IM_COL32(0, 210, 255, 255), ImDrawFlags_Closed, 2.5f);
+        } else {
+            // OPEN / UNCLOSED SHAPE: NO shaded area!
+            drawList->AddPolyline(screenPts.data(), static_cast<int>(screenPts.size()), IM_COL32(255, 140, 20, 240), 0, 2.5f);
+            // Highlight open endpoints
+            drawList->AddCircleFilled(screenPts.front(), 6.0f, IM_COL32(255, 60, 60, 255));
+            drawList->AddCircleFilled(screenPts.back(), 6.0f, IM_COL32(255, 60, 60, 255));
+            drawList->AddText(ImVec2(screenPts.front().x + 8.0f, screenPts.front().y - 14.0f), IM_COL32(255, 90, 90, 255), "Open");
+            drawList->AddText(ImVec2(screenPts.back().x + 8.0f, screenPts.back().y - 14.0f), IM_COL32(255, 90, 90, 255), "Open");
+        }
 
-        for (size_t i = 0; i < profile.size(); ++i) {
+        // Draw vertex handles
+        for (size_t i = 0; i < shape.points.size(); ++i) {
             ImVec2 ptScr = screenPts[i];
-            bool isHoveredPt = (m_hoveredVertexIdx == static_cast<int>(i));
-            bool isDraggedPt = (m_draggedVertexIdx == static_cast<int>(i));
+            bool isHoveredPt = (m_hoveredShapeIdx == static_cast<int>(s) && m_hoveredVertexIdx == static_cast<int>(i));
+            bool isDraggedPt = (m_draggedShapeIdx == static_cast<int>(s) && m_draggedVertexIdx == static_cast<int>(i));
 
             float radius = (isHoveredPt || isDraggedPt) ? 7.0f : 4.5f;
             ImU32 color = isDraggedPt ? IM_COL32(255, 80, 80, 255) : 
@@ -1071,21 +1229,47 @@ void CADGui::RenderSketchCanvas(
 
             if (isHoveredPt || isDraggedPt) {
                 char buf[64];
-                snprintf(buf, sizeof(buf), "#%zu (%.2f, %.2f)", i, profile[i][0], profile[i][1]);
+                snprintf(buf, sizeof(buf), "%s #%zu (%.2f, %.2f)", shape.name.c_str(), i, shape.points[i][0], shape.points[i][1]);
                 drawList->AddText(ImVec2(ptScr.x + 8.0f, ptScr.y - 14.0f), IM_COL32(255, 255, 100, 255), buf);
             }
         }
     }
 
-    // Cursor coordinates & snapping
+    // -------------------------------------------------------------------------
+    // Cursor coordinates & Snapping (Grid Snap + Vertex Snapping to any shape)
+    // -------------------------------------------------------------------------
     float rawU = (io.MousePos.x - canvasP0.x - m_canvasPanX) / m_canvasZoom;
     float rawV = -(io.MousePos.y - canvasP0.y - m_canvasPanY) / m_canvasZoom;
     float snapU = m_gridSnapEnable ? (std::round(rawU / m_gridSnapSize) * m_gridSnapSize) : rawU;
     float snapV = m_gridSnapEnable ? (std::round(rawV / m_gridSnapSize) * m_gridSnapSize) : rawV;
+
+    // Check vertex snapping across all existing shapes (enabling vertex stitching)
+    bool snappedToVertex = false;
+    float bestSnapDist = 14.0f; // Screen pixel snap distance
+    for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
+        for (size_t v = 0; v < m_canvasShapes[s].points.size(); ++v) {
+            ImVec2 scr = ToScreen(m_canvasShapes[s].points[v][0], m_canvasShapes[s].points[v][1]);
+            float d = std::hypot(io.MousePos.x - scr.x, io.MousePos.y - scr.y);
+            if (d < bestSnapDist) {
+                bestSnapDist = d;
+                snapU = m_canvasShapes[s].points[v][0];
+                snapV = m_canvasShapes[s].points[v][1];
+                snappedToVertex = true;
+            }
+        }
+    }
     ImVec2 snapPosScr = ToScreen(snapU, snapV);
 
     if (isHovered) {
-        drawList->AddCircle(snapPosScr, 4.0f, IM_COL32(0, 255, 255, 180), 8, 1.2f);
+        if (snappedToVertex) {
+            drawList->AddCircle(snapPosScr, 7.0f, IM_COL32(255, 230, 0, 255), 16, 2.0f);
+            drawList->AddRect(ImVec2(snapPosScr.x - 5.0f, snapPosScr.y - 5.0f),
+                              ImVec2(snapPosScr.x + 5.0f, snapPosScr.y + 5.0f),
+                              IM_COL32(255, 230, 0, 220), 0.0f, 0, 1.5f);
+            drawList->AddText(ImVec2(snapPosScr.x + 9.0f, snapPosScr.y - 12.0f), IM_COL32(255, 230, 0, 255), "Snap to Vertex");
+        } else {
+            drawList->AddCircle(snapPosScr, 4.0f, IM_COL32(0, 255, 255, 180), 8, 1.2f);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1093,25 +1277,33 @@ void CADGui::RenderSketchCanvas(
     // -------------------------------------------------------------------------
     // 1. Select / Move Tool
     if (m_mouseTool == SketchMouseTool::SelectMove) {
-        if (m_draggedVertexIdx < 0) {
+        if (m_draggedShapeIdx < 0) {
+            m_hoveredShapeIdx = -1;
             m_hoveredVertexIdx = -1;
             float bestDist = 14.0f;
-            for (size_t i = 0; i < profile.size(); ++i) {
-                ImVec2 ptScr = ToScreen(profile[i][0], profile[i][1]);
-                float dist = std::hypot(io.MousePos.x - ptScr.x, io.MousePos.y - ptScr.y);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    m_hoveredVertexIdx = static_cast<int>(i);
+            for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
+                for (size_t i = 0; i < m_canvasShapes[s].points.size(); ++i) {
+                    ImVec2 ptScr = ToScreen(m_canvasShapes[s].points[i][0], m_canvasShapes[s].points[i][1]);
+                    float dist = std::hypot(io.MousePos.x - ptScr.x, io.MousePos.y - ptScr.y);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        m_hoveredShapeIdx = static_cast<int>(s);
+                        m_hoveredVertexIdx = static_cast<int>(i);
+                    }
                 }
             }
-            if (m_hoveredVertexIdx >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
+            if (m_hoveredShapeIdx >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
+                m_draggedShapeIdx = m_hoveredShapeIdx;
                 m_draggedVertexIdx = m_hoveredVertexIdx;
             }
         } else {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                activeSketch->UpdatePoint(m_draggedVertexIdx, snapU, snapV);
-                graph.EvaluateDirtyNodes(device, exchange);
+                if (m_draggedShapeIdx < static_cast<int>(m_canvasShapes.size()) &&
+                    m_draggedVertexIdx < static_cast<int>(m_canvasShapes[m_draggedShapeIdx].points.size())) {
+                    m_canvasShapes[m_draggedShapeIdx].points[m_draggedVertexIdx] = { snapU, snapV };
+                }
             } else {
+                m_draggedShapeIdx = -1;
                 m_draggedVertexIdx = -1;
             }
         }
@@ -1130,7 +1322,8 @@ void CADGui::RenderSketchCanvas(
             ImVec2 minScr = ImVec2(std::min(pA.x, pB.x), std::min(pA.y, pB.y));
             ImVec2 maxScr = ImVec2(std::max(pA.x, pB.x), std::max(pA.y, pB.y));
 
-            drawList->AddRectFilled(minScr, maxScr, IM_COL32(30, 144, 255, 50));
+            // Shaded enclosed shape area during sketching!
+            drawList->AddRectFilled(minScr, maxScr, IM_COL32(30, 144, 255, 55));
             drawList->AddRect(minScr, maxScr, IM_COL32(0, 220, 255, 255), 0.0f, 0, 2.0f);
 
             float w = std::abs(snapU - m_drawStartU);
@@ -1146,14 +1339,11 @@ void CADGui::RenderSketchCanvas(
                 float minV = std::min(m_drawStartV, snapV);
                 float maxV = std::max(m_drawStartV, snapV);
                 if ((maxU - minU) > 0.05f && (maxV - minV) > 0.05f) {
-                    std::vector<std::array<float, 2>> rectProfile = {
-                        {minU, minV},
-                        {maxU, minV},
-                        {maxU, maxV},
-                        {minU, maxV}
-                    };
-                    activeSketch->SetProfile(std::move(rectProfile));
-                    graph.EvaluateDirtyNodes(device, exchange);
+                    m_canvasShapes.push_back({
+                        "Rectangle " + std::to_string(m_canvasShapes.size() + 1),
+                        { {minU, minV}, {maxU, minV}, {maxU, maxV}, {minU, maxV} },
+                        true
+                    });
                 }
             }
         }
@@ -1171,7 +1361,8 @@ void CADGui::RenderSketchCanvas(
             ImVec2 centerScr = ToScreen(m_drawStartU, m_drawStartV);
             float radiusScr = radius * m_canvasZoom;
 
-            drawList->AddCircleFilled(centerScr, radiusScr, IM_COL32(30, 144, 255, 50), 48);
+            // Shaded enclosed shape area during sketching!
+            drawList->AddCircleFilled(centerScr, radiusScr, IM_COL32(30, 144, 255, 55), 48);
             drawList->AddCircle(centerScr, radiusScr, IM_COL32(0, 220, 255, 255), 48, 2.0f);
             drawList->AddLine(centerScr, snapPosScr, IM_COL32(255, 255, 100, 220), 1.5f);
 
@@ -1189,8 +1380,11 @@ void CADGui::RenderSketchCanvas(
                         float theta = (static_cast<float>(i) / static_cast<float>(segs)) * 6.2831853f;
                         circleProfile.push_back({m_drawStartU + radius * std::cos(theta), m_drawStartV + radius * std::sin(theta)});
                     }
-                    activeSketch->SetProfile(std::move(circleProfile));
-                    graph.EvaluateDirtyNodes(device, exchange);
+                    m_canvasShapes.push_back({
+                        "Circle " + std::to_string(m_canvasShapes.size() + 1),
+                        std::move(circleProfile),
+                        true
+                    });
                 }
             }
         }
@@ -1201,18 +1395,26 @@ void CADGui::RenderSketchCanvas(
             m_inProgressPoints.clear();
         }
 
+        bool isCloseHovered = false;
+        if (!m_inProgressPoints.empty() && m_inProgressPoints.size() >= 3) {
+            ImVec2 firstPtScr = ToScreen(m_inProgressPoints[0][0], m_inProgressPoints[0][1]);
+            float distToFirst = std::hypot(io.MousePos.x - firstPtScr.x, io.MousePos.y - firstPtScr.y);
+            if (distToFirst < 16.0f) isCloseHovered = true;
+        }
+
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
             if (m_inProgressPoints.empty()) {
                 m_inProgressPoints.push_back({snapU, snapV});
             } else {
-                ImVec2 firstPtScr = ToScreen(m_inProgressPoints[0][0], m_inProgressPoints[0][1]);
-                float distToFirst = std::hypot(io.MousePos.x - firstPtScr.x, io.MousePos.y - firstPtScr.y);
-
-                if ((distToFirst < 14.0f || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) && m_inProgressPoints.size() >= 3) {
-                    activeSketch->SetProfile(m_inProgressPoints);
-                    graph.EvaluateDirtyNodes(device, exchange);
+                if ((isCloseHovered || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) && m_inProgressPoints.size() >= 3) {
+                    // Loop is enclosed and closed!
+                    m_canvasShapes.push_back({
+                        "Polyline " + std::to_string(m_canvasShapes.size() + 1),
+                        m_inProgressPoints,
+                        true
+                    });
                     m_inProgressPoints.clear();
-                } else if (distToFirst >= 14.0f) {
+                } else if (!isCloseHovered) {
                     auto last = m_inProgressPoints.back();
                     if (std::hypot(snapU - last[0], snapV - last[1]) > 0.01f) {
                         m_inProgressPoints.push_back({snapU, snapV});
@@ -1222,6 +1424,19 @@ void CADGui::RenderSketchCanvas(
         }
 
         if (!m_inProgressPoints.empty()) {
+            // As sketching is happening, an enclosed shape is signified by a shaded area!
+            if (isCloseHovered && m_inProgressPoints.size() >= 3) {
+                auto triIndices = TessellationUtils::TriangulatePolygon2D(m_inProgressPoints);
+                for (size_t t = 0; t + 2 < triIndices.size(); t += 3) {
+                    drawList->AddTriangleFilled(
+                        ToScreen(m_inProgressPoints[triIndices[t]][0], m_inProgressPoints[triIndices[t]][1]),
+                        ToScreen(m_inProgressPoints[triIndices[t + 1]][0], m_inProgressPoints[triIndices[t + 1]][1]),
+                        ToScreen(m_inProgressPoints[triIndices[t + 2]][0], m_inProgressPoints[triIndices[t + 2]][1]),
+                        IM_COL32(30, 220, 140, 55) // Greenish/cyan shaded enclosed shape preview
+                    );
+                }
+            }
+
             for (size_t i = 0; i + 1 < m_inProgressPoints.size(); ++i) {
                 drawList->AddLine(ToScreen(m_inProgressPoints[i][0], m_inProgressPoints[i][1]),
                                   ToScreen(m_inProgressPoints[i+1][0], m_inProgressPoints[i+1][1]),
@@ -1233,11 +1448,10 @@ void CADGui::RenderSketchCanvas(
             drawList->AddCircleFilled(lastPtScr, 4.0f, IM_COL32(255, 200, 50, 255));
 
             ImVec2 firstPtScr = ToScreen(m_inProgressPoints[0][0], m_inProgressPoints[0][1]);
-            float distToFirst = std::hypot(io.MousePos.x - firstPtScr.x, io.MousePos.y - firstPtScr.y);
             if (m_inProgressPoints.size() >= 3) {
-                drawList->AddCircle(firstPtScr, 8.0f, distToFirst < 14.0f ? IM_COL32(50, 255, 50, 255) : IM_COL32(255, 180, 0, 180), 16, 2.0f);
-                if (distToFirst < 14.0f) {
-                    drawList->AddText(ImVec2(firstPtScr.x + 12.0f, firstPtScr.y - 12.0f), IM_COL32(50, 255, 50, 255), "Click to Close Loop");
+                drawList->AddCircle(firstPtScr, 9.0f, isCloseHovered ? IM_COL32(50, 255, 50, 255) : IM_COL32(255, 180, 0, 180), 16, 2.0f);
+                if (isCloseHovered) {
+                    drawList->AddText(ImVec2(firstPtScr.x + 12.0f, firstPtScr.y - 12.0f), IM_COL32(50, 255, 50, 255), "Click to Close & Enclose Loop");
                 }
             }
 
@@ -1253,19 +1467,26 @@ void CADGui::RenderSketchCanvas(
             m_inProgressSplineControls.clear();
         }
 
+        bool isCloseHovered = false;
+        if (!m_inProgressSplineControls.empty() && m_inProgressSplineControls.size() >= 3) {
+            ImVec2 firstPtScr = ToScreen(m_inProgressSplineControls[0][0], m_inProgressSplineControls[0][1]);
+            float distToFirst = std::hypot(io.MousePos.x - firstPtScr.x, io.MousePos.y - firstPtScr.y);
+            if (distToFirst < 16.0f) isCloseHovered = true;
+        }
+
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
             if (m_inProgressSplineControls.empty()) {
                 m_inProgressSplineControls.push_back({snapU, snapV});
             } else {
-                ImVec2 firstPtScr = ToScreen(m_inProgressSplineControls[0][0], m_inProgressSplineControls[0][1]);
-                float distToFirst = std::hypot(io.MousePos.x - firstPtScr.x, io.MousePos.y - firstPtScr.y);
-
-                if ((distToFirst < 14.0f || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) && m_inProgressSplineControls.size() >= 3) {
+                if ((isCloseHovered || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) && m_inProgressSplineControls.size() >= 3) {
                     auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 12);
-                    activeSketch->SetProfile(std::move(denseSpline));
-                    graph.EvaluateDirtyNodes(device, exchange);
+                    m_canvasShapes.push_back({
+                        "Spline " + std::to_string(m_canvasShapes.size() + 1),
+                        std::move(denseSpline),
+                        true
+                    });
                     m_inProgressSplineControls.clear();
-                } else if (distToFirst >= 14.0f) {
+                } else if (!isCloseHovered) {
                     auto last = m_inProgressSplineControls.back();
                     if (std::hypot(snapU - last[0], snapV - last[1]) > 0.01f) {
                         m_inProgressSplineControls.push_back({snapU, snapV});
@@ -1275,6 +1496,19 @@ void CADGui::RenderSketchCanvas(
         }
 
         if (!m_inProgressSplineControls.empty()) {
+            if (isCloseHovered && m_inProgressSplineControls.size() >= 3) {
+                auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 8);
+                auto triIndices = TessellationUtils::TriangulatePolygon2D(denseSpline);
+                for (size_t t = 0; t + 2 < triIndices.size(); t += 3) {
+                    drawList->AddTriangleFilled(
+                        ToScreen(denseSpline[triIndices[t]][0], denseSpline[triIndices[t]][1]),
+                        ToScreen(denseSpline[triIndices[t + 1]][0], denseSpline[triIndices[t + 1]][1]),
+                        ToScreen(denseSpline[triIndices[t + 2]][0], denseSpline[triIndices[t + 2]][1]),
+                        IM_COL32(30, 220, 140, 55)
+                    );
+                }
+            }
+
             for (size_t i = 0; i < m_inProgressSplineControls.size(); ++i) {
                 ImVec2 pScr = ToScreen(m_inProgressSplineControls[i][0], m_inProgressSplineControls[i][1]);
                 drawList->AddCircleFilled(pScr, 5.0f, IM_COL32(255, 100, 200, 255));
@@ -1288,10 +1522,9 @@ void CADGui::RenderSketchCanvas(
 
             if (m_inProgressSplineControls.size() >= 3) {
                 ImVec2 firstPtScr = ToScreen(m_inProgressSplineControls[0][0], m_inProgressSplineControls[0][1]);
-                float distToFirst = std::hypot(io.MousePos.x - firstPtScr.x, io.MousePos.y - firstPtScr.y);
-                drawList->AddCircle(firstPtScr, 9.0f, distToFirst < 14.0f ? IM_COL32(50, 255, 50, 255) : IM_COL32(255, 100, 200, 200), 16, 2.0f);
-                if (distToFirst < 14.0f) {
-                    drawList->AddText(ImVec2(firstPtScr.x + 12.0f, firstPtScr.y - 12.0f), IM_COL32(50, 255, 50, 255), "Click to Close Spline");
+                drawList->AddCircle(firstPtScr, 9.0f, isCloseHovered ? IM_COL32(50, 255, 50, 255) : IM_COL32(255, 100, 200, 200), 16, 2.0f);
+                if (isCloseHovered) {
+                    drawList->AddText(ImVec2(firstPtScr.x + 12.0f, firstPtScr.y - 12.0f), IM_COL32(50, 255, 50, 255), "Click to Close & Enclose Spline");
                 }
             }
 
@@ -1323,18 +1556,29 @@ void CADGui::RenderSketchCanvas(
     // -------------------------------------------------------------------------
     // HUD Overlays
     // -------------------------------------------------------------------------
-    // Coordinate Readout HUD
+    // 1. Shapes Summary Chip Bar
+    float chipY = canvasP1.y - 56.0f;
+    std::string chipSummary = "Shapes (" + std::to_string(m_canvasShapes.size()) + "): ";
+    for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
+        chipSummary += m_canvasShapes[s].name + (m_canvasShapes[s].isClosed ? " [Closed]" : " [OPEN]");
+        if (s + 1 < m_canvasShapes.size()) chipSummary += " | ";
+    }
+    if (m_canvasShapes.empty()) chipSummary += "None (draw shapes using Rectangle/Circle/Line tools)";
+    drawList->AddRectFilled(ImVec2(canvasP0.x + 8.0f, chipY - 2.0f), ImVec2(canvasP0.x + 480.0f, chipY + 22.0f), IM_COL32(15, 17, 20, 200), 4.0f);
+    drawList->AddText(ImVec2(canvasP0.x + 14.0f, chipY + 2.0f), isSketchClosed ? IM_COL32(0, 230, 200, 255) : IM_COL32(255, 160, 50, 255), chipSummary.c_str());
+
+    // 2. Coordinate Readout HUD
     char coordBuf[128];
     snprintf(coordBuf, sizeof(coordBuf), "Cursor: (U: %+.2f m, V: %+.2f m) | Grid Snap: %.2f m", snapU, snapV, m_gridSnapSize);
     drawList->AddRectFilled(ImVec2(canvasP0.x + 8.0f, canvasP1.y - 28.0f), ImVec2(canvasP0.x + 380.0f, canvasP1.y - 6.0f), IM_COL32(15, 17, 20, 200), 4.0f);
     drawList->AddText(ImVec2(canvasP0.x + 14.0f, canvasP1.y - 25.0f), IM_COL32(0, 230, 255, 255), coordBuf);
 
-    // Tool quick tip
+    // 3. Tool quick tip
     const char* toolTipText = "";
     switch (m_mouseTool) {
-        case SketchMouseTool::SelectMove: toolTipText = "[Select/Move] Click & drag vertex handles to reshape (updates 3D solids live!)"; break;
-        case SketchMouseTool::Rectangle:  toolTipText = "[Rectangle] Click & drag diagonally to draw rectangle"; break;
-        case SketchMouseTool::Circle:     toolTipText = "[Circle] Click center & drag outward to draw circle"; break;
+        case SketchMouseTool::SelectMove: toolTipText = "[Select/Move] Click & drag vertex handles to reshape (V)"; break;
+        case SketchMouseTool::Rectangle:  toolTipText = "[Rectangle] Click & drag diagonally to draw rectangle (R)"; break;
+        case SketchMouseTool::Circle:     toolTipText = "[Circle] Click center & drag outward to draw circle (C)"; break;
         case SketchMouseTool::Line:       toolTipText = "[Line/Poly] Click vertices. Click first point / double-click to close (RMB: Cancel)"; break;
         case SketchMouseTool::Spline:     toolTipText = "[Spline] Click control points. Click first / double-click to close (RMB: Cancel)"; break;
     }

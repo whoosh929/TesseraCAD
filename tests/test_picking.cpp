@@ -264,6 +264,73 @@ bool TestSketchChangePropagationToFeature() {
     return true;
 }
 
+bool TestMultiShapeSketchAndStitching() {
+    std::cout << "[Test] Multi-Shape Sketching, Stitching & Closure...\n";
+
+    // 1. Test 2D polygon stitching / boolean union
+    std::vector<std::array<float, 2>> rectA = {
+        {-2.0f, -1.0f},
+        { 1.0f, -1.0f},
+        { 1.0f,  1.0f},
+        {-2.0f,  1.0f}
+    };
+    std::vector<std::array<float, 2>> rectB = {
+        { 0.0f, -1.0f},
+        { 3.0f, -1.0f},
+        { 3.0f,  1.0f},
+        { 0.0f,  1.0f}
+    };
+
+    auto stitched = Sketch::StitchTwoPolygons(rectA, rectB);
+    float area = std::abs(Sketch::PolygonSignedArea2D(stitched));
+    TEST_ASSERT(stitched.size() >= 4, "Stitched polygon should have at least 4 vertices");
+    TEST_ASSERT(std::abs(area - 10.0f) < 0.2f, "Union stitched area should equal 10.0");
+
+    // 2. Test Multi-shape SketchNode with two disjoint closed shapes
+    auto sketch = std::make_shared<SketchNode>("MultiShapeSketch", SketchPlane::XZ_Ground);
+    std::vector<std::vector<std::array<float, 2>>> shapes = {
+        { {-3.0f, -1.0f}, {-1.0f, -1.0f}, {-1.0f, 1.0f}, {-3.0f, 1.0f} },
+        { { 1.0f, -1.0f}, { 3.0f, -1.0f}, { 3.0f, 1.0f}, { 1.0f, 1.0f} }
+    };
+    sketch->SetShapes(shapes);
+    TEST_ASSERT(sketch->GetShapes().size() == 2, "SketchNode must store multiple shapes");
+
+    // 3. Test ExtrudeNode evaluating multi-shape sketch
+    ParametricGraph graph(nullptr);
+    AtomicMeshExchange exchange;
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("MultiExtrude", sketch, 2.0f);
+    graph.AddNode(extrude);
+
+    sketch->Evaluate(nullptr, exchange);
+    extrude->Evaluate(nullptr, exchange);
+
+    const auto& verts = extrude->GetCachedVertices();
+    const auto& indices = extrude->GetCachedIndices();
+
+    // Each extruded box has:
+    // Top cap: 4 verts, 2 triangles (6 indices)
+    // Bot cap: 4 verts, 2 triangles (6 indices)
+    // 4 side walls: 4 quads * 4 verts = 16 verts, 4 * 6 = 24 indices
+    // Total per box: 24 verts, 36 indices
+    // For 2 boxes: 48 verts, 72 indices
+    TEST_ASSERT(verts.size() == 48, "Multi-shape extrusion of 2 rectangles should generate 48 vertices");
+    TEST_ASSERT(indices.size() == 72, "Multi-shape extrusion of 2 rectangles should generate 72 indices");
+
+    // 4. Test closure validation semantics
+    auto IsLoopClosed = [](const std::vector<std::array<float, 2>>& loop) -> bool {
+        return loop.size() >= 3;
+    };
+    TEST_ASSERT(IsLoopClosed(shapes[0]), "Shape 0 must be recognized as closed loop");
+    TEST_ASSERT(IsLoopClosed(shapes[1]), "Shape 1 must be recognized as closed loop");
+
+    std::vector<std::array<float, 2>> openLine = { {0.0f, 0.0f}, {1.0f, 2.0f} };
+    TEST_ASSERT(!IsLoopClosed(openLine), "Line with <3 points must not be recognized as closed loop");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -275,6 +342,7 @@ int main() {
     pass &= TestParametricGraphPickNode();
     pass &= TestFeatureSketchChildAndPromotion();
     pass &= TestSketchChangePropagationToFeature();
+    pass &= TestMultiShapeSketchAndStitching();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

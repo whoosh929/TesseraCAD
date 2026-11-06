@@ -101,15 +101,21 @@ public:
             m_position[2] = m_sketchNode->GetPosition()[2];
         }
 
-        if (!IsDirty() || m_profile.size() < 3) return;
+        std::vector<std::vector<std::array<float, 2>>> loopsToExtrude;
+        if (m_sketchNode && !m_sketchNode->GetShapes().empty()) {
+            loopsToExtrude = m_sketchNode->GetShapes();
+        } else if (!m_profile.empty()) {
+            loopsToExtrude.push_back(m_profile);
+        }
+
+        if (!IsDirty() || loopsToExtrude.empty()) return;
 
         uint64_t currentGen = GetGeneration();
         float h = m_height;
-        const size_t ptCount = m_profile.size();
 
         std::cout << "[ExtrudeNode::Evaluate] Starting CAD 2D-to-3D Extrusion for '" 
-                  << m_name << "' (Gen " << currentGen << " | Profile Points: " 
-                  << ptCount << ", Height: " << h 
+                  << m_name << "' (Gen " << currentGen << " | Loops: " 
+                  << loopsToExtrude.size() << ", Height: " << h 
                   << (m_sketchNode ? " | Ref: " + m_sketchNode->GetName() : " | Standalone") 
                   << ")...\n";
 
@@ -146,74 +152,80 @@ public:
             return {nu, nw, nv};
         };
 
-        // 1. Top Cap (+Extrude direction)
-        std::vector<uint32_t> capIndices = TessellationUtils::TriangulatePolygon2D(m_profile);
-
-        uint32_t topBase = static_cast<uint32_t>(vertices.size());
         auto topNormal = MakeNormal(0.0f, 0.0f, 1.0f);
-        for (const auto& pt : m_profile) {
-            vertices.push_back({
-                .position = {MakePos(pt[0], pt[1], halfH)[0], MakePos(pt[0], pt[1], halfH)[1], MakePos(pt[0], pt[1], halfH)[2]},
-                .normal = {topNormal[0], topNormal[1], topNormal[2]}
-            });
-        }
-        for (uint32_t idx : capIndices) {
-            indices.push_back(topBase + idx);
-        }
-
-        // 2. Bottom Cap (-Extrude direction)
-        uint32_t botBase = static_cast<uint32_t>(vertices.size());
         auto botNormal = MakeNormal(0.0f, 0.0f, -1.0f);
-        for (const auto& pt : m_profile) {
-            vertices.push_back({
-                .position = {MakePos(pt[0], pt[1], -halfH)[0], MakePos(pt[0], pt[1], -halfH)[1], MakePos(pt[0], pt[1], -halfH)[2]},
-                .normal = {botNormal[0], botNormal[1], botNormal[2]}
-            });
-        }
-        // Invert winding for bottom cap
-        for (size_t i = 0; i < capIndices.size(); i += 3) {
-            indices.push_back(botBase + capIndices[i]);
-            indices.push_back(botBase + capIndices[i + 2]);
-            indices.push_back(botBase + capIndices[i + 1]);
-        }
 
-        // 3. Side Walls (Extruded Quads with distinct per-face outward normals)
-        for (size_t i = 0; i < ptCount; ++i) {
-            size_t next = (i + 1) % ptCount;
+        for (const auto& loop : loopsToExtrude) {
+            if (loop.size() < 3) continue;
+            const size_t ptCount = loop.size();
 
-            float x0 = m_profile[i][0];
-            float z0 = m_profile[i][1];
-            float x1 = m_profile[next][0];
-            float z1 = m_profile[next][1];
+            // 1. Top Cap (+Extrude direction)
+            std::vector<uint32_t> capIndices = TessellationUtils::TriangulatePolygon2D(loop);
 
-            // 2D edge vector (dx, dz) -> outward 2D normal (dz, -dx)
-            float dx = x1 - x0;
-            float dz = z1 - z0;
-            float len = std::sqrt(dx * dx + dz * dz);
-            float nx = (len > 1e-6f) ? (dz / len) : 0.0f;
-            float nz = (len > 1e-6f) ? (-dx / len) : 1.0f;
+            uint32_t topBase = static_cast<uint32_t>(vertices.size());
+            for (const auto& pt : loop) {
+                vertices.push_back({
+                    .position = {MakePos(pt[0], pt[1], halfH)[0], MakePos(pt[0], pt[1], halfH)[1], MakePos(pt[0], pt[1], halfH)[2]},
+                    .normal = {topNormal[0], topNormal[1], topNormal[2]}
+                });
+            }
+            for (uint32_t idx : capIndices) {
+                indices.push_back(topBase + idx);
+            }
 
-            auto wallNormal = MakeNormal(nx, nz, 0.0f);
+            // 2. Bottom Cap (-Extrude direction)
+            uint32_t botBase = static_cast<uint32_t>(vertices.size());
+            for (const auto& pt : loop) {
+                vertices.push_back({
+                    .position = {MakePos(pt[0], pt[1], -halfH)[0], MakePos(pt[0], pt[1], -halfH)[1], MakePos(pt[0], pt[1], -halfH)[2]},
+                    .normal = {botNormal[0], botNormal[1], botNormal[2]}
+                });
+            }
+            // Invert winding for bottom cap
+            for (size_t i = 0; i < capIndices.size(); i += 3) {
+                indices.push_back(botBase + capIndices[i]);
+                indices.push_back(botBase + capIndices[i + 2]);
+                indices.push_back(botBase + capIndices[i + 1]);
+            }
 
-            uint32_t quadBase = static_cast<uint32_t>(vertices.size());
+            // 3. Side Walls (Extruded Quads with distinct per-face outward normals)
+            for (size_t i = 0; i < ptCount; ++i) {
+                size_t next = (i + 1) % ptCount;
 
-            auto p0 = MakePos(x0, z0, halfH);
-            auto p1 = MakePos(x1, z1, halfH);
-            auto p2 = MakePos(x1, z1, -halfH);
-            auto p3 = MakePos(x0, z0, -halfH);
+                float x0 = loop[i][0];
+                float z0 = loop[i][1];
+                float x1 = loop[next][0];
+                float z1 = loop[next][1];
 
-            vertices.push_back({.position = {p0[0], p0[1], p0[2]}, .normal = {wallNormal[0], wallNormal[1], wallNormal[2]}}); // 0: Top start
-            vertices.push_back({.position = {p1[0], p1[1], p1[2]}, .normal = {wallNormal[0], wallNormal[1], wallNormal[2]}}); // 1: Top end
-            vertices.push_back({.position = {p2[0], p2[1], p2[2]}, .normal = {wallNormal[0], wallNormal[1], wallNormal[2]}}); // 2: Bot end
-            vertices.push_back({.position = {p3[0], p3[1], p3[2]}, .normal = {wallNormal[0], wallNormal[1], wallNormal[2]}}); // 3: Bot start
+                // 2D edge vector (dx, dz) -> outward 2D normal (dz, -dx)
+                float dx = x1 - x0;
+                float dz = z1 - z0;
+                float len = std::sqrt(dx * dx + dz * dz);
+                float nx = (len > 1e-6f) ? (dz / len) : 0.0f;
+                float nz = (len > 1e-6f) ? (-dx / len) : 1.0f;
 
-            indices.push_back(quadBase + 0);
-            indices.push_back(quadBase + 3);
-            indices.push_back(quadBase + 1);
+                auto wallNormal = MakeNormal(nx, nz, 0.0f);
 
-            indices.push_back(quadBase + 1);
-            indices.push_back(quadBase + 3);
-            indices.push_back(quadBase + 2);
+                uint32_t quadBase = static_cast<uint32_t>(vertices.size());
+
+                auto p0 = MakePos(x0, z0, halfH);
+                auto p1 = MakePos(x1, z1, halfH);
+                auto p2 = MakePos(x1, z1, -halfH);
+                auto p3 = MakePos(x0, z0, -halfH);
+
+                vertices.push_back({.position = {p0[0], p0[1], p0[2]}, .normal = {wallNormal[0], wallNormal[1], wallNormal[2]}}); // 0: Top start
+                vertices.push_back({.position = {p1[0], p1[1], p1[2]}, .normal = {wallNormal[0], wallNormal[1], wallNormal[2]}}); // 1: Top end
+                vertices.push_back({.position = {p2[0], p2[1], p2[2]}, .normal = {wallNormal[0], wallNormal[1], wallNormal[2]}}); // 2: Bot end
+                vertices.push_back({.position = {p3[0], p3[1], p3[2]}, .normal = {wallNormal[0], wallNormal[1], wallNormal[2]}}); // 3: Bot start
+
+                indices.push_back(quadBase + 0);
+                indices.push_back(quadBase + 3);
+                indices.push_back(quadBase + 1);
+
+                indices.push_back(quadBase + 1);
+                indices.push_back(quadBase + 3);
+                indices.push_back(quadBase + 2);
+            }
         }
 
         // Extract sharp feature silhouette edges

@@ -27,6 +27,12 @@ enum class SketchMouseTool : uint8_t {
     Spline = 4
 };
 
+struct CanvasShape {
+    std::string name;
+    std::vector<std::array<float, 2>> points;
+    bool isClosed{true};
+};
+
 class CADGui {
 public:
     CADGui() = default;
@@ -96,8 +102,13 @@ private:
     float m_drawStartV{0.0f};
     std::vector<std::array<float, 2>> m_inProgressPoints;
     std::vector<std::array<float, 2>> m_inProgressSplineControls;
+    int m_draggedShapeIdx{-1};
     int m_draggedVertexIdx{-1};
+    int m_hoveredShapeIdx{-1};
     int m_hoveredVertexIdx{-1};
+
+    std::vector<CanvasShape> m_canvasShapes;
+    uint64_t m_currentEditingSketchId{0};
 
     // Shape creation state
     int m_selectedShapeType{0}; // 0: Box, 1: Cylinder, 2: Sphere, 3: Extrude from Sketch, 4: Revolve from Sketch

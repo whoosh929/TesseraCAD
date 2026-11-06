@@ -100,18 +100,27 @@ public:
         (void)device;
         (void)exchange;
 
-        if (!m_sketchNode || m_sketchNode->GetProfile().size() < 3) return;
+        if (!m_sketchNode) return;
+
+        std::vector<std::vector<std::array<float, 2>>> loopsToRevolve;
+        if (!m_sketchNode->GetShapes().empty()) {
+            loopsToRevolve = m_sketchNode->GetShapes();
+        } else if (!m_sketchNode->GetProfile().empty()) {
+            loopsToRevolve.push_back(m_sketchNode->GetProfile());
+        }
+
+        if (loopsToRevolve.empty()) return;
 
         m_position[0] = m_sketchNode->GetPosition()[0];
         m_position[1] = m_sketchNode->GetPosition()[1];
         m_position[2] = m_sketchNode->GetPosition()[2];
 
-        const auto& profile2D = m_sketchNode->GetProfile();
         uint64_t currentGen = GetGeneration();
 
         std::cout << "[RevolveNode::Evaluate] Starting Revolve sweep for '" 
                   << m_name << "' (Gen " << currentGen 
                   << " | Angle: " << m_angleDegrees << " deg, Slices: " << m_angularSegments 
+                  << " | Loops: " << loopsToRevolve.size()
                   << " | Ref: " << m_sketchNode->GetName() << ")...\n";
 
         Geom::Plane sketchPlane;
@@ -121,42 +130,56 @@ public:
             case SketchPlane::YZ_Right:  sketchPlane = Geom::Plane::YZ(); break;
         }
 
-        Sketch::Sketch sketchEnv(sketchPlane);
-        for (size_t i = 0; i < profile2D.size(); ++i) {
-            size_t next = (i + 1) % profile2D.size();
-            sketchEnv.add_line(Geom::Point2D(profile2D[i][0], profile2D[i][1]),
-                               Geom::Point2D(profile2D[next][0], profile2D[next][1]));
-        }
+        std::vector<CADVertex> allVerts;
+        std::vector<uint32_t> allIndices;
+        std::vector<uint32_t> allEdges;
 
-        auto profiles = sketchEnv.extract_profiles();
-        if (profiles.empty()) return;
+        for (const auto& loop : loopsToRevolve) {
+            if (loop.size() < 3) continue;
 
-        Modeling::RevolveOp::Params revParams;
-        revParams.axis = m_axis;
-        revParams.angle_radians = (static_cast<double>(m_angleDegrees) / 180.0) * Geom::PI;
-        revParams.angular_segments = m_angularSegments;
-        revParams.is_solid = m_isSolid;
+            Sketch::Sketch sketchEnv(sketchPlane);
+            for (size_t i = 0; i < loop.size(); ++i) {
+                size_t next = (i + 1) % loop.size();
+                sketchEnv.add_line(Geom::Point2D(loop[i][0], loop[i][1]),
+                                   Geom::Point2D(loop[next][0], loop[next][1]));
+            }
 
-        auto body = Modeling::RevolveOp::Execute(profiles[0], sketchPlane, revParams);
-        CADMesh mesh = Modeling::Tessellator::Tessellate(*body);
+            auto profiles = sketchEnv.extract_profiles();
+            if (profiles.empty()) continue;
 
-        // Apply node position
-        for (auto& v : mesh.vertices) {
-            v.position[0] += m_position[0];
-            v.position[1] += m_position[1];
-            v.position[2] += m_position[2];
+            Modeling::RevolveOp::Params revParams;
+            revParams.axis = m_axis;
+            revParams.angle_radians = (static_cast<double>(m_angleDegrees) / 180.0) * Geom::PI;
+            revParams.angular_segments = m_angularSegments;
+            revParams.is_solid = m_isSolid;
+
+            auto body = Modeling::RevolveOp::Execute(profiles[0], sketchPlane, revParams);
+            CADMesh mesh = Modeling::Tessellator::Tessellate(*body);
+
+            uint32_t baseIdx = static_cast<uint32_t>(allVerts.size());
+            for (auto& v : mesh.vertices) {
+                v.position[0] += m_position[0];
+                v.position[1] += m_position[1];
+                v.position[2] += m_position[2];
+                allVerts.push_back(v);
+            }
+            for (auto idx : mesh.indices) {
+                allIndices.push_back(baseIdx + idx);
+            }
+            for (auto edge : mesh.featureEdgeIndices) {
+                allEdges.push_back(baseIdx + edge);
+            }
         }
 
         std::cout << "[RevolveNode::Evaluate] Node '" << m_name 
                   << "' generated B-Rep mesh (Gen " << currentGen 
-                  << ", Verts: " << mesh.vertices.size() 
-                  << ", Indices: " << mesh.indices.size() 
-                  << ", FeatureEdges: " << mesh.featureEdgeIndices.size() 
-                  << ", Solid: " << (body->is_solid() ? "Yes" : "No") << ").\n";
+                  << ", Verts: " << allVerts.size() 
+                  << ", Indices: " << allIndices.size() 
+                  << ", FeatureEdges: " << allEdges.size() << ").\n";
 
-        m_cachedVertices = std::move(mesh.vertices);
-        m_cachedIndices = std::move(mesh.indices);
-        m_cachedEdges = std::move(mesh.featureEdgeIndices);
+        m_cachedVertices = std::move(allVerts);
+        m_cachedIndices = std::move(allIndices);
+        m_cachedEdges = std::move(allEdges);
         ClearDirty();
     }
 
