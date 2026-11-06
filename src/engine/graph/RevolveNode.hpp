@@ -102,6 +102,10 @@ public:
 
         if (!m_sketchNode || m_sketchNode->GetProfile().size() < 3) return;
 
+        m_position[0] = m_sketchNode->GetPosition()[0];
+        m_position[1] = m_sketchNode->GetPosition()[1];
+        m_position[2] = m_sketchNode->GetPosition()[2];
+
         const auto& profile2D = m_sketchNode->GetProfile();
         uint64_t currentGen = GetGeneration();
 

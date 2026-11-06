@@ -71,6 +71,7 @@ public:
                 if (auto sketch = std::dynamic_pointer_cast<SketchNode>(child)) {
                     sketch->SetParentFeature(node);
                     sketch->SetVisible(false);
+                    node->AddInput(sketch);
                 }
             }
         }

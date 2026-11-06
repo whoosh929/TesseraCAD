@@ -92,10 +92,13 @@ public:
         (void)device;
         (void)exchange;
 
-        // If referencing a sketch node, synchronize profile and plane
+        // If referencing a sketch node, synchronize profile, plane, and position
         if (m_sketchNode) {
             m_profile = m_sketchNode->GetProfile();
             m_plane = m_sketchNode->GetPlane();
+            m_position[0] = m_sketchNode->GetPosition()[0];
+            m_position[1] = m_sketchNode->GetPosition()[1];
+            m_position[2] = m_sketchNode->GetPosition()[2];
         }
 
         if (!IsDirty() || m_profile.size() < 3) return;

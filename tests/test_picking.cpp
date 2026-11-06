@@ -205,6 +205,65 @@ bool TestFeatureSketchChildAndPromotion() {
     return true;
 }
 
+bool TestSketchChangePropagationToFeature() {
+    std::cout << "[Test] Sketch Change Propagation to Feature...\n";
+
+    ParametricGraph graph(nullptr);
+    AtomicMeshExchange exchange;
+
+    // 1. Create a sketch with a 4-point rectangle
+    auto sketch = std::make_shared<SketchNode>("Sketch_Rect", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(3.0f, 2.0f);
+    graph.AddNode(sketch);
+
+    // 2. Create an Extrude feature referencing the sketch
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_Feature", sketch, 2.0f);
+    graph.AddNode(extrude);
+
+    // Initial evaluation
+    sketch->Evaluate(nullptr, exchange);
+    extrude->Evaluate(nullptr, exchange);
+
+    TEST_ASSERT(!extrude->IsDirty(), "Extrude should be clean after evaluation");
+    TEST_ASSERT(extrude->GetProfile().size() == 4, "Initial profile should have 4 points");
+    size_t initialVertCount = extrude->GetCachedVertices().size();
+    TEST_ASSERT(initialVertCount > 0, "Extrude should have generated cached vertices");
+
+    // 3. Change sketch profile (switch to 5-point star = 10 points)
+    sketch->SetPresetStar(5, 3.0f, 1.5f);
+
+    // Verify change immediately propagated dirty flag to the parent feature!
+    TEST_ASSERT(sketch->IsDirty(), "Sketch must be dirty after profile change");
+    TEST_ASSERT(extrude->IsDirty(), "Extrude feature must be marked dirty when sketch changes!");
+
+    // 4. Re-evaluate dirty nodes
+    graph.EvaluateDirtyNodes(nullptr, exchange);
+
+    TEST_ASSERT(!extrude->IsDirty(), "Extrude should be clean after re-evaluation");
+    TEST_ASSERT(extrude->GetProfile().size() == 10, "Extrude profile should update to 10 points");
+    size_t starVertCount = extrude->GetCachedVertices().size();
+    TEST_ASSERT(starVertCount != initialVertCount, "Extrude vertex count should update with new sketch profile");
+
+    // 5. Move a vertex in the sketch
+    sketch->UpdatePoint(0, 15.0f, 20.0f);
+    TEST_ASSERT(extrude->IsDirty(), "Extrude must be marked dirty when sketch vertex is moved");
+
+    graph.EvaluateDirtyNodes(nullptr, exchange);
+    TEST_ASSERT(std::abs(extrude->GetProfile()[0][0] - 15.0f) < 1e-4f, "Extrude profile must reflect updated vertex X");
+    TEST_ASSERT(std::abs(extrude->GetProfile()[0][1] - 20.0f) < 1e-4f, "Extrude profile must reflect updated vertex Y");
+
+    // 6. Change sketch position
+    sketch->SetPosition(5.0f, 2.0f, -3.0f);
+    TEST_ASSERT(extrude->IsDirty(), "Extrude must be marked dirty when sketch position changes");
+
+    graph.EvaluateDirtyNodes(nullptr, exchange);
+    TEST_ASSERT(std::abs(extrude->GetPosition()[0] - 5.0f) < 1e-4f, "Extrude position X must synchronize with sketch");
+    TEST_ASSERT(std::abs(extrude->GetPosition()[1] - 2.0f) < 1e-4f, "Extrude position Y must synchronize with sketch");
+    TEST_ASSERT(std::abs(extrude->GetPosition()[2] - (-3.0f)) < 1e-4f, "Extrude position Z must synchronize with sketch");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -215,6 +274,7 @@ int main() {
     pass &= TestCameraScreenPointToRay();
     pass &= TestParametricGraphPickNode();
     pass &= TestFeatureSketchChildAndPromotion();
+    pass &= TestSketchChangePropagationToFeature();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

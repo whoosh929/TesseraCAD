@@ -173,6 +173,13 @@ public:
         return !m_parentFeature.expired();
     }
 
+    void MarkDirty() override {
+        DAGNode::MarkDirty();
+        if (auto parent = m_parentFeature.lock()) {
+            parent->MarkDirty();
+        }
+    }
+
     [[nodiscard]] bool IsVisible() const noexcept { return m_visible; }
     void SetVisible(bool visible) noexcept { 
         m_visible = visible;

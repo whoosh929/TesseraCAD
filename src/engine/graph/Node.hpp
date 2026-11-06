@@ -50,7 +50,7 @@ public:
     }
 
     /// Flags this node as dirty and propagates downstream through the DAG
-    void MarkDirty() {
+    virtual void MarkDirty() {
         m_isDirty.store(true, std::memory_order_release);
         m_generation.fetch_add(1, std::memory_order_release);
 
