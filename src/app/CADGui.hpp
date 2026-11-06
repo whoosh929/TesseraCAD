@@ -6,6 +6,8 @@
 #include "engine/graph/SphereNode.hpp"
 #include "engine/graph/SketchNode.hpp"
 #include "engine/graph/ExtrudeNode.hpp"
+#include "engine/graph/RevolveNode.hpp"
+#include "engine/graph/DatumPlaneNode.hpp"
 #include "engine/hal/RHI.hpp"
 #include "engine/render/Camera.hpp"
 #include "engine/render/ViewportRenderer.hpp"
@@ -90,7 +92,7 @@ private:
     int m_hoveredVertexIdx{-1};
 
     // Shape creation state
-    int m_selectedShapeType{0}; // 0: Box, 1: Cylinder, 2: Sphere, 3: Extrude from Sketch
+    int m_selectedShapeType{0}; // 0: Box, 1: Cylinder, 2: Sphere, 3: Extrude from Sketch, 4: Revolve from Sketch
     float m_newBoxDims[3]{2.0f, 1.0f, 3.0f};
     float m_newCylinderRadius{1.5f};
     float m_newCylinderHeight{3.0f};
@@ -111,9 +113,13 @@ private:
     float m_sketchTBeam[3]{3.5f, 3.0f, 0.7f};
     float m_newPointCoord[2]{1.0f, 1.0f};
 
-    // Extrude feature parameters
+    // Extrude & Revolve feature parameters
     float m_newExtrudeHeight{2.5f};
     int m_selectedSketchIndex{0};
+    float m_newRevolveAngle{360.0f};
+    int m_newRevolveSegments{32};
+    int m_newRevolveAxis{1}; // 0: X-Axis, 1: Y-Axis (Up), 2: Z-Axis
+    bool m_newRevolveSolid{true};
 
     // Selection
     uint64_t m_selectedNodeId{0};

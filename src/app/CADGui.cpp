@@ -133,7 +133,7 @@ void CADGui::RenderUI(
             // TAB 1: 3D Features & Solids
             // =================================================================
             if (ImGui::BeginTabItem("3D Features")) {
-                const char* shapeTypes[] = { "Parametric Box", "Parametric Cylinder", "Parametric Sphere", "Extrude Feature" };
+                const char* shapeTypes[] = { "Parametric Box", "Parametric Cylinder", "Parametric Sphere", "Extrude Feature", "Revolve Feature" };
                 ImGui::Combo("Feature Type", &m_selectedShapeType, shapeTypes, IM_ARRAYSIZE(shapeTypes));
                 ImGui::Spacing();
 
@@ -234,6 +234,72 @@ void CADGui::RenderUI(
                             std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
                             auto sketch = std::make_shared<SketchNode>(name, SketchPlane::XZ_Ground);
                             sketch->SetPresetLBracket(3.5f, 3.5f, 1.0f);
+                            graph.AddNode(sketch);
+                            graph.EvaluateDirtyNodes(device, exchange);
+                            m_selectedNodeId = sketch->GetId();
+                            m_activeSketchId = sketch->GetId();
+                            m_sketchModeActive = true;
+                        }
+                    }
+                } else if (m_selectedShapeType == 4) {
+                    // Revolve Feature (CAD workflow: rotational sweep around axis)
+                    ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Revolve from Reference Sketch");
+                    ImGui::Separator();
+
+                    if (!sketchNodes.empty()) {
+                        std::vector<std::string> sketchNames;
+                        for (const auto& s : sketchNodes) {
+                            sketchNames.push_back("[" + std::to_string(s->GetId()) + "] " + s->GetName() + 
+                                                  " (" + std::to_string(s->GetProfile().size()) + " pts)");
+                        }
+                        if (m_selectedSketchIndex >= static_cast<int>(sketchNames.size())) {
+                            m_selectedSketchIndex = 0;
+                        }
+
+                        if (ImGui::BeginCombo("Reference Sketch", sketchNames[m_selectedSketchIndex].c_str())) {
+                            for (int i = 0; i < static_cast<int>(sketchNames.size()); ++i) {
+                                bool isSelected = (m_selectedSketchIndex == i);
+                                if (ImGui::Selectable(sketchNames[i].c_str(), isSelected)) {
+                                    m_selectedSketchIndex = i;
+                                }
+                                if (isSelected) {
+                                    ImGui::SetItemDefaultFocus();
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+
+                        ImGui::SliderFloat("Revolve Angle", &m_newRevolveAngle, 10.0f, 360.0f, "%.1f deg");
+                        ImGui::SliderInt("Angular Slices", &m_newRevolveSegments, 8, 64);
+
+                        const char* axes[] = { "X-Axis (Horizontal)", "Y-Axis (Up)", "Z-Axis (Depth)" };
+                        ImGui::Combo("Revolution Axis", &m_newRevolveAxis, axes, IM_ARRAYSIZE(axes));
+                        ImGui::Checkbox("Solid Manifold Body (Caps)", &m_newRevolveSolid);
+
+                        ImGui::Spacing();
+                        if (ImGui::Button("+ Revolve from Selected Sketch", ImVec2(-1, 32))) {
+                            auto refSketch = sketchNodes[m_selectedSketchIndex];
+                            std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
+                            Geom::Axis3D revAxis = (m_newRevolveAxis == 0) ? Geom::Axis3D::X() :
+                                                   (m_newRevolveAxis == 2) ? Geom::Axis3D::Z() :
+                                                                             Geom::Axis3D::Y();
+
+                            auto node = std::make_shared<RevolveNode>(name, refSketch, m_newRevolveAngle, revAxis);
+                            node->SetAngularSegments(m_newRevolveSegments);
+                            node->SetSolid(m_newRevolveSolid);
+
+                            graph.AddNode(node);
+                            graph.EvaluateDirtyNodes(device, exchange);
+                            m_selectedNodeId = node->GetId();
+                        }
+                    } else {
+                        ImGui::TextDisabled("No 2D Sketches exist in the Model Tree yet.");
+                        ImGui::Spacing();
+                        if (ImGui::Button("+ Create 2D Sketch to Revolve", ImVec2(-1, 30))) {
+                            std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
+                            auto sketch = std::make_shared<SketchNode>(name, SketchPlane::XY_Front);
+                            sketch->SetPresetRectangle(2.5f, 2.5f);
+                            sketch->SetPosition(4.0f, 0.0f, 0.0f);
                             graph.AddNode(sketch);
                             graph.EvaluateDirtyNodes(device, exchange);
                             m_selectedNodeId = sketch->GetId();
@@ -343,6 +409,10 @@ void CADGui::RenderUI(
                 prefix = "[Sketch] ";
             } else if (auto e = std::dynamic_pointer_cast<ExtrudeNode>(node)) {
                 prefix = e->GetSketchReference() ? "[Extrude (Ref)] " : "[Extrude] ";
+            } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
+                prefix = r->GetSketchReference() ? "[Revolve (Ref)] " : "[Revolve] ";
+            } else if (std::dynamic_pointer_cast<DatumPlaneNode>(node)) {
+                prefix = "[DatumPlane] ";
             }
 
             std::string label = prefix + node->GetName() + " (ID " + std::to_string(node->GetId()) + ")";
@@ -466,6 +536,39 @@ void CADGui::RenderUI(
                 float h = extrude->GetHeight();
                 if (ImGui::SliderFloat("Extrude Depth", &h, 0.2f, 15.0f, "%.2f m")) {
                     extrude->SetHeight(h);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+            }
+            // -----------------------------------------------------------------
+            // B2. Revolve Node Inspector
+            // -----------------------------------------------------------------
+            else if (auto revolve = std::dynamic_pointer_cast<RevolveNode>(selectedNode)) {
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Revolve Feature Properties:");
+                
+                if (auto refSketch = revolve->GetSketchReference()) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1.0f), "Linked to Sketch: %s", refSketch->GetName().c_str());
+                    if (ImGui::Button("Jump to Reference Sketch", ImVec2(-1, 24))) {
+                        m_selectedNodeId = refSketch->GetId();
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Standalone Profile (No Sketch Ref)");
+                }
+
+                float ang = revolve->GetAngleDegrees();
+                if (ImGui::SliderFloat("Revolve Angle", &ang, 10.0f, 360.0f, "%.1f deg")) {
+                    revolve->SetAngleDegrees(ang);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                int segs = revolve->GetAngularSegments();
+                if (ImGui::SliderInt("Angular Slices", &segs, 8, 64)) {
+                    revolve->SetAngularSegments(segs);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                bool solid = revolve->IsSolid();
+                if (ImGui::Checkbox("Solid Body (Caps)", &solid)) {
+                    revolve->SetSolid(solid);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
             }
