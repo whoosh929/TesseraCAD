@@ -520,7 +520,8 @@ void CADGui::RenderExtrudePromptModal(
 
         if (!availableSketches.empty()) {
             ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Available Sketches in Model Tree:");
-            ImGui::SliderFloat("Extrude Depth", &m_newExtrudeHeight, 0.2f, 15.0f, "%.2f m");
+            ImGui::InputFloat("Extrude Depth", &m_newExtrudeHeight, 0.1f, 1.0f, "%.2f m");
+            if (m_newExtrudeHeight < 0.01f) m_newExtrudeHeight = 0.01f;
             ImGui::Spacing();
 
             for (const auto& s : availableSketches) {
@@ -616,7 +617,9 @@ void CADGui::RenderRevolvePromptModal(
 
         if (!availableSketches.empty()) {
             ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Available Sketches in Model Tree:");
-            ImGui::SliderFloat("Revolve Angle", &m_newRevolveAngle, 10.0f, 360.0f, "%.1f deg");
+            ImGui::InputFloat("Revolve Angle", &m_newRevolveAngle, 1.0f, 15.0f, "%.1f deg");
+            if (m_newRevolveAngle < 0.1f) m_newRevolveAngle = 0.1f;
+            if (m_newRevolveAngle > 360.0f) m_newRevolveAngle = 360.0f;
             ImGui::Spacing();
 
             for (const auto& s : availableSketches) {
@@ -948,7 +951,8 @@ void CADGui::RenderUI(
                 }
 
                 float h = extrude->GetHeight();
-                if (ImGui::SliderFloat("Extrude Depth", &h, 0.2f, 15.0f, "%.2f m")) {
+                if (ImGui::InputFloat("Extrude Depth", &h, 0.1f, 1.0f, "%.2f m")) {
+                    h = std::max(0.01f, h);
                     extrude->SetHeight(h);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
@@ -992,13 +996,15 @@ void CADGui::RenderUI(
                 }
 
                 float ang = revolve->GetAngleDegrees();
-                if (ImGui::SliderFloat("Revolve Angle", &ang, 10.0f, 360.0f, "%.1f deg")) {
+                if (ImGui::InputFloat("Revolve Angle", &ang, 1.0f, 15.0f, "%.1f deg")) {
+                    ang = std::clamp(ang, 0.1f, 360.0f);
                     revolve->SetAngleDegrees(ang);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
 
                 int segs = revolve->GetAngularSegments();
-                if (ImGui::SliderInt("Angular Slices", &segs, 8, 64)) {
+                if (ImGui::InputInt("Angular Slices", &segs, 1, 4)) {
+                    segs = std::clamp(segs, 8, 96);
                     revolve->SetAngularSegments(segs);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
@@ -1018,11 +1024,14 @@ void CADGui::RenderUI(
                 int segs = static_cast<int>(cyl->GetSegments());
                 bool changed = false;
 
-                changed |= ImGui::SliderFloat("Radius",   &r, 0.1f, 10.0f, "%.2f m");
-                changed |= ImGui::SliderFloat("Height",   &h, 0.2f, 15.0f, "%.2f m");
-                changed |= ImGui::SliderInt("Segments",   &segs, 8, 96);
+                changed |= ImGui::InputFloat("Radius",   &r, 0.1f, 1.0f, "%.2f m");
+                changed |= ImGui::InputFloat("Height",   &h, 0.1f, 1.0f, "%.2f m");
+                changed |= ImGui::InputInt("Segments",   &segs, 1, 4);
 
                 if (changed) {
+                    r = std::max(0.01f, r);
+                    h = std::max(0.01f, h);
+                    segs = std::clamp(segs, 8, 96);
                     cyl->SetParameters(r, h, segs);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
@@ -1032,11 +1041,14 @@ void CADGui::RenderUI(
                 int sectors = static_cast<int>(sphere->GetSectors());
                 bool changed = false;
 
-                changed |= ImGui::SliderFloat("Radius",  &r, 0.2f, 10.0f, "%.2f m");
-                changed |= ImGui::SliderInt("Rings",    &rings, 6, 48);
-                changed |= ImGui::SliderInt("Sectors",  &sectors, 8, 64);
+                changed |= ImGui::InputFloat("Radius",  &r, 0.1f, 1.0f, "%.2f m");
+                changed |= ImGui::InputInt("Rings",    &rings, 1, 4);
+                changed |= ImGui::InputInt("Sectors",  &sectors, 1, 4);
 
                 if (changed) {
+                    r = std::max(0.01f, r);
+                    rings = std::clamp(rings, 6, 48);
+                    sectors = std::clamp(sectors, 8, 64);
                     sphere->SetParameters(r, rings, sectors);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
@@ -1050,7 +1062,7 @@ void CADGui::RenderUI(
                 ImGui::Text("Plane Origin: (%.2f, %.2f, %.2f)", pl.origin.x, pl.origin.y, pl.origin.z);
 
                 float offset = static_cast<float>(planeNode->GetOffset());
-                if (ImGui::SliderFloat("Plane Offset", &offset, -20.0f, 20.0f, "%.2f m")) {
+                if (ImGui::InputFloat("Plane Offset", &offset, 0.1f, 1.0f, "%.2f m")) {
                     planeNode->SetOffset(offset);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }
@@ -1419,8 +1431,9 @@ void CADGui::RenderSketchCanvas(
 
     ImGui::Checkbox("Snap", &m_gridSnapEnable);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(70.0f);
-    ImGui::SliderFloat("##Grid", &m_gridSnapSize, 0.1f, 2.0f, "%.1fm");
+    ImGui::SetNextItemWidth(76.0f);
+    ImGui::InputFloat("##Grid", &m_gridSnapSize, 0.1f, 0.5f, "%.1fm");
+    if (m_gridSnapSize < 0.05f) m_gridSnapSize = 0.05f;
     ImGui::SameLine();
 
     if (ImGui::Button("Center", ImVec2(56, 28))) {
