@@ -59,6 +59,14 @@ public:
     }
     void ExitSketchMode() noexcept { m_sketchModeActive = false; }
 
+    [[nodiscard]] uint64_t GetSelectedNodeId() const noexcept { return m_selectedNodeId; }
+    void SetSelectedNodeId(uint64_t id) noexcept {
+        if (m_selectedNodeId != id) {
+            m_selectedNodeId = id;
+            m_selectionScrollPending = true;
+        }
+    }
+
 private:
     void RenderSketchCanvas(
         ParametricGraph& graph,
@@ -123,6 +131,7 @@ private:
 
     // Selection
     uint64_t m_selectedNodeId{0};
+    bool m_selectionScrollPending{false};
     uint32_t m_shapeCounter{1};
 
     // Viewport display toggles

@@ -437,8 +437,12 @@ void CADGui::RenderUI(
             }
             if (isSelected) {
                 selectedNode = node;
+                if (m_selectionScrollPending) {
+                    ImGui::SetScrollHereY(0.5f);
+                }
             }
         }
+        m_selectionScrollPending = false;
         ImGui::EndChild();
 
         ImGui::Spacing();

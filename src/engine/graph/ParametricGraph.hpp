@@ -1,15 +1,63 @@
 #pragma once
 
 #include "Node.hpp"
+#include "SketchNode.hpp"
 #include "engine/concurrency/ThreadPool.hpp"
 #include "engine/concurrency/AtomicMeshExchange.hpp"
 #include "engine/hal/RHI.hpp"
+#include "engine/geom/Transform3D.hpp"
 #include <vector>
 #include <memory>
 #include <mutex>
 #include <iostream>
+#include <limits>
+#include <cmath>
 
 namespace Tessera {
+
+/// Möller-Trumbore ray-triangle intersection test (two-sided)
+inline bool RayIntersectsTriangle(
+    const Geom::Point3D& rayOrigin,
+    const Geom::Vector3D& rayDir,
+    const Geom::Point3D& v0,
+    const Geom::Point3D& v1,
+    const Geom::Point3D& v2,
+    double& outT
+) noexcept {
+    constexpr double EPSILON = 1e-8;
+
+    Geom::Vector3D edge1 = v1 - v0;
+    Geom::Vector3D edge2 = v2 - v0;
+    Geom::Vector3D h = rayDir.cross(edge2);
+    double a = edge1.dot(h);
+
+    if (std::abs(a) < EPSILON) {
+        return false; // Ray is parallel to triangle
+    }
+
+    double f = 1.0 / a;
+    Geom::Vector3D s = rayOrigin - v0;
+    double u = f * s.dot(h);
+
+    if (u < -EPSILON || u > 1.0 + EPSILON) {
+        return false;
+    }
+
+    Geom::Vector3D q = s.cross(edge1);
+    double v = f * rayDir.dot(q);
+
+    if (v < -EPSILON || (u + v) > 1.0 + EPSILON) {
+        return false;
+    }
+
+    double t = f * edge2.dot(q);
+    if (t > EPSILON) {
+        outT = t;
+        return true;
+    }
+
+    return false;
+}
 
 class ParametricGraph {
 public:
@@ -130,6 +178,60 @@ public:
     void ClearNodes() {
         std::lock_guard<std::mutex> lock(m_graphMutex);
         m_nodes.clear();
+    }
+
+    /// Casts a ray through all DAG nodes and returns the ID of the closest intersected node (0 if none hit)
+    [[nodiscard]] uint64_t PickNode(
+        const Geom::Point3D& rayOrigin,
+        const Geom::Vector3D& rayDir,
+        double* outDist = nullptr
+    ) const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        uint64_t closestNodeId = 0;
+        double closestDist = std::numeric_limits<double>::infinity();
+
+        for (const auto& node : m_nodes) {
+            if (!node) continue;
+
+            // If it's a sketch node and not visible, skip picking
+            if (auto sketch = std::dynamic_pointer_cast<SketchNode>(node)) {
+                if (!sketch->IsVisible()) continue;
+            }
+
+            const auto& verts = node->GetCachedVertices();
+            const auto& indices = node->GetCachedIndices();
+
+            if (verts.empty() || indices.size() < 3) continue;
+
+            const size_t triCount = indices.size() / 3;
+            for (size_t i = 0; i < triCount; ++i) {
+                uint32_t idx0 = indices[i * 3 + 0];
+                uint32_t idx1 = indices[i * 3 + 1];
+                uint32_t idx2 = indices[i * 3 + 2];
+
+                if (idx0 >= verts.size() || idx1 >= verts.size() || idx2 >= verts.size()) {
+                    continue;
+                }
+
+                Geom::Point3D v0(verts[idx0].position[0], verts[idx0].position[1], verts[idx0].position[2]);
+                Geom::Point3D v1(verts[idx1].position[0], verts[idx1].position[1], verts[idx1].position[2]);
+                Geom::Point3D v2(verts[idx2].position[0], verts[idx2].position[1], verts[idx2].position[2]);
+
+                double t = 0.0;
+                if (RayIntersectsTriangle(rayOrigin, rayDir, v0, v1, v2, t)) {
+                    if (t < closestDist) {
+                        closestDist = t;
+                        closestNodeId = node->GetId();
+                    }
+                }
+            }
+        }
+
+        if (outDist && closestNodeId != 0) {
+            *outDist = closestDist;
+        }
+
+        return closestNodeId;
     }
 
 private:

@@ -234,3 +234,25 @@ set_target_properties(test_modeling PROPERTIES
 )
 
 add_test(NAME ModelingTests COMMAND test_modeling)
+
+add_executable(test_picking
+    tests/test_picking.cpp
+)
+
+target_include_directories(test_picking
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(test_picking
+    PRIVATE
+        tessera_engine
+)
+
+target_compile_features(test_picking PUBLIC cxx_std_20)
+
+set_target_properties(test_picking PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_test(NAME PickingTests COMMAND test_picking)

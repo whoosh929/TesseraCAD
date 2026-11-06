@@ -60,6 +60,9 @@ private:
     bool m_rightMouseDown{false};
     double m_lastMouseX{0.0};
     double m_lastMouseY{0.0};
+    double m_pressMouseX{0.0};
+    double m_pressMouseY{0.0};
+    bool m_pressOverUI{false};
 };
 
 } // namespace Tessera

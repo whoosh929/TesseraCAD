@@ -1,10 +1,16 @@
 #pragma once
 
+#include "engine/geom/Transform3D.hpp"
 #include <cmath>
 #include <array>
 #include <algorithm>
 
 namespace Tessera {
+
+struct Ray {
+    Geom::Point3D origin;
+    Geom::Vector3D direction;
+};
 
 struct alignas(16) CameraUniforms {
     std::array<float, 16> viewProjection;
@@ -48,6 +54,48 @@ public:
 
     [[nodiscard]] const CameraUniforms& GetUniforms() const noexcept {
         return m_uniforms;
+    }
+
+    [[nodiscard]] Ray ScreenPointToRay(float screenX, float screenY, float viewportWidth, float viewportHeight) const noexcept {
+        if (viewportWidth <= 0.0f || viewportHeight <= 0.0f) {
+            return {Geom::Point3D(m_uniforms.eyePosition[0], m_uniforms.eyePosition[1], m_uniforms.eyePosition[2]),
+                    Geom::Vector3D(0.0, 0.0, -1.0)};
+        }
+
+        // Convert window pixel coords (0..W, 0..H) to Vulkan NDC (-1..1, -1..1)
+        float ndcX = (2.0f * screenX) / viewportWidth - 1.0f;
+        float ndcY = (2.0f * screenY) / viewportHeight - 1.0f;
+
+        const float* inv = m_uniforms.invViewProjection.data();
+
+        // Unproject near point (NDC z = 0.0f)
+        float nearX = inv[0] * ndcX + inv[4] * ndcY + inv[8] * 0.0f + inv[12] * 1.0f;
+        float nearY = inv[1] * ndcX + inv[5] * ndcY + inv[9] * 0.0f + inv[13] * 1.0f;
+        float nearZ = inv[2] * ndcX + inv[6] * ndcY + inv[10] * 0.0f + inv[14] * 1.0f;
+        float nearW = inv[3] * ndcX + inv[7] * ndcY + inv[11] * 0.0f + inv[15] * 1.0f;
+
+        // Unproject far point (NDC z = 1.0f)
+        float farX = inv[0] * ndcX + inv[4] * ndcY + inv[8] * 1.0f + inv[12] * 1.0f;
+        float farY = inv[1] * ndcX + inv[5] * ndcY + inv[9] * 1.0f + inv[13] * 1.0f;
+        float farZ = inv[2] * ndcX + inv[6] * ndcY + inv[10] * 1.0f + inv[14] * 1.0f;
+        float farW = inv[3] * ndcX + inv[7] * ndcY + inv[11] * 1.0f + inv[15] * 1.0f;
+
+        if (std::abs(nearW) > 1e-7f) {
+            nearX /= nearW;
+            nearY /= nearW;
+            nearZ /= nearW;
+        }
+
+        if (std::abs(farW) > 1e-7f) {
+            farX /= farW;
+            farY /= farW;
+            farZ /= farW;
+        }
+
+        Geom::Point3D eye(m_uniforms.eyePosition[0], m_uniforms.eyePosition[1], m_uniforms.eyePosition[2]);
+        Geom::Vector3D dir = Geom::Vector3D(farX - eye.x, farY - eye.y, farZ - eye.z).normalized();
+
+        return {eye, dir};
     }
 
 private:

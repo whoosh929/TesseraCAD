@@ -40,6 +40,11 @@ public:
     void ZoomCamera(float deltaDistance);
     void OnResize(uint32_t width, uint32_t height);
 
+    [[nodiscard]] Ray ScreenPointToRay(float screenX, float screenY) {
+        std::lock_guard<std::mutex> lock(m_cameraMutex);
+        return m_camera.ScreenPointToRay(screenX, screenY, static_cast<float>(m_width), static_cast<float>(m_height));
+    }
+
     [[nodiscard]] double GetAverageFrameTimeMs() const noexcept {
         return m_avgFrameTimeMs.load(std::memory_order_relaxed);
     }

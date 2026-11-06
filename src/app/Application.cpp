@@ -118,25 +118,45 @@ void Application::SetupCallbacks() {
         auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
         if (!app) return;
 
-        // Always clear dragging on release
-        if (action == GLFW_RELEASE) {
-            if (button == GLFW_MOUSE_BUTTON_LEFT) {
-                app->m_leftMouseDown = false;
-            } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
-                app->m_rightMouseDown = false;
-            }
-        }
-
-        // If Dear ImGui captured the mouse click, do not activate viewport camera orbit/pan
-        if (app->m_gui && app->m_gui->WantCaptureMouse()) {
-            return;
-        }
+        double curX = 0.0, curY = 0.0;
+        glfwGetCursorPos(window, &curX, &curY);
 
         if (action == GLFW_PRESS) {
+            bool overUI = (app->m_gui && app->m_gui->WantCaptureMouse());
+            app->m_pressOverUI = overUI;
+
             if (button == GLFW_MOUSE_BUTTON_LEFT) {
-                app->m_leftMouseDown = true;
+                app->m_pressMouseX = curX;
+                app->m_pressMouseY = curY;
+                if (!overUI) {
+                    app->m_leftMouseDown = true;
+                }
             } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
-                app->m_rightMouseDown = true;
+                if (!overUI) {
+                    app->m_rightMouseDown = true;
+                }
+            }
+        } else if (action == GLFW_RELEASE) {
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                app->m_leftMouseDown = false;
+
+                // Check if this was a click (not an orbit drag) in the 3D viewport
+                double dragDist = std::hypot(curX - app->m_pressMouseX, curY - app->m_pressMouseY);
+                bool overUI = (app->m_gui && app->m_gui->WantCaptureMouse());
+                bool inSketchCanvas = (app->m_gui && app->m_gui->IsSketchModeActive());
+
+                if (dragDist < 4.0 && !app->m_pressOverUI && !overUI && !inSketchCanvas) {
+                    if (app->m_renderer && app->m_graph && app->m_gui) {
+                        Ray ray = app->m_renderer->ScreenPointToRay(
+                            static_cast<float>(curX),
+                            static_cast<float>(curY)
+                        );
+                        uint64_t hitNodeId = app->m_graph->PickNode(ray.origin, ray.direction);
+                        app->m_gui->SetSelectedNodeId(hitNodeId);
+                    }
+                }
+            } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
+                app->m_rightMouseDown = false;
             }
         }
     });
