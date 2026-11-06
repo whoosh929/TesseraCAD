@@ -57,6 +57,12 @@ target_sources(tessera_engine
         src/engine/sketch/Sketch.hpp
         src/engine/sketch/ProfileTessellator.hpp
 
+        # Modeling Operations & B-Rep Topology
+        src/engine/modeling/Topology.hpp
+        src/engine/modeling/ExtrudeOp.hpp
+        src/engine/modeling/RevolveOp.hpp
+        src/engine/modeling/Tessellator.hpp
+
         # Concurrency & Lock-Free Primitives
         src/engine/concurrency/AtomicMeshExchange.hpp
         src/engine/concurrency/ThreadPool.hpp
@@ -204,3 +210,25 @@ set_target_properties(test_sketch PROPERTIES
 )
 
 add_test(NAME SketchTests COMMAND test_sketch)
+
+add_executable(test_modeling
+    tests/test_modeling.cpp
+)
+
+target_include_directories(test_modeling
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(test_modeling
+    PRIVATE
+        tessera_engine
+)
+
+target_compile_features(test_modeling PUBLIC cxx_std_20)
+
+set_target_properties(test_modeling PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_test(NAME ModelingTests COMMAND test_modeling)
