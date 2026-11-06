@@ -757,6 +757,208 @@ bool TestModelClickSelectionHighlightAndOuterEdges() {
     return true;
 }
 
+bool TestFaceSubElementPickingAndHighlighting() {
+    std::cout << "[Test] Face Sub-Element Picking & Face-Only Highlighting...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // Create Extrude feature (rectangular prism 2x2x2) at (0, 0, 0)
+    auto sketch = std::make_shared<SketchNode>("Sketch_Box", SketchPlane::XY_Front);
+    sketch->SetPresetRectangle(2.0f, 2.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto model = std::make_shared<ExtrudeNode>("Model_Box", sketch, 2.0f);
+    model->SetPosition(0.0f, 0.0f, 0.0f);
+    model->Evaluate(&mockDevice, exchange);
+    graph.AddNode(model);
+
+    // Initial click selects the whole model
+    uint64_t modelId = model->GetId();
+    graph.SetSelectedNodeId(modelId);
+
+    // Ray directed directly at front cap face: (0, 0, 5) -> dir (0, 0, -1)
+    Point3D rayOrig(0.0, 0.0, 5.0);
+    Vector3D rayDir(0.0, 0.0, -1.0);
+
+    // Drill down into sub-element selection on the already-selected model
+    auto sub = graph.PickSubElement(rayOrig, rayDir, modelId);
+    TEST_ASSERT(sub.vertexIndex == -1, "Direct face hit should not pick a vertex");
+    TEST_ASSERT(sub.faceIndex >= 0, "Face sub-element must be picked");
+    TEST_ASSERT(std::abs(sub.facePlane.normal.z - 1.0) < 1e-3 || std::abs(sub.facePlane.normal.z - (-1.0)) < 1e-3, 
+                "Front cap face normal must be along Z axis");
+
+    // Publish with face selected: only that face must be highlighted!
+    graph.SetSubElementSelection(modelId, sub.faceIndex, -1);
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, modelId, sub.faceIndex, -1);
+
+    auto meshFace = exchange.AcquireLatest();
+    TEST_ASSERT(meshFace != nullptr, "Published mesh must not be null");
+
+    FaceInfo pickedFace;
+    TEST_ASSERT(model->GetFace(sub.faceIndex, pickedFace), "Must be able to query picked face info");
+    TEST_ASSERT(meshFace->selectedIndexCount == pickedFace.triangleIndices.size(), 
+                "Selected index buffer must contain ONLY the selected face triangles");
+    TEST_ASSERT(meshFace->selectedEdgeIndexCount == pickedFace.perimeterEdges.size(), 
+                "Selected edge buffer must contain ONLY the selected face perimeter edges");
+
+    // The rest of the model's triangles must remain in the unselected buffer
+    size_t expectedUnselectedTriCount = model->GetCachedIndices().size() - pickedFace.triangleIndices.size();
+    TEST_ASSERT(meshFace->indexCount == expectedUnselectedTriCount, 
+                "Unselected model faces must be drawn in normal unselected buffer");
+
+    return true;
+}
+
+bool TestAssociativeDatumPlaneAndConflictHandling() {
+    std::cout << "[Test] Associative Datum Plane & Parametric Conflict Handling...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create base model
+    auto sketch = std::make_shared<SketchNode>("Base_Sketch", SketchPlane::XY_Front);
+    sketch->SetPresetRectangle(4.0f, 4.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto feature = std::make_shared<ExtrudeNode>("Base_Extrude", sketch, 2.0f);
+    feature->Evaluate(&mockDevice, exchange);
+    graph.AddNode(feature);
+
+    const auto& faces = feature->GetFaces();
+    TEST_ASSERT(!faces.empty(), "Feature must have evaluated faces");
+
+    // Find top or front cap face
+    int targetFaceIdx = 0;
+    FaceInfo targetFace = faces[0];
+
+    // 2. Create associative DatumPlaneNode tied to that face
+    auto tiedPlane = std::make_shared<DatumPlaneNode>("Plane_TiedToFace", feature, targetFaceIdx, targetFace.plane);
+    graph.AddNode(tiedPlane);
+    tiedPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(tiedPlane->IsFaceAssociative(), "Datum plane must be face-associative");
+    TEST_ASSERT(!tiedPlane->HasConflict(), "Freshly created tied plane must have no conflict");
+    TEST_ASSERT(tiedPlane->GetReferencedFaceIndex() == targetFaceIdx, "Referenced face index must match");
+    TEST_ASSERT(tiedPlane->GetReferencedFeature()->GetId() == feature->GetId(), "Referenced feature must match");
+
+    // 3. Create a 2D sketch on this associative datum plane
+    auto sketchOnPlane = std::make_shared<SketchNode>("Sketch_OnTiedPlane", tiedPlane);
+    sketchOnPlane->SetPresetRectangle(1.0f, 1.0f);
+    graph.AddNode(sketchOnPlane);
+    sketchOnPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(sketchOnPlane->HasCustomPlane(), "Sketch must use the custom datum plane");
+    TEST_ASSERT(!sketchOnPlane->HasConflict(), "Sketch on tied plane must have no conflict");
+
+    // 4. Update the base feature (change extrusion height from 2.0 to 6.0)
+    feature->SetHeight(6.0f);
+    feature->Evaluate(&mockDevice, exchange);
+    tiedPlane->Evaluate(&mockDevice, exchange);
+    sketchOnPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(!tiedPlane->HasConflict(), "Tied plane remains valid after feature parameter update");
+    // Plane coordinates updated associatively
+    Geom::Plane updatedPlane = tiedPlane->GetPlane();
+    FaceInfo updatedFace;
+    feature->GetFace(targetFaceIdx, updatedFace);
+    TEST_ASSERT(updatedPlane.origin.approx_equal(updatedFace.center, 0.05), "Plane origin updated associatively with face");
+
+    // 5. Cause a conflict: delete the parent feature from the graph
+    graph.RemoveNode(feature->GetId());
+    feature = nullptr; // release reference
+    tiedPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(tiedPlane->HasConflict(), "Datum plane must flag conflict when parent feature is removed");
+    TEST_ASSERT(!tiedPlane->GetConflictMessage().empty(), "Conflict message must describe the failure");
+    TEST_ASSERT(sketchOnPlane->HasConflict(), "Child sketch must report conflict when datum plane has conflict");
+
+    // 6. Resolve conflict: user prompts to convert to Fixed Datum Plane
+    tiedPlane->ConvertToFixed();
+    tiedPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(!tiedPlane->HasConflict(), "Converting to fixed datum plane must resolve the conflict");
+    TEST_ASSERT(tiedPlane->GetPlaneType() == DatumPlaneType::Fixed, "Plane type is now Fixed");
+    TEST_ASSERT(!sketchOnPlane->HasConflict(), "Child sketch conflict must be cleared");
+
+    return true;
+}
+
+bool TestVertexSubElementPickingAndAssociativeDatumAxis() {
+    std::cout << "[Test] Vertex Sub-Element Picking & Associative Datum Axis...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // Create 3D Model
+    auto sketch = std::make_shared<SketchNode>("Box_Sketch", SketchPlane::XY_Front);
+    sketch->SetPresetRectangle(2.0f, 2.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto model = std::make_shared<ExtrudeNode>("Box_Model", sketch, 2.0f);
+    model->Evaluate(&mockDevice, exchange);
+    graph.AddNode(model);
+
+    uint64_t modelId = model->GetId();
+    graph.SetSelectedNodeId(modelId);
+
+    const auto& verts = model->GetCachedVertices();
+    TEST_ASSERT(!verts.empty(), "Model must have cached vertices");
+
+    // Target vertex #0: position (v0.x, v0.y, v0.z)
+    Point3D targetVPos(verts[0].position[0], verts[0].position[1], verts[0].position[2]);
+
+    // Cast a ray that passes right through/near vertex #0 (within 0.05m tolerance)
+    Point3D rayOrig(targetVPos.x + 0.02, targetVPos.y + 0.02, targetVPos.z + 5.0);
+    Vector3D rayDir(0.0, 0.0, -1.0);
+
+    auto sub = graph.PickSubElement(rayOrig, rayDir, modelId, 0.20);
+    TEST_ASSERT(sub.vertexIndex == 0, "Vertex picking must pick vertex #0");
+    TEST_ASSERT(sub.vertexPos.approx_equal(targetVPos, 1e-4), "Picked vertex position must match vertex #0");
+
+    // Publish mesh with vertex selected
+    graph.SetSubElementSelection(modelId, -1, sub.vertexIndex);
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, modelId, -1, sub.vertexIndex);
+
+    auto meshVert = exchange.AcquireLatest();
+    TEST_ASSERT(meshVert != nullptr, "Published mesh must not be null");
+    TEST_ASSERT(meshVert->selectedIndexCount == 24, "Vertex marker has 8 triangles (24 indices)");
+    TEST_ASSERT(meshVert->selectedEdgeIndexCount == 24, "Vertex marker has 12 edges (24 line indices)");
+    TEST_ASSERT(meshVert->indexCount == model->GetCachedIndices().size(), "Model triangles remain in unselected buffer");
+
+    // Create associative DatumAxisNode tied to this vertex
+    auto tiedAxis = std::make_shared<DatumAxisNode>("Axis_TiedToVertex", model, sub.vertexIndex, Vector3D(0.0, 1.0, 0.0));
+    graph.AddNode(tiedAxis);
+    tiedAxis->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(tiedAxis->IsVertexAssociative(), "Axis must be vertex-associative");
+    TEST_ASSERT(!tiedAxis->HasConflict(), "Tied axis must have no conflict");
+    TEST_ASSERT(tiedAxis->GetAxis().origin.approx_equal(targetVPos, 1e-4), "Axis origin must match vertex position");
+
+    // Cause a conflict: delete parent feature
+    graph.RemoveNode(model->GetId());
+    model = nullptr;
+    tiedAxis->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(tiedAxis->HasConflict(), "Datum axis must flag conflict when parent feature is deleted");
+    TEST_ASSERT(!tiedAxis->GetConflictMessage().empty(), "Conflict message must be provided");
+
+    // Resolve conflict by converting to fixed axis
+    tiedAxis->ConvertToFixed();
+    tiedAxis->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(!tiedAxis->HasConflict(), "Converting to fixed axis must resolve conflict");
+    TEST_ASSERT(tiedAxis->GetAxisType() == DatumAxisType::Fixed, "Axis is now fixed");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -774,6 +976,9 @@ int main() {
     pass &= TestTopBarReferenceGeometryAndFeatureWorkflows();
     pass &= TestRevolveCylindricalThicknessAndNoBoxFeature();
     pass &= TestModelClickSelectionHighlightAndOuterEdges();
+    pass &= TestFaceSubElementPickingAndHighlighting();
+    pass &= TestAssociativeDatumPlaneAndConflictHandling();
+    pass &= TestVertexSubElementPickingAndAssociativeDatumAxis();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

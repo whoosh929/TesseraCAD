@@ -69,8 +69,37 @@ public:
     void SetSelectedNodeId(uint64_t id) noexcept {
         if (m_selectedNodeId != id) {
             m_selectedNodeId = id;
+            m_selectedFaceIndex = -1;
+            m_selectedVertexIndex = -1;
             m_selectionScrollPending = true;
         }
+    }
+
+    void SetSelectedVertex(int vIdx, Geom::Point3D pos) noexcept {
+        m_selectedVertexIndex = vIdx;
+        m_selectedVertexPos = pos;
+        m_selectedFaceIndex = -1;
+    }
+
+    void SetSelectedFace(int fIdx, Geom::Plane plane) noexcept {
+        m_selectedFaceIndex = fIdx;
+        m_selectedFacePlane = plane;
+        m_selectedVertexIndex = -1;
+    }
+
+    void ClearSubElementSelection() noexcept {
+        m_selectedFaceIndex = -1;
+        m_selectedVertexIndex = -1;
+    }
+
+    [[nodiscard]] int GetSelectedFaceIndex() const noexcept { return m_selectedFaceIndex; }
+    [[nodiscard]] int GetSelectedVertexIndex() const noexcept { return m_selectedVertexIndex; }
+    [[nodiscard]] Geom::Plane GetSelectedFacePlane() const noexcept { return m_selectedFacePlane; }
+    [[nodiscard]] Geom::Point3D GetSelectedVertexPos() const noexcept { return m_selectedVertexPos; }
+
+    void OpenConflictPrompt(uint64_t nodeId) noexcept {
+        m_conflictedNodeId = nodeId;
+        m_showConflictPrompt = true;
     }
 
 private:
@@ -108,6 +137,13 @@ private:
         RHI::RHIDevice* device,
         AtomicMeshExchange& exchange,
         std::shared_ptr<SketchNode> activeSketch
+    );
+
+    void RenderConflictPromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
     );
 
     bool m_initialized{false};
@@ -175,11 +211,21 @@ private:
     int m_newRevolveAxis{1}; // 0: X-Axis, 1: Y-Axis (Up), 2: Z-Axis
     bool m_newRevolveSolid{true};
 
-    // Selection
+    // Selection & Sub-Elements
     uint64_t m_selectedNodeId{0};
+    int m_selectedFaceIndex{-1};
+    int m_selectedVertexIndex{-1};
+    Geom::Plane m_selectedFacePlane;
+    Geom::Point3D m_selectedVertexPos{0.0, 0.0, 0.0};
     uint64_t m_lastPublishedSelectedNodeId{std::numeric_limits<uint64_t>::max()};
+    int m_lastPublishedSelectedFaceIndex{-1};
+    int m_lastPublishedSelectedVertexIndex{-1};
     bool m_selectionScrollPending{false};
     uint32_t m_shapeCounter{1};
+
+    // Conflict Resolution Modal
+    bool m_showConflictPrompt{false};
+    uint64_t m_conflictedNodeId{0};
 
     // Viewport display toggles
     bool m_showWireframe{true};

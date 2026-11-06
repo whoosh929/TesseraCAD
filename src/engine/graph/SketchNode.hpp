@@ -1,8 +1,10 @@
 #pragma once
 
 #include "Node.hpp"
+#include "DatumPlaneNode.hpp"
 #include "Tessellation.hpp"
 #include "engine/hal/RHI.hpp"
+#include "engine/geom/Plane.hpp"
 #include "engine/sketch/PolygonBool2D.hpp"
 #include <string>
 #include <vector>
@@ -51,10 +53,57 @@ public:
         }
     }
 
+    SketchNode(
+        std::string name,
+        std::shared_ptr<DatumPlaneNode> datumPlane,
+        std::vector<std::array<float, 2>> initialProfile = {}
+    ) : DAGNode(std::move(name)),
+        m_profile(std::move(initialProfile)) {
+        SetDatumPlaneReference(datumPlane);
+        if (m_profile.empty()) {
+            SetPresetRectangle(3.0f, 2.0f);
+        }
+    }
+
+    void SetDatumPlaneReference(std::shared_ptr<DatumPlaneNode> planeNode) {
+        m_datumPlaneRef = planeNode;
+        if (planeNode) {
+            AddInput(planeNode);
+            m_customPlane = planeNode->GetPlane();
+            m_useCustomPlane = true;
+        } else {
+            m_useCustomPlane = false;
+        }
+        MarkDirty();
+    }
+
+    [[nodiscard]] std::shared_ptr<DatumPlaneNode> GetDatumPlaneReference() const noexcept {
+        return m_datumPlaneRef;
+    }
+
+    [[nodiscard]] bool HasCustomPlane() const noexcept { return m_useCustomPlane; }
+    [[nodiscard]] Geom::Plane GetCustomPlane() const noexcept { return m_customPlane; }
+
+    [[nodiscard]] bool HasConflict() const noexcept override {
+        if (m_datumPlaneRef && m_datumPlaneRef->HasConflict()) {
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] std::string GetConflictMessage() const noexcept override {
+        if (m_datumPlaneRef && m_datumPlaneRef->HasConflict()) {
+            return "Sketch plane conflict: " + m_datumPlaneRef->GetConflictMessage();
+        }
+        return "";
+    }
+
     [[nodiscard]] SketchPlane GetPlane() const noexcept { return m_plane; }
     void SetPlane(SketchPlane plane) {
-        if (m_plane != plane) {
+        if (m_plane != plane || m_useCustomPlane) {
             m_plane = plane;
+            m_useCustomPlane = false;
+            m_datumPlaneRef = nullptr;
             MarkDirty();
         }
     }
@@ -248,10 +297,16 @@ public:
         (void)exchange;
         if (!IsDirty() || m_profile.size() < 3) return;
 
+        if (m_datumPlaneRef) {
+            m_customPlane = m_datumPlaneRef->GetPlane();
+            m_useCustomPlane = true;
+        }
+
         uint64_t currentGen = GetGeneration();
         std::cout << "[SketchNode::Evaluate] Evaluating 2D Sketch '" << m_name 
                   << "' (Gen " << currentGen << " | Points: " << m_profile.size() 
-                  << ", Plane: " << GetSketchPlaneName(m_plane) << ")...\n";
+                  << (m_useCustomPlane ? " | Plane: Custom Associative Datum Plane" : (std::string(" | Plane: ") + GetSketchPlaneName(m_plane)))
+                  << ")...\n";
 
         std::vector<CADVertex> vertices;
         std::vector<uint32_t> indices;
@@ -269,31 +324,41 @@ public:
                 float v = poly[i][1];
                 CADVertex vert{};
 
-                switch (m_plane) {
-                    case SketchPlane::XZ_Ground:
-                        vert.position[0] = u + m_position[0];
-                        vert.position[1] = m_position[1] + 0.005f;
-                        vert.position[2] = v + m_position[2];
-                        vert.normal[0] = 0.0f;
-                        vert.normal[1] = 1.0f;
-                        vert.normal[2] = 0.0f;
-                        break;
-                    case SketchPlane::XY_Front:
-                        vert.position[0] = u + m_position[0];
-                        vert.position[1] = v + m_position[1];
-                        vert.position[2] = m_position[2] + 0.005f;
-                        vert.normal[0] = 0.0f;
-                        vert.normal[0] = 0.0f;
-                        vert.normal[2] = 1.0f;
-                        break;
-                    case SketchPlane::YZ_Right:
-                        vert.position[0] = m_position[0] + 0.005f;
-                        vert.position[1] = v + m_position[1];
-                        vert.position[2] = u + m_position[2];
-                        vert.normal[0] = 1.0f;
-                        vert.normal[1] = 0.0f;
-                        vert.normal[2] = 0.0f;
-                        break;
+                if (m_useCustomPlane) {
+                    Geom::Point3D pt3D = m_customPlane.to_world(Geom::Point2D(u, v));
+                    vert.position[0] = static_cast<float>(pt3D.x);
+                    vert.position[1] = static_cast<float>(pt3D.y);
+                    vert.position[2] = static_cast<float>(pt3D.z);
+                    vert.normal[0] = static_cast<float>(m_customPlane.normal.x);
+                    vert.normal[1] = static_cast<float>(m_customPlane.normal.y);
+                    vert.normal[2] = static_cast<float>(m_customPlane.normal.z);
+                } else {
+                    switch (m_plane) {
+                        case SketchPlane::XZ_Ground:
+                            vert.position[0] = u + m_position[0];
+                            vert.position[1] = m_position[1] + 0.005f;
+                            vert.position[2] = v + m_position[2];
+                            vert.normal[0] = 0.0f;
+                            vert.normal[1] = 1.0f;
+                            vert.normal[2] = 0.0f;
+                            break;
+                        case SketchPlane::XY_Front:
+                            vert.position[0] = u + m_position[0];
+                            vert.position[1] = v + m_position[1];
+                            vert.position[2] = m_position[2] + 0.005f;
+                            vert.normal[0] = 0.0f;
+                            vert.normal[0] = 0.0f;
+                            vert.normal[2] = 1.0f;
+                            break;
+                        case SketchPlane::YZ_Right:
+                            vert.position[0] = m_position[0] + 0.005f;
+                            vert.position[1] = v + m_position[1];
+                            vert.position[2] = u + m_position[2];
+                            vert.normal[0] = 1.0f;
+                            vert.normal[1] = 0.0f;
+                            vert.normal[2] = 0.0f;
+                            break;
+                    }
                 }
                 vertices.push_back(vert);
 
@@ -322,6 +387,10 @@ private:
     bool m_isConsumed{false};
     bool m_visible{true};
     std::weak_ptr<DAGNode> m_parentFeature;
+
+    std::shared_ptr<DatumPlaneNode> m_datumPlaneRef{nullptr};
+    Geom::Plane m_customPlane;
+    bool m_useCustomPlane{false};
 };
 
 } // namespace Tessera

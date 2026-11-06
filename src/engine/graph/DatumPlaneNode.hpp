@@ -3,6 +3,8 @@
 #include "Node.hpp"
 #include "engine/geom/Plane.hpp"
 #include <string>
+#include <memory>
+#include <iostream>
 
 namespace Tessera {
 
@@ -13,13 +15,59 @@ enum class DatumPlanePreset : uint8_t {
     Custom   = 3
 };
 
+enum class DatumPlaneType : uint8_t {
+    Fixed = 0,
+    FaceAssociative = 1
+};
+
 class DatumPlaneNode : public DAGNode {
 public:
     DatumPlaneNode(std::string name, Geom::Plane plane = Geom::Plane::XY())
-        : DAGNode(std::move(name)), m_plane(plane) {}
+        : DAGNode(std::move(name)), m_plane(plane), m_lastValidPlane(plane) {}
+
+    DatumPlaneNode(std::string name, std::shared_ptr<DAGNode> feature, int faceIndex, Geom::Plane initialPlane)
+        : DAGNode(std::move(name)), 
+          m_type(DatumPlaneType::FaceAssociative),
+          m_parentFeature(feature),
+          m_parentFeatureId(feature ? feature->GetId() : 0),
+          m_faceIndex(faceIndex),
+          m_plane(initialPlane),
+          m_lastValidPlane(initialPlane) {}
+
+    void SetFaceReference(std::shared_ptr<DAGNode> feature, int faceIndex, Geom::Plane initialPlane) {
+        m_type = DatumPlaneType::FaceAssociative;
+        m_parentFeature = feature;
+        m_parentFeatureId = feature ? feature->GetId() : 0;
+        m_faceIndex = faceIndex;
+        m_plane = initialPlane;
+        m_lastValidPlane = initialPlane;
+        m_hasConflict = false;
+        m_conflictMessage.clear();
+        if (feature) {
+            AddInput(feature);
+        }
+        MarkDirty();
+    }
+
+    void ConvertToFixed() {
+        m_type = DatumPlaneType::Fixed;
+        m_plane = m_lastValidPlane;
+        m_parentFeature.reset();
+        m_parentFeatureId = 0;
+        m_faceIndex = -1;
+        m_hasConflict = false;
+        m_conflictMessage.clear();
+        MarkDirty();
+    }
 
     void SetPlane(Geom::Plane pl) {
         m_plane = pl;
+        m_lastValidPlane = pl;
+        m_type = DatumPlaneType::Fixed;
+        m_parentFeature.reset();
+        m_parentFeatureId = 0;
+        m_hasConflict = false;
+        m_conflictMessage.clear();
         MarkDirty();
     }
 
@@ -33,15 +81,77 @@ public:
     }
 
     [[nodiscard]] double GetOffset() const noexcept { return m_offset; }
+    [[nodiscard]] DatumPlaneType GetPlaneType() const noexcept { return m_type; }
+    [[nodiscard]] bool IsFaceAssociative() const noexcept { return m_type == DatumPlaneType::FaceAssociative; }
+
+    [[nodiscard]] bool HasConflict() const noexcept override { return m_hasConflict; }
+    [[nodiscard]] std::string GetConflictMessage() const noexcept override { return m_conflictMessage; }
+    void ClearConflict() noexcept { m_hasConflict = false; m_conflictMessage.clear(); }
+
+    [[nodiscard]] int GetReferencedFaceIndex() const noexcept { return m_faceIndex; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetReferencedFeature() const noexcept { return m_parentFeature.lock(); }
+    [[nodiscard]] uint64_t GetReferencedFeatureId() const noexcept { return m_parentFeatureId; }
+
+    void OnParentRemoved(uint64_t parentId) override {
+        DAGNode::OnParentRemoved(parentId);
+        if (m_parentFeatureId == parentId || (m_parentFeature.expired() && m_type == DatumPlaneType::FaceAssociative)) {
+            m_parentFeature.reset();
+            m_hasConflict = true;
+            m_conflictMessage = "Referenced parent feature was deleted from the model tree.";
+            MarkDirty();
+        }
+    }
 
     void Evaluate(RHI::RHIDevice*, AtomicMeshExchange&) override {
-        // Reference geometry nodes propagate coordinate frames down the DAG.
+        if (m_type == DatumPlaneType::FaceAssociative) {
+            if (m_hasConflict) {
+                return;
+            }
+            auto feature = m_parentFeature.lock();
+            if (!feature) {
+                m_hasConflict = true;
+                m_conflictMessage = "Referenced parent feature was deleted from the model tree.";
+                return;
+            }
+
+            FaceInfo face;
+            if (!feature->GetFace(m_faceIndex, face) || !face.isPlanar) {
+                m_hasConflict = true;
+                m_conflictMessage = "Referenced face #" + std::to_string(m_faceIndex) + 
+                                    " on feature '" + feature->GetName() + "' is missing or degenerate.";
+                return;
+            }
+
+            // Normal check: verify plane has not collapsed
+            if (face.normal.length_squared() < 1e-4) {
+                m_hasConflict = true;
+                m_conflictMessage = "Referenced face #" + std::to_string(m_faceIndex) + " normal is collapsed.";
+                return;
+            }
+
+            // Valid associative update: synchronize plane coordinates with latest feature geometry
+            m_hasConflict = false;
+            m_conflictMessage.clear();
+            m_plane = face.plane;
+            m_lastValidPlane = face.plane;
+        }
+
+        ClearDirty();
     }
 
 private:
     Geom::Plane m_plane{Geom::Plane::XY()};
+    Geom::Plane m_lastValidPlane{Geom::Plane::XY()};
     double m_offset{0.0};
+
+    DatumPlaneType m_type{DatumPlaneType::Fixed};
+    std::weak_ptr<DAGNode> m_parentFeature;
+    uint64_t m_parentFeatureId{0};
+    int m_faceIndex{-1};
+    bool m_hasConflict{false};
+    std::string m_conflictMessage;
 };
 
 } // namespace Tessera
+
 

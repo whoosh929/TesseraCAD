@@ -2,6 +2,8 @@
 
 #include "Node.hpp"
 #include "SketchNode.hpp"
+#include "DatumPlaneNode.hpp"
+#include "DatumAxisNode.hpp"
 #include "engine/concurrency/ThreadPool.hpp"
 #include "engine/concurrency/AtomicMeshExchange.hpp"
 #include "engine/hal/RHI.hpp"
@@ -12,8 +14,19 @@
 #include <iostream>
 #include <limits>
 #include <cmath>
+#include <unordered_set>
 
 namespace Tessera {
+
+/// Pick result for sub-elements (Face or Vertex) on a selected 3D model
+struct SubElementPickResult {
+    uint64_t nodeId{0};
+    int faceIndex{-1};
+    int vertexIndex{-1};
+    Geom::Plane facePlane;
+    Geom::Point3D vertexPos{0.0, 0.0, 0.0};
+    double distance{std::numeric_limits<double>::infinity()};
+};
 
 /// Möller-Trumbore ray-triangle intersection test (two-sided)
 inline bool RayIntersectsTriangle(
@@ -67,6 +80,15 @@ public:
     void AddNode(std::shared_ptr<DAGNode> node) {
         std::lock_guard<std::mutex> lock(m_graphMutex);
         if (node) {
+            if (auto plane = std::dynamic_pointer_cast<DatumPlaneNode>(node)) {
+                if (auto feat = plane->GetReferencedFeature()) {
+                    plane->AddInput(feat);
+                }
+            } else if (auto axis = std::dynamic_pointer_cast<DatumAxisNode>(node)) {
+                if (auto feat = axis->GetReferencedFeature()) {
+                    axis->AddInput(feat);
+                }
+            }
             if (auto child = node->GetChildSketch()) {
                 if (auto sketch = std::dynamic_pointer_cast<SketchNode>(child)) {
                     sketch->SetParentFeature(node);
@@ -107,6 +129,8 @@ public:
     void SetSelectedNodeId(uint64_t id) {
         std::lock_guard<std::mutex> lock(m_graphMutex);
         m_selectedNodeId = id;
+        m_selectedFaceIndex = -1;
+        m_selectedVertexIndex = -1;
     }
 
     [[nodiscard]] uint64_t GetSelectedNodeId() const {
@@ -114,15 +138,51 @@ public:
         return m_selectedNodeId;
     }
 
+    void SetSubElementSelection(uint64_t nodeId, int faceIndex, int vertexIndex) {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        m_selectedNodeId = nodeId;
+        m_selectedFaceIndex = faceIndex;
+        m_selectedVertexIndex = vertexIndex;
+    }
+
+    void GetSubElementSelection(uint64_t& outNodeId, int& outFaceIndex, int& outVertexIndex) const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        outNodeId = m_selectedNodeId;
+        outFaceIndex = m_selectedFaceIndex;
+        outVertexIndex = m_selectedVertexIndex;
+    }
+
+    [[nodiscard]] int GetSelectedFaceIndex() const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        return m_selectedFaceIndex;
+    }
+
+    [[nodiscard]] int GetSelectedVertexIndex() const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        return m_selectedVertexIndex;
+    }
+
     void PublishCombinedSceneMesh(
         RHI::RHIDevice* device, 
         AtomicMeshExchange& exchange,
-        std::optional<uint64_t> selectedNodeIdOverride = std::nullopt
+        std::optional<uint64_t> selectedNodeIdOverride = std::nullopt,
+        std::optional<int> selectedFaceIndexOverride = std::nullopt,
+        std::optional<int> selectedVertexIndexOverride = std::nullopt
     ) {
         if (!device) return;
         std::lock_guard<std::mutex> lock(m_graphMutex);
         if (selectedNodeIdOverride.has_value()) {
-            m_selectedNodeId = *selectedNodeIdOverride;
+            if (*selectedNodeIdOverride != m_selectedNodeId) {
+                m_selectedNodeId = *selectedNodeIdOverride;
+                m_selectedFaceIndex = -1;
+                m_selectedVertexIndex = -1;
+            }
+        }
+        if (selectedFaceIndexOverride.has_value()) {
+            m_selectedFaceIndex = *selectedFaceIndexOverride;
+        }
+        if (selectedVertexIndexOverride.has_value()) {
+            m_selectedVertexIndex = *selectedVertexIndexOverride;
         }
 
         std::vector<CADVertex> combinedVertices;
@@ -172,18 +232,99 @@ public:
 
                 bool isSelected = (node->GetId() == m_selectedNodeId);
 
-                auto& targetVerts = isSelected ? selectedVertices : combinedVertices;
-                auto& targetIndices = isSelected ? selectedIndices : combinedIndices;
-                auto& targetEdges = isSelected ? selectedEdges : combinedEdges;
+                if (isSelected && m_selectedFaceIndex >= 0) {
+                    // Face drill-down selection: ONLY highlight that face!
+                    FaceInfo selFace;
+                    if (node->GetFace(m_selectedFaceIndex, selFace) && !selFace.triangleIndices.empty()) {
+                        // Put selected face triangles + its perimeter outline into selected buffers
+                        uint32_t selBase = static_cast<uint32_t>(selectedVertices.size());
+                        selectedVertices.insert(selectedVertices.end(), verts.begin(), verts.end());
+                        for (uint32_t idx : selFace.triangleIndices) {
+                            selectedIndices.push_back(idx + selBase);
+                        }
+                        for (uint32_t edgeIdx : selFace.perimeterEdges) {
+                            selectedEdges.push_back(edgeIdx + selBase);
+                        }
 
-                uint32_t vOffset = static_cast<uint32_t>(targetVerts.size());
-                targetVerts.insert(targetVerts.end(), verts.begin(), verts.end());
+                        // Put all non-selected triangles + non-perimeter edges into unselected combined buffers
+                        std::unordered_set<size_t> faceTriIndices;
+                        for (size_t k = 0; k < selFace.triangleIndices.size(); k += 3) {
+                            uint32_t fa = selFace.triangleIndices[k + 0];
+                            uint32_t fb = selFace.triangleIndices[k + 1];
+                            uint32_t fc = selFace.triangleIndices[k + 2];
+                            for (size_t t = 0; t < indices.size() / 3; ++t) {
+                                if (indices[t * 3 + 0] == fa && indices[t * 3 + 1] == fb && indices[t * 3 + 2] == fc) {
+                                    faceTriIndices.insert(t);
+                                }
+                            }
+                        }
 
-                for (uint32_t idx : indices) {
-                    targetIndices.push_back(idx + vOffset);
-                }
-                for (uint32_t edgeIdx : edges) {
-                    targetEdges.push_back(edgeIdx + vOffset);
+                        uint32_t unselBase = static_cast<uint32_t>(combinedVertices.size());
+                        combinedVertices.insert(combinedVertices.end(), verts.begin(), verts.end());
+                        for (size_t t = 0; t < indices.size() / 3; ++t) {
+                            if (faceTriIndices.find(t) == faceTriIndices.end()) {
+                                combinedIndices.push_back(indices[t * 3 + 0] + unselBase);
+                                combinedIndices.push_back(indices[t * 3 + 1] + unselBase);
+                                combinedIndices.push_back(indices[t * 3 + 2] + unselBase);
+                            }
+                        }
+                        for (uint32_t edgeIdx : edges) {
+                            combinedEdges.push_back(edgeIdx + unselBase);
+                        }
+                    } else {
+                        // Fallback to whole model selection
+                        uint32_t vOffset = static_cast<uint32_t>(selectedVertices.size());
+                        selectedVertices.insert(selectedVertices.end(), verts.begin(), verts.end());
+                        for (uint32_t idx : indices) selectedIndices.push_back(idx + vOffset);
+                        for (uint32_t edgeIdx : edges) selectedEdges.push_back(edgeIdx + vOffset);
+                    }
+                } else if (isSelected && m_selectedVertexIndex >= 0 && static_cast<size_t>(m_selectedVertexIndex) < verts.size()) {
+                    // Vertex drill-down selection: render model normally + 3D marker for vertex
+                    uint32_t unselBase = static_cast<uint32_t>(combinedVertices.size());
+                    combinedVertices.insert(combinedVertices.end(), verts.begin(), verts.end());
+                    for (uint32_t idx : indices) combinedIndices.push_back(idx + unselBase);
+                    for (uint32_t edgeIdx : edges) combinedEdges.push_back(edgeIdx + unselBase);
+
+                    // 3D diamond octahedron marker for selected vertex
+                    const auto& v = verts[m_selectedVertexIndex];
+                    float vx = v.position[0];
+                    float vy = v.position[1];
+                    float vz = v.position[2];
+                    float s = 0.08f;
+
+                    uint32_t markBase = static_cast<uint32_t>(selectedVertices.size());
+                    selectedVertices.push_back({.position = {vx, vy + s, vz}, .normal = {0, 1, 0}});
+                    selectedVertices.push_back({.position = {vx - s, vy, vz}, .normal = {-1, 0, 0}});
+                    selectedVertices.push_back({.position = {vx + s, vy, vz}, .normal = {1, 0, 0}});
+                    selectedVertices.push_back({.position = {vx, vy, vz - s}, .normal = {0, 0, -1}});
+                    selectedVertices.push_back({.position = {vx, vy, vz + s}, .normal = {0, 0, 1}});
+                    selectedVertices.push_back({.position = {vx, vy - s, vz}, .normal = {0, -1, 0}});
+
+                    std::vector<uint32_t> mTris = {
+                        0, 1, 3,  0, 3, 2,  0, 2, 4,  0, 4, 1,
+                        5, 3, 1,  5, 2, 3,  5, 4, 2,  5, 1, 4
+                    };
+                    for (uint32_t mi : mTris) selectedIndices.push_back(markBase + mi);
+                    std::vector<uint32_t> mEdges = {
+                        0, 1,  0, 2,  0, 3,  0, 4,
+                        5, 1,  5, 2,  5, 3,  5, 4,
+                        1, 3,  3, 2,  2, 4,  4, 1
+                    };
+                    for (uint32_t me : mEdges) selectedEdges.push_back(markBase + me);
+                } else {
+                    auto& targetVerts = isSelected ? selectedVertices : combinedVertices;
+                    auto& targetIndices = isSelected ? selectedIndices : combinedIndices;
+                    auto& targetEdges = isSelected ? selectedEdges : combinedEdges;
+
+                    uint32_t vOffset = static_cast<uint32_t>(targetVerts.size());
+                    targetVerts.insert(targetVerts.end(), verts.begin(), verts.end());
+
+                    for (uint32_t idx : indices) {
+                        targetIndices.push_back(idx + vOffset);
+                    }
+                    for (uint32_t edgeIdx : edges) {
+                        targetEdges.push_back(edgeIdx + vOffset);
+                    }
                 }
             }
         }
@@ -326,12 +467,17 @@ public:
 
     void RemoveNode(uint64_t id) {
         std::lock_guard<std::mutex> lock(m_graphMutex);
+        std::shared_ptr<DAGNode> targetNode = nullptr;
         for (auto& node : m_nodes) {
             if (node && node->GetId() == id) {
+                targetNode = node;
                 // If this feature has a child sketch, promote the sketch to parentless
                 node->DetachChildSketch();
                 break;
             }
+        }
+        if (targetNode) {
+            targetNode->NotifyRemoval();
         }
         m_nodes.erase(std::remove_if(m_nodes.begin(), m_nodes.end(), [id](const auto& n) {
             return n->GetId() == id;
@@ -400,10 +546,110 @@ public:
         return closestNodeId;
     }
 
+    /// Casts a ray specifically against a selected node to pick its sub-element (Vertex or Face)
+    [[nodiscard]] SubElementPickResult PickSubElement(
+        const Geom::Point3D& rayOrigin,
+        const Geom::Vector3D& rayDir,
+        uint64_t targetNodeId,
+        double vertexTolerance = 0.20
+    ) const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        SubElementPickResult result;
+        result.nodeId = targetNodeId;
+
+        std::shared_ptr<DAGNode> targetNode = nullptr;
+        for (const auto& node : m_nodes) {
+            if (node && node->GetId() == targetNodeId) {
+                targetNode = node;
+                break;
+            }
+        }
+        if (!targetNode) return result;
+
+        const auto& verts = targetNode->GetCachedVertices();
+        const auto& indices = targetNode->GetCachedIndices();
+        if (verts.empty()) return result;
+
+        // 1. Proximity check to vertices
+        int bestVertexIdx = -1;
+        double bestVertexDist = vertexTolerance;
+        double bestVertexRayT = std::numeric_limits<double>::infinity();
+
+        for (size_t i = 0; i < verts.size(); ++i) {
+            Geom::Point3D p(verts[i].position[0], verts[i].position[1], verts[i].position[2]);
+            Geom::Vector3D toP = p - rayOrigin;
+            double t = toP.dot(rayDir);
+            if (t > 1e-4) {
+                Geom::Point3D rayPt = rayOrigin + rayDir * t;
+                double d = p.distance_to(rayPt);
+                if (d <= vertexTolerance && (d < bestVertexDist || (std::abs(d - bestVertexDist) < 0.02 && t < bestVertexRayT))) {
+                    bestVertexDist = d;
+                    bestVertexRayT = t;
+                    bestVertexIdx = static_cast<int>(i);
+                }
+            }
+        }
+
+        if (bestVertexIdx >= 0) {
+            result.vertexIndex = bestVertexIdx;
+            result.vertexPos = Geom::Point3D(verts[bestVertexIdx].position[0], verts[bestVertexIdx].position[1], verts[bestVertexIdx].position[2]);
+            result.distance = bestVertexRayT;
+            return result;
+        }
+
+        // 2. Intersected face check
+        double closestTriT = std::numeric_limits<double>::infinity();
+        int hitTriIdx = -1;
+
+        const size_t triCount = indices.size() / 3;
+        for (size_t i = 0; i < triCount; ++i) {
+            uint32_t idx0 = indices[i * 3 + 0];
+            uint32_t idx1 = indices[i * 3 + 1];
+            uint32_t idx2 = indices[i * 3 + 2];
+            if (idx0 >= verts.size() || idx1 >= verts.size() || idx2 >= verts.size()) continue;
+
+            Geom::Point3D v0(verts[idx0].position[0], verts[idx0].position[1], verts[idx0].position[2]);
+            Geom::Point3D v1(verts[idx1].position[0], verts[idx1].position[1], verts[idx1].position[2]);
+            Geom::Point3D v2(verts[idx2].position[0], verts[idx2].position[1], verts[idx2].position[2]);
+
+            double t = 0.0;
+            if (RayIntersectsTriangle(rayOrigin, rayDir, v0, v1, v2, t)) {
+                if (t < closestTriT) {
+                    closestTriT = t;
+                    hitTriIdx = static_cast<int>(i);
+                }
+            }
+        }
+
+        if (hitTriIdx >= 0) {
+            int faceIdx = targetNode->GetFaceIndexForTriangle(static_cast<size_t>(hitTriIdx));
+            FaceInfo face;
+            if (faceIdx >= 0 && targetNode->GetFace(faceIdx, face)) {
+                result.faceIndex = faceIdx;
+                result.facePlane = face.plane;
+            } else {
+                result.faceIndex = 0;
+                uint32_t i0 = indices[hitTriIdx * 3 + 0];
+                uint32_t i1 = indices[hitTriIdx * 3 + 1];
+                uint32_t i2 = indices[hitTriIdx * 3 + 2];
+                Geom::Point3D v0(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]);
+                Geom::Point3D v1(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2]);
+                Geom::Point3D v2(verts[i2].position[0], verts[i2].position[1], verts[i2].position[2]);
+                result.facePlane = Geom::Plane(v0, v1, v2);
+            }
+            result.distance = closestTriT;
+            return result;
+        }
+
+        return result;
+    }
+
 private:
     std::shared_ptr<ThreadPool> m_threadPool;
     std::vector<std::shared_ptr<DAGNode>> m_nodes;
     uint64_t m_selectedNodeId{0};
+    int m_selectedFaceIndex{-1};
+    int m_selectedVertexIndex{-1};
     mutable std::mutex m_graphMutex;
     static inline std::atomic<uint64_t> s_sceneGen{1};
 };
