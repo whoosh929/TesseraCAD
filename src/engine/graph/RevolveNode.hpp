@@ -84,6 +84,17 @@ public:
     }
 
     [[nodiscard]] std::shared_ptr<SketchNode> GetSketchReference() const noexcept { return m_sketchNode; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetChildSketch() const noexcept override { return m_sketchNode; }
+
+    void DetachChildSketch() noexcept override {
+        if (m_sketchNode) {
+            m_sketchNode->SetParentFeature(nullptr);
+            m_sketchNode->SetConsumed(false);
+            m_sketchNode->SetVisible(true);
+            m_sketchNode->MarkDirty();
+            m_sketchNode = nullptr;
+        }
+    }
 
     void Evaluate(RHI::RHIDevice* device, AtomicMeshExchange& exchange) override {
         (void)device;

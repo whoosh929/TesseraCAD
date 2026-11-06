@@ -120,11 +120,15 @@ void CADGui::RenderUI(
     ImGui::SetNextWindowSize(ImVec2(360.0f, 430.0f), ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("CAD Tool Palette", nullptr)) {
-        // Collect all SketchNodes in the DAG
-        std::vector<std::shared_ptr<SketchNode>> sketchNodes;
+        // Collect all SketchNodes in the DAG (separate available vs consumed)
+        std::vector<std::shared_ptr<SketchNode>> availableSketches;
+        std::vector<std::shared_ptr<SketchNode>> allSketches;
         for (const auto& n : graph.GetNodes()) {
             if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
-                sketchNodes.push_back(s);
+                allSketches.push_back(s);
+                if (!s->HasParentFeature() && !s->IsConsumed()) {
+                    availableSketches.push_back(s);
+                }
             }
         }
 
@@ -142,9 +146,9 @@ void CADGui::RenderUI(
                     ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Extrude from Reference Sketch");
                     ImGui::Separator();
 
-                    if (!sketchNodes.empty()) {
+                    if (!availableSketches.empty()) {
                         std::vector<std::string> sketchNames;
-                        for (const auto& s : sketchNodes) {
+                        for (const auto& s : availableSketches) {
                             sketchNames.push_back("[" + std::to_string(s->GetId()) + "] " + s->GetName() + 
                                                   " (" + std::to_string(s->GetProfile().size()) + " pts)");
                         }
@@ -169,7 +173,7 @@ void CADGui::RenderUI(
 
                         ImGui::Spacing();
                         if (ImGui::Button("+ Extrude from Selected Sketch", ImVec2(-1, 32))) {
-                            auto refSketch = sketchNodes[m_selectedSketchIndex];
+                            auto refSketch = availableSketches[m_selectedSketchIndex];
                             std::string name = "Extrude_" + std::to_string(m_shapeCounter++);
                             auto node = std::make_shared<ExtrudeNode>(name, refSketch, m_newExtrudeHeight);
                             graph.AddNode(node);
@@ -177,7 +181,7 @@ void CADGui::RenderUI(
                             m_selectedNodeId = node->GetId();
                         }
                     } else {
-                        ImGui::TextDisabled("No 2D Sketches exist in the Model Tree yet.");
+                        ImGui::TextDisabled("No available 2D Sketches exist (all sketches are consumed).");
                         ImGui::Spacing();
                         if (ImGui::Button("+ Create 2D Sketch to Extrude", ImVec2(-1, 30))) {
                             std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
@@ -195,9 +199,9 @@ void CADGui::RenderUI(
                     ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Revolve from Reference Sketch");
                     ImGui::Separator();
 
-                    if (!sketchNodes.empty()) {
+                    if (!availableSketches.empty()) {
                         std::vector<std::string> sketchNames;
-                        for (const auto& s : sketchNodes) {
+                        for (const auto& s : availableSketches) {
                             sketchNames.push_back("[" + std::to_string(s->GetId()) + "] " + s->GetName() + 
                                                   " (" + std::to_string(s->GetProfile().size()) + " pts)");
                         }
@@ -227,7 +231,7 @@ void CADGui::RenderUI(
 
                         ImGui::Spacing();
                         if (ImGui::Button("+ Revolve from Selected Sketch", ImVec2(-1, 32))) {
-                            auto refSketch = sketchNodes[m_selectedSketchIndex];
+                            auto refSketch = availableSketches[m_selectedSketchIndex];
                             std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
                             Geom::Axis3D revAxis = (m_newRevolveAxis == 0) ? Geom::Axis3D::X() :
                                                    (m_newRevolveAxis == 2) ? Geom::Axis3D::Z() :
@@ -242,7 +246,7 @@ void CADGui::RenderUI(
                             m_selectedNodeId = node->GetId();
                         }
                     } else {
-                        ImGui::TextDisabled("No 2D Sketches exist in the Model Tree yet.");
+                        ImGui::TextDisabled("No available 2D Sketches exist (all sketches are consumed).");
                         ImGui::Spacing();
                         if (ImGui::Button("+ Create 2D Sketch to Revolve", ImVec2(-1, 30))) {
                             std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
@@ -383,14 +387,14 @@ void CADGui::RenderUI(
                     m_sketchModeActive = true;
                 }
 
-                if (!sketchNodes.empty()) {
+                if (!allSketches.empty()) {
                     ImGui::Spacing();
                     ImGui::Separator();
                     ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1.0f), "Interactive Canvas:");
                     if (ImGui::Button("✏ Open 2D Mouse Sketch Canvas", ImVec2(-1, 32))) {
                         m_sketchModeActive = true;
                         if (m_activeSketchId == 0) {
-                            m_activeSketchId = sketchNodes[0]->GetId();
+                            m_activeSketchId = allSketches[0]->GetId();
                         }
                     }
                 }
@@ -415,29 +419,67 @@ void CADGui::RenderUI(
 
         auto nodes = graph.GetNodes();
         std::shared_ptr<DAGNode> selectedNode = nullptr;
-
-        ImGui::BeginChild("NodeList", ImVec2(0, 130), true);
         for (const auto& node : nodes) {
+            if (node->GetId() == m_selectedNodeId) {
+                selectedNode = node;
+                break;
+            }
+        }
+
+        ImGui::BeginChild("NodeList", ImVec2(0, 150), true);
+        for (const auto& node : nodes) {
+            // Child sketches are displayed underneath their parent feature in the hierarchy
+            if (node->HasParentFeature()) {
+                continue;
+            }
+
+            auto childSketch = node->GetChildSketch();
             bool isSelected = (node->GetId() == m_selectedNodeId);
 
             std::string prefix = "[Solid] ";
-            if (auto s = std::dynamic_pointer_cast<SketchNode>(node)) {
+            if (std::dynamic_pointer_cast<SketchNode>(node)) {
                 prefix = "[Sketch] ";
             } else if (auto e = std::dynamic_pointer_cast<ExtrudeNode>(node)) {
-                prefix = e->GetSketchReference() ? "[Extrude (Ref)] " : "[Extrude] ";
+                prefix = e->GetSketchReference() ? "[Extrude] " : "[Extrude] ";
             } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
-                prefix = r->GetSketchReference() ? "[Revolve (Ref)] " : "[Revolve] ";
+                prefix = r->GetSketchReference() ? "[Revolve] " : "[Revolve] ";
             } else if (std::dynamic_pointer_cast<DatumPlaneNode>(node)) {
                 prefix = "[DatumPlane] ";
             }
 
             std::string label = prefix + node->GetName() + " (ID " + std::to_string(node->GetId()) + ")";
-            if (ImGui::Selectable(label.c_str(), isSelected)) {
-                m_selectedNodeId = node->GetId();
-            }
-            if (isSelected) {
-                selectedNode = node;
-                if (m_selectionScrollPending) {
+
+            if (childSketch) {
+                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+                if (isSelected) {
+                    flags |= ImGuiTreeNodeFlags_Selected;
+                }
+
+                bool nodeOpen = ImGui::TreeNodeEx(reinterpret_cast<void*>(node->GetId()), flags, "%s", label.c_str());
+                if (ImGui::IsItemClicked()) {
+                    m_selectedNodeId = node->GetId();
+                }
+                if (isSelected && m_selectionScrollPending) {
+                    ImGui::SetScrollHereY(0.5f);
+                }
+
+                if (nodeOpen) {
+                    bool isChildSelected = (childSketch->GetId() == m_selectedNodeId);
+                    std::string childLabel = "↳ [Sketch] " + childSketch->GetName() + " (ID " + std::to_string(childSketch->GetId()) + ")";
+
+                    if (ImGui::Selectable(childLabel.c_str(), isChildSelected)) {
+                        m_selectedNodeId = childSketch->GetId();
+                    }
+                    if (isChildSelected && m_selectionScrollPending) {
+                        ImGui::SetScrollHereY(0.5f);
+                    }
+                    ImGui::TreePop();
+                }
+            } else {
+                if (ImGui::Selectable(label.c_str(), isSelected)) {
+                    m_selectedNodeId = node->GetId();
+                }
+                if (isSelected && m_selectionScrollPending) {
                     ImGui::SetScrollHereY(0.5f);
                 }
             }
@@ -640,10 +682,58 @@ void CADGui::RenderUI(
             }
 
             ImGui::Spacing();
-            if (ImGui::Button("Delete Selected Object", ImVec2(-1, 26))) {
-                graph.RemoveNode(selectedNode->GetId());
-                graph.PublishCombinedSceneMesh(device, exchange);
-                m_selectedNodeId = 0;
+            ImGui::Separator();
+
+            bool isChildSketch = false;
+            if (auto sketch = std::dynamic_pointer_cast<SketchNode>(selectedNode)) {
+                if (sketch->HasParentFeature()) {
+                    isChildSketch = true;
+                    if (auto parent = sketch->GetParentFeature()) {
+                        ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Child of feature: '%s'", parent->GetName().c_str());
+                    }
+                    ImGui::TextDisabled("(Deleting the parent feature will promote this sketch)");
+                }
+            }
+
+            std::string delBtnText = "Delete Selected Object";
+            if (selectedNode->GetChildSketch()) {
+                delBtnText = "🗑 Delete Feature (Promotes Child Sketch)";
+            } else if (isChildSketch) {
+                delBtnText = "";
+            } else if (std::dynamic_pointer_cast<SketchNode>(selectedNode)) {
+                delBtnText = "🗑 Delete 2D Sketch";
+            } else {
+                delBtnText = "🗑 Delete Feature";
+            }
+
+            if (!delBtnText.empty()) {
+                if (ImGui::Button(delBtnText.c_str(), ImVec2(-1, 28))) {
+                    uint64_t delId = selectedNode->GetId();
+                    auto child = selectedNode->GetChildSketch();
+                    graph.RemoveNode(delId);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    graph.PublishCombinedSceneMesh(device, exchange);
+                    if (child) {
+                        m_selectedNodeId = child->GetId();
+                    } else {
+                        m_selectedNodeId = 0;
+                    }
+                }
+            }
+
+            if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+                if (!isChildSketch) {
+                    uint64_t delId = selectedNode->GetId();
+                    auto child = selectedNode->GetChildSketch();
+                    graph.RemoveNode(delId);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    graph.PublishCombinedSceneMesh(device, exchange);
+                    if (child) {
+                        m_selectedNodeId = child->GetId();
+                    } else {
+                        m_selectedNodeId = 0;
+                    }
+                }
             }
         } else {
             ImGui::TextDisabled("Select an object or sketch from the Model Tree above to inspect.");

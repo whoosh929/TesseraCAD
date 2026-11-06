@@ -162,6 +162,17 @@ public:
     [[nodiscard]] bool IsConsumed() const noexcept { return m_isConsumed; }
     void SetConsumed(bool consumed) noexcept { m_isConsumed = consumed; }
 
+    [[nodiscard]] std::shared_ptr<DAGNode> GetParentFeature() const noexcept override {
+        return m_parentFeature.lock();
+    }
+    void SetParentFeature(std::shared_ptr<DAGNode> parent) noexcept {
+        m_parentFeature = parent;
+        m_isConsumed = (parent != nullptr);
+    }
+    [[nodiscard]] bool HasParentFeature() const noexcept override {
+        return !m_parentFeature.expired();
+    }
+
     [[nodiscard]] bool IsVisible() const noexcept { return m_visible; }
     void SetVisible(bool visible) noexcept { 
         m_visible = visible;
@@ -242,6 +253,7 @@ private:
     std::vector<std::array<float, 2>> m_profile;
     bool m_isConsumed{false};
     bool m_visible{true};
+    std::weak_ptr<DAGNode> m_parentFeature;
 };
 
 } // namespace Tessera

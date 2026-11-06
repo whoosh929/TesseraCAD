@@ -72,6 +72,18 @@ public:
     }
 
     [[nodiscard]] std::shared_ptr<SketchNode> GetSketchReference() const noexcept { return m_sketchNode; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetChildSketch() const noexcept override { return m_sketchNode; }
+
+    void DetachChildSketch() noexcept override {
+        if (m_sketchNode) {
+            m_sketchNode->SetParentFeature(nullptr);
+            m_sketchNode->SetConsumed(false);
+            m_sketchNode->SetVisible(true);
+            m_sketchNode->MarkDirty();
+            m_sketchNode = nullptr;
+        }
+    }
+
     [[nodiscard]] float GetHeight() const noexcept { return m_height; }
     [[nodiscard]] const std::vector<std::array<float, 2>>& GetProfile() const noexcept { return m_profile; }
     [[nodiscard]] SketchPlane GetPlane() const noexcept { return m_plane; }

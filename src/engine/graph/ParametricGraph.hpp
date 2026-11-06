@@ -66,6 +66,14 @@ public:
 
     void AddNode(std::shared_ptr<DAGNode> node) {
         std::lock_guard<std::mutex> lock(m_graphMutex);
+        if (node) {
+            if (auto child = node->GetChildSketch()) {
+                if (auto sketch = std::dynamic_pointer_cast<SketchNode>(child)) {
+                    sketch->SetParentFeature(node);
+                    sketch->SetVisible(false);
+                }
+            }
+        }
         m_nodes.push_back(node);
     }
 
@@ -170,6 +178,13 @@ public:
 
     void RemoveNode(uint64_t id) {
         std::lock_guard<std::mutex> lock(m_graphMutex);
+        for (auto& node : m_nodes) {
+            if (node && node->GetId() == id) {
+                // If this feature has a child sketch, promote the sketch to parentless
+                node->DetachChildSketch();
+                break;
+            }
+        }
         m_nodes.erase(std::remove_if(m_nodes.begin(), m_nodes.end(), [id](const auto& n) {
             return n->GetId() == id;
         }), m_nodes.end());

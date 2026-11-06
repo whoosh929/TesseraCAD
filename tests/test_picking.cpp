@@ -2,6 +2,8 @@
 #include "engine/graph/ParametricGraph.hpp"
 #include "engine/graph/BoxNode.hpp"
 #include "engine/graph/SketchNode.hpp"
+#include "engine/graph/ExtrudeNode.hpp"
+#include "engine/graph/RevolveNode.hpp"
 #include <iostream>
 #include <memory>
 #include <cmath>
@@ -134,6 +136,75 @@ bool TestParametricGraphPickNode() {
     return true;
 }
 
+bool TestFeatureSketchChildAndPromotion() {
+    std::cout << "[Test] Feature Child Sketch Hierarchy & Promotion on Deletion...\n";
+
+    ParametricGraph graph(nullptr);
+
+    // 1. Create a parentless sketch
+    auto sketch = std::make_shared<SketchNode>("Sketch_Rect", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(3.0f, 2.0f);
+    graph.AddNode(sketch);
+
+    TEST_ASSERT(!sketch->HasParentFeature(), "New sketch must be parentless");
+    TEST_ASSERT(!sketch->IsConsumed(), "New sketch must not be consumed");
+    TEST_ASSERT(sketch->IsVisible(), "Parentless sketch must be visible");
+
+    // 2. Create an Extrude feature referencing the sketch
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_Feature", sketch, 2.5f);
+    graph.AddNode(extrude);
+
+    // Verify sketch became child underneath the feature
+    TEST_ASSERT(sketch->HasParentFeature(), "Sketch must now have a parent feature");
+    TEST_ASSERT(sketch->GetParentFeature() == extrude, "Parent feature must be the extrude feature");
+    TEST_ASSERT(extrude->GetChildSketch() == sketch, "Extrude must report sketch as its child");
+    TEST_ASSERT(sketch->IsConsumed(), "Sketch must be marked consumed");
+    TEST_ASSERT(!sketch->IsVisible(), "Consumed sketch should have visibility hidden under solid feature");
+
+    // 3. Verify only unconsumed sketches are available for association
+    size_t availableCount = 0;
+    for (const auto& n : graph.GetNodes()) {
+        if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+            if (!s->HasParentFeature() && !s->IsConsumed()) {
+                availableCount++;
+            }
+        }
+    }
+    TEST_ASSERT(availableCount == 0, "Consumed sketch must not be available for association with another feature");
+
+    // 4. Delete the Extrude feature
+    uint64_t extrudeId = extrude->GetId();
+    uint64_t sketchId = sketch->GetId();
+    graph.RemoveNode(extrudeId);
+
+    // Verify extrude is gone
+    bool extrudeFound = false;
+    bool sketchFound = false;
+    for (const auto& n : graph.GetNodes()) {
+        if (n->GetId() == extrudeId) extrudeFound = true;
+        if (n->GetId() == sketchId) sketchFound = true;
+    }
+    TEST_ASSERT(!extrudeFound, "Extrude feature must be removed from graph");
+    TEST_ASSERT(sketchFound, "Sketch must remain in graph when feature is deleted");
+
+    // Verify sketch is promoted to a parentless sketch
+    TEST_ASSERT(!sketch->HasParentFeature(), "Sketch must be promoted to parentless");
+    TEST_ASSERT(sketch->GetParentFeature() == nullptr, "Sketch parent feature must be null");
+    TEST_ASSERT(!sketch->IsConsumed(), "Promoted sketch must not be consumed");
+    TEST_ASSERT(sketch->IsVisible(), "Promoted sketch visibility must be restored");
+    TEST_ASSERT(sketch->IsDirty(), "Promoted sketch must be marked dirty for re-tessellation");
+
+    // 5. Verify the promoted sketch can now be associated with a new feature (e.g. Revolve)
+    auto revolve = std::make_shared<RevolveNode>("Revolve_Feature", sketch, 360.0f);
+    graph.AddNode(revolve);
+
+    TEST_ASSERT(sketch->HasParentFeature(), "Sketch should now be child of the new revolve feature");
+    TEST_ASSERT(sketch->GetParentFeature() == revolve, "Parent feature must be revolve");
+    TEST_ASSERT(revolve->GetChildSketch() == sketch, "Revolve must report sketch as child");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -143,6 +214,7 @@ int main() {
     pass &= TestRayIntersectsTriangle();
     pass &= TestCameraScreenPointToRay();
     pass &= TestParametricGraphPickNode();
+    pass &= TestFeatureSketchChildAndPromotion();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";
@@ -152,3 +224,4 @@ int main() {
         return 1;
     }
 }
+
