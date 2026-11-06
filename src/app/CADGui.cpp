@@ -133,62 +133,11 @@ void CADGui::RenderUI(
             // TAB 1: 3D Features & Solids
             // =================================================================
             if (ImGui::BeginTabItem("3D Features")) {
-                const char* shapeTypes[] = { "Parametric Box", "Parametric Cylinder", "Parametric Sphere", "Extrude Feature", "Revolve Feature" };
+                const char* shapeTypes[] = { "Extrude Feature (from Sketch)", "Revolve Feature (from Sketch)", "Box Feature (from Sketch)", "Parametric Cylinder", "Parametric Sphere" };
                 ImGui::Combo("Feature Type", &m_selectedShapeType, shapeTypes, IM_ARRAYSIZE(shapeTypes));
                 ImGui::Spacing();
 
                 if (m_selectedShapeType == 0) {
-                    // Box parameters
-                    ImGui::SliderFloat("Width (X)",  &m_newBoxDims[0], 0.2f, 15.0f, "%.2f m");
-                    ImGui::SliderFloat("Height (Y)", &m_newBoxDims[1], 0.2f, 15.0f, "%.2f m");
-                    ImGui::SliderFloat("Depth (Z)",  &m_newBoxDims[2], 0.2f, 15.0f, "%.2f m");
-
-                    ImGui::Spacing();
-                    if (ImGui::Button("+ Create Parametric Box", ImVec2(-1, 32))) {
-                        std::string name = "Box_" + std::to_string(m_shapeCounter++);
-                        auto node = std::make_shared<BoxNode>(name, m_newBoxDims[0], m_newBoxDims[1], m_newBoxDims[2]);
-                        float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
-                        float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
-                        node->SetPosition(posX, 0.0f, posZ);
-                        graph.AddNode(node);
-                        graph.EvaluateDirtyNodes(device, exchange);
-                        m_selectedNodeId = node->GetId();
-                    }
-                } else if (m_selectedShapeType == 1) {
-                    // Cylinder parameters
-                    ImGui::SliderFloat("Radius", &m_newCylinderRadius, 0.1f, 10.0f, "%.2f m");
-                    ImGui::SliderFloat("Height", &m_newCylinderHeight, 0.2f, 15.0f, "%.2f m");
-                    ImGui::SliderInt("Segments", &m_newCylinderSegments, 8, 96);
-
-                    ImGui::Spacing();
-                    if (ImGui::Button("+ Create Parametric Cylinder", ImVec2(-1, 32))) {
-                        std::string name = "Cylinder_" + std::to_string(m_shapeCounter++);
-                        auto node = std::make_shared<CylinderNode>(name, m_newCylinderRadius, m_newCylinderHeight, m_newCylinderSegments);
-                        float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
-                        float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
-                        node->SetPosition(posX, 0.0f, posZ);
-                        graph.AddNode(node);
-                        graph.EvaluateDirtyNodes(device, exchange);
-                        m_selectedNodeId = node->GetId();
-                    }
-                } else if (m_selectedShapeType == 2) {
-                    // Sphere parameters
-                    ImGui::SliderFloat("Radius", &m_newSphereRadius, 0.2f, 10.0f, "%.2f m");
-                    ImGui::SliderInt("Rings",   &m_newSphereRings, 6, 48);
-                    ImGui::SliderInt("Sectors", &m_newSphereSectors, 8, 64);
-
-                    ImGui::Spacing();
-                    if (ImGui::Button("+ Create Parametric Sphere", ImVec2(-1, 32))) {
-                        std::string name = "Sphere_" + std::to_string(m_shapeCounter++);
-                        auto node = std::make_shared<SphereNode>(name, m_newSphereRadius, m_newSphereRings, m_newSphereSectors);
-                        float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
-                        float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
-                        node->SetPosition(posX, 0.0f, posZ);
-                        graph.AddNode(node);
-                        graph.EvaluateDirtyNodes(device, exchange);
-                        m_selectedNodeId = node->GetId();
-                    }
-                } else if (m_selectedShapeType == 3) {
                     // Extrude Feature (CAD workflow: extrude from reference sketch)
                     ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Extrude from Reference Sketch");
                     ImGui::Separator();
@@ -241,7 +190,7 @@ void CADGui::RenderUI(
                             m_sketchModeActive = true;
                         }
                     }
-                } else if (m_selectedShapeType == 4) {
+                } else if (m_selectedShapeType == 1) {
                     // Revolve Feature (CAD workflow: rotational sweep around axis)
                     ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Revolve from Reference Sketch");
                     ImGui::Separator();
@@ -306,6 +255,73 @@ void CADGui::RenderUI(
                             m_activeSketchId = sketch->GetId();
                             m_sketchModeActive = true;
                         }
+                    }
+                } else if (m_selectedShapeType == 2) {
+                    // Parametric Box (Requires creating and referencing a 2D rectangular sketch)
+                    ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Parametric Box (from 2D Reference Sketch)");
+                    ImGui::Separator();
+
+                    ImGui::SliderFloat("Width (X)",  &m_newBoxDims[0], 0.2f, 15.0f, "%.2f m");
+                    ImGui::SliderFloat("Depth (Z)",  &m_newBoxDims[2], 0.2f, 15.0f, "%.2f m");
+                    ImGui::SliderFloat("Height (Y)", &m_newBoxDims[1], 0.2f, 15.0f, "%.2f m");
+
+                    const char* planes[] = { "XZ Ground Plane (Top)", "XY Front Plane", "YZ Right Plane" };
+                    ImGui::Combo("Base Datum Plane", &m_newSketchPlane, planes, IM_ARRAYSIZE(planes));
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("+ Create Box (Rectangle Sketch + Extrude)", ImVec2(-1, 32))) {
+                        uint32_t counter = m_shapeCounter++;
+                        std::string sketchName = "Sketch_Box_" + std::to_string(counter);
+                        std::string extrudeName = "Box_" + std::to_string(counter);
+
+                        auto sketch = std::make_shared<SketchNode>(sketchName, static_cast<SketchPlane>(m_newSketchPlane));
+                        sketch->SetPresetRectangle(m_newBoxDims[0], m_newBoxDims[2]);
+
+                        float posX = static_cast<float>((counter % 4) - 1.5f) * 4.0f;
+                        float posZ = static_cast<float>(counter / 4) * 4.0f;
+                        sketch->SetPosition(posX, 0.0f, posZ);
+                        graph.AddNode(sketch);
+
+                        auto extrude = std::make_shared<ExtrudeNode>(extrudeName, sketch, m_newBoxDims[1]);
+                        extrude->SetPosition(posX, 0.0f, posZ);
+                        graph.AddNode(extrude);
+
+                        graph.EvaluateDirtyNodes(device, exchange);
+                        m_selectedNodeId = extrude->GetId();
+                    }
+                } else if (m_selectedShapeType == 3) {
+                    // Cylinder parameters
+                    ImGui::SliderFloat("Radius", &m_newCylinderRadius, 0.1f, 10.0f, "%.2f m");
+                    ImGui::SliderFloat("Height", &m_newCylinderHeight, 0.2f, 15.0f, "%.2f m");
+                    ImGui::SliderInt("Segments", &m_newCylinderSegments, 8, 96);
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("+ Create Parametric Cylinder", ImVec2(-1, 32))) {
+                        std::string name = "Cylinder_" + std::to_string(m_shapeCounter++);
+                        auto node = std::make_shared<CylinderNode>(name, m_newCylinderRadius, m_newCylinderHeight, m_newCylinderSegments);
+                        float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                        float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                        node->SetPosition(posX, 0.0f, posZ);
+                        graph.AddNode(node);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                        m_selectedNodeId = node->GetId();
+                    }
+                } else if (m_selectedShapeType == 4) {
+                    // Sphere parameters
+                    ImGui::SliderFloat("Radius", &m_newSphereRadius, 0.2f, 10.0f, "%.2f m");
+                    ImGui::SliderInt("Rings",   &m_newSphereRings, 6, 48);
+                    ImGui::SliderInt("Sectors", &m_newSphereSectors, 8, 64);
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("+ Create Parametric Sphere", ImVec2(-1, 32))) {
+                        std::string name = "Sphere_" + std::to_string(m_shapeCounter++);
+                        auto node = std::make_shared<SphereNode>(name, m_newSphereRadius, m_newSphereRings, m_newSphereSectors);
+                        float posX = static_cast<float>((m_shapeCounter % 4) - 1.5f) * 4.0f;
+                        float posZ = static_cast<float>(m_shapeCounter / 4) * 4.0f;
+                        node->SetPosition(posX, 0.0f, posZ);
+                        graph.AddNode(node);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                        m_selectedNodeId = node->GetId();
                     }
                 }
 
