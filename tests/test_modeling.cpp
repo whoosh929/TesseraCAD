@@ -184,6 +184,93 @@ bool TestPartialRevolve() {
     return true;
 }
 
+bool TestRevolveCylindricalThicknessFromSketch() {
+    std::cout << "[Test] Revolve of Sketch Drawing Dictating Cylindrical Model Thickness...\n";
+
+    // 2D sketch rectangle on XY plane:
+    // Left edge at u = 1.5, right edge at u = 3.5 (wall thickness = 3.5 - 1.5 = 2.0 m)
+    // Bottom edge at v = 0.0, top edge at v = 5.0 (height = 5.0 m)
+    Sketch2D sketch(Plane::XY());
+    sketch.add_line(Point2D(1.5, 0.0), Point2D(3.5, 0.0));
+    sketch.add_line(Point2D(3.5, 0.0), Point2D(3.5, 5.0));
+    sketch.add_line(Point2D(3.5, 5.0), Point2D(1.5, 5.0));
+    sketch.add_line(Point2D(1.5, 5.0), Point2D(1.5, 0.0));
+
+    auto profiles = sketch.extract_profiles();
+    TEST_ASSERT(profiles.size() == 1, "Expected 1 profile for rectangular sketch");
+
+    RevolveOp::Params params;
+    params.axis = Axis3D::Y(); // Revolve around in-plane vertical axis (V-axis)
+    params.angle_radians = TWO_PI; // 360 deg
+    params.angular_segments = 32;
+    params.is_solid = true;
+
+    auto body = RevolveOp::Execute(profiles[0], sketch.plane, params);
+    TEST_ASSERT(body != nullptr, "Revolve body is null");
+    TEST_ASSERT(body->is_solid(), "360-degree revolve of closed profile must be solid");
+
+    CADMesh mesh = Tessellator::Tessellate(*body);
+    TEST_ASSERT(!mesh.vertices.empty(), "Mesh vertices empty");
+    TEST_ASSERT(!mesh.indices.empty(), "Mesh indices empty");
+
+    // Verify bounding box matches sketch:
+    // Radius goes from 1.5 to 3.5: x and z should be in [-3.5, 3.5]
+    // Height goes from 0.0 to 5.0: y should be in [0.0, 5.0]
+    float minX = 1e9f, maxX = -1e9f;
+    float minY = 1e9f, maxY = -1e9f;
+    float minZ = 1e9f, maxZ = -1e9f;
+    float minR = 1e9f, maxR = -1e9f;
+
+    bool foundTopCap = false;
+    bool foundBottomCap = false;
+    bool foundOuterWall = false;
+    bool foundInnerWall = false;
+
+    for (const auto& v : mesh.vertices) {
+        float x = v.position[0];
+        float y = v.position[1];
+        float z = v.position[2];
+        float r = std::hypot(x, z);
+
+        minX = std::min(minX, x); maxX = std::max(maxX, x);
+        minY = std::min(minY, y); maxY = std::max(maxY, y);
+        minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
+        minR = std::min(minR, r); maxR = std::max(maxR, r);
+
+        // Check top cap normal (y ≈ 5.0, normal points +Y)
+        if (std::abs(y - 5.0f) < 0.05f && v.normal[1] > 0.9f) {
+            foundTopCap = true;
+        }
+        // Check bottom cap normal (y ≈ 0.0, normal points -Y)
+        if (std::abs(y - 0.0f) < 0.05f && v.normal[1] < -0.9f) {
+            foundBottomCap = true;
+        }
+        // Check outer cylinder normal (r ≈ 3.5, normal points radially outward)
+        if (std::abs(r - 3.5f) < 0.05f) {
+            float radDot = (x * v.normal[0] + z * v.normal[2]) / r;
+            if (radDot > 0.9f) foundOuterWall = true;
+        }
+        // Check inner cylinder normal (r ≈ 1.5, normal points radially inward)
+        if (std::abs(r - 1.5f) < 0.05f) {
+            float radDot = (x * v.normal[0] + z * v.normal[2]) / r;
+            if (radDot < -0.9f) foundInnerWall = true;
+        }
+    }
+
+    TEST_ASSERT(std::abs(minR - 1.5f) < 0.05f, "Inner radius must be ~1.5m (dictated by sketch)");
+    TEST_ASSERT(std::abs(maxR - 3.5f) < 0.05f, "Outer radius must be ~3.5m (dictated by sketch)");
+    TEST_ASSERT(std::abs((maxR - minR) - 2.0f) < 0.1f, "Wall thickness must be 2.0m (dictated by sketch)");
+    TEST_ASSERT(std::abs(minY - 0.0f) < 0.05f, "Height base must be 0.0m (dictated by sketch)");
+    TEST_ASSERT(std::abs(maxY - 5.0f) < 0.05f, "Height top must be 5.0m (dictated by sketch)");
+
+    TEST_ASSERT(foundTopCap, "Top cap normal must point +Y");
+    TEST_ASSERT(foundBottomCap, "Bottom cap normal must point -Y");
+    TEST_ASSERT(foundOuterWall, "Outer wall normal must point radially outward");
+    TEST_ASSERT(foundInnerWall, "Inner wall normal must point radially inward");
+
+    return true;
+}
+
 int main() {
     std::cout << "=========================================================\n";
     std::cout << "     TesseraCAD Modeling Operators Unit Tests            \n";
@@ -195,6 +282,7 @@ int main() {
     passed &= TestHollowExtrude();
     passed &= TestFullRevolve();
     passed &= TestPartialRevolve();
+    passed &= TestRevolveCylindricalThicknessFromSketch();
 
     std::cout << "=========================================================\n";
     if (passed) {

@@ -33,22 +33,24 @@ Application::Application() {
     // 3. Create initial parametric 2D Sketches & linked 3D Features (CAD B-Rep workflow)
     auto initialSketch = std::make_shared<SketchNode>("Sketch_LBracket", SketchPlane::XZ_Ground);
     initialSketch->SetPresetLBracket(4.0f, 4.0f, 1.2f);
-    initialSketch->SetPosition(-2.5f, 0.0f, 0.0f);
+    initialSketch->SetPosition(-3.0f, 0.0f, 0.0f);
     m_graph->AddNode(initialSketch);
 
     auto initialExtrude = std::make_shared<ExtrudeNode>("Extrude_LBracket", initialSketch, 3.0f);
-    initialExtrude->SetPosition(-2.5f, 0.0f, 0.0f);
+    initialExtrude->SetPosition(-3.0f, 0.0f, 0.0f);
     m_graph->AddNode(initialExtrude);
 
-    // Box created strictly by referencing a 2D rectangular sketch
-    auto boxSketch = std::make_shared<SketchNode>("Sketch_Box", SketchPlane::XZ_Ground);
-    boxSketch->SetPresetRectangle(3.0f, 3.0f);
-    boxSketch->SetPosition(3.5f, 0.0f, 0.0f);
-    m_graph->AddNode(boxSketch);
+    // Revolve feature created by revolving a 2D sketch cross-section around the axis
+    // Cylindrical wall thickness is dictated by the sketch drawing (u=1.0 to 2.2 -> thickness=1.2m, height=3.5m)
+    auto cylSketch = std::make_shared<SketchNode>("Sketch_CylinderProfile", SketchPlane::XY_Front);
+    cylSketch->SetProfile({ {1.0f, 0.0f}, {2.2f, 0.0f}, {2.2f, 3.5f}, {1.0f, 3.5f} });
+    cylSketch->SetPosition(2.5f, 0.0f, 0.0f);
+    m_graph->AddNode(cylSketch);
 
-    auto boxFeature = std::make_shared<ExtrudeNode>("Box_Feature_01", boxSketch, 1.5f);
-    boxFeature->SetPosition(3.5f, 0.0f, 0.0f);
-    m_graph->AddNode(boxFeature);
+    auto cylRevolve = std::make_shared<RevolveNode>("Revolve_Cylinder", cylSketch, 360.0f, RevolveAxisMode::Sketch_V_Axis);
+    cylRevolve->SetPosition(2.5f, 0.0f, 0.0f);
+    m_graph->AddNode(cylRevolve);
+    m_testRevolveNode = cylRevolve;
 
     // 4. Initialize Desktop Window & Native Graphics HAL
     InitWindow();
@@ -239,15 +241,8 @@ void Application::Stop() {
     }
 }
 
-void Application::SetBoxDimensions(float width, float height, float depth) {
-    if (m_testBoxNode) {
-        m_testBoxNode->SetDimensions(width, height, depth);
-        m_graph->EvaluateDirtyNodes(m_rhiDevice.get(), m_meshExchange);
-    }
-}
-
 void Application::Run() {
-    // Trigger initial DAG evaluation of initial Box on background worker pool
+    // Trigger initial DAG evaluation on background worker pool
     m_graph->EvaluateDirtyNodes(m_rhiDevice.get(), m_meshExchange);
 
     std::cout << "\n[TesseraCAD] Interactive CAD GUI active. Waiting for user input in desktop window...\n";

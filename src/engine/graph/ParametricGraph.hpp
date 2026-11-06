@@ -160,7 +160,7 @@ public:
                     sketchEdges.push_back(edgeIdx + vOffset);
                 }
             } else {
-                // Solid 3D features (Extrude, Revolve, Box, etc.)
+                // Solid 3D features (Extrude, Revolve, etc.)
                 const auto& verts = node->GetCachedVertices();
                 const auto& indices = node->GetCachedIndices();
                 const auto& edges = node->GetCachedEdges();

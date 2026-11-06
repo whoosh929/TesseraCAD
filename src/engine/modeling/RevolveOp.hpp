@@ -97,57 +97,93 @@ public:
         // =====================================================================
         auto GenerateRevolvedWalls = [&](const std::vector<Geom::Point2D>& wirePts, bool isHole) {
             size_t n = wirePts.size();
+            if (n < 2) return;
             size_t segCount = profile.is_closed ? n : (n - 1);
+
+            // Ensure consistent CCW winding for outer boundary (CW for hole)
+            double signedArea = 0.0;
+            for (size_t i = 0; i < n; ++i) {
+                size_t nextI = (i + 1) % n;
+                signedArea += (wirePts[i].u * wirePts[nextI].v - wirePts[nextI].u * wirePts[i].v);
+            }
+            signedArea *= 0.5;
+
+            std::vector<Geom::Point2D> orientedPts = wirePts;
+            if (!isHole && signedArea < 0.0) {
+                std::reverse(orientedPts.begin(), orientedPts.end());
+            } else if (isHole && signedArea > 0.0) {
+                std::reverse(orientedPts.begin(), orientedPts.end());
+            }
 
             // Pre-calculate 3D points at each angular slice
             // ringPoints[k][i] = 3D point of vertex i at angle slice k
             std::vector<std::vector<Geom::Point3D>> ringPoints(numSlices + 1, std::vector<Geom::Point3D>(n));
-            std::vector<std::vector<Geom::Vector3D>> ringNormals(numSlices + 1, std::vector<Geom::Vector3D>(n));
-
             for (int k = 0; k <= numSlices; ++k) {
                 double theta = (static_cast<double>(k) / static_cast<double>(numSlices)) * sweepAngle;
                 auto rot = Geom::Transform3D::RotationAroundAxis(params.axis.origin, params.axis.direction, theta);
 
                 for (size_t i = 0; i < n; ++i) {
-                    Geom::Point3D basePt = sketchPlane.to_world(wirePts[i]);
-                    Geom::Point3D rotPt = rot.transform_point(basePt);
-                    ringPoints[k][i] = rotPt;
-
-                    // Approximate vertex normal
-                    Geom::Point3D projAxis = params.axis.project_point(rotPt);
-                    Geom::Vector3D radDir = (rotPt - projAxis).normalized();
-                    ringNormals[k][i] = isHole ? -radDir : radDir;
+                    Geom::Point3D basePt = sketchPlane.to_world(orientedPts[i]);
+                    ringPoints[k][i] = rot.transform_point(basePt);
                 }
             }
 
-            // Create ruled quad faces between slices
+            // Create ruled quad faces between slices for each profile segment
             for (size_t i = 0; i < segCount; ++i) {
                 size_t nextI = (i + 1) % n;
 
+                double du = orientedPts[nextI].u - orientedPts[i].u;
+                double dv = orientedPts[nextI].v - orientedPts[i].v;
+                double len = std::hypot(du, dv);
+                if (len < 1e-6) continue;
+
+                // Outward 2D normal for CCW loop: (dv, -du) / len
+                double n2d_u = dv / len;
+                double n2d_v = -du / len;
+                if (isHole) {
+                    n2d_u = -n2d_u;
+                    n2d_v = -n2d_v;
+                }
+
+                Geom::Vector3D n3d_base = (sketchPlane.u_axis * n2d_u + sketchPlane.v_axis * n2d_v).normalized();
+
+                // Check if segment is directly on axis of revolution (e.g. inner edge of solid cylinder on axis)
+                Geom::Point3D p0 = sketchPlane.to_world(orientedPts[i]);
+                Geom::Point3D p1 = sketchPlane.to_world(orientedPts[nextI]);
+                double d0 = (p0 - params.axis.project_point(p0)).length();
+                double d1 = (p1 - params.axis.project_point(p1)).length();
+                if (d0 < 1e-4 && d1 < 1e-4) {
+                    // Segment lies on axis: zero swept area, internal to solid
+                    continue;
+                }
+
                 for (int k = 0; k < numSlices; ++k) {
                     int nextK = k + 1;
+                    double thetaK = (static_cast<double>(k) / static_cast<double>(numSlices)) * sweepAngle;
+                    double thetaNextK = (static_cast<double>(nextK) / static_cast<double>(numSlices)) * sweepAngle;
+
+                    auto rotK = Geom::Transform3D::RotationAroundAxis(params.axis.origin, params.axis.direction, thetaK);
+                    auto rotNextK = Geom::Transform3D::RotationAroundAxis(params.axis.origin, params.axis.direction, thetaNextK);
+
+                    Geom::Vector3D nK = rotK.transform_vector(n3d_base).normalized();
+                    Geom::Vector3D nNextK = rotNextK.transform_vector(n3d_base).normalized();
 
                     Geom::Point3D p00 = ringPoints[k][i];
                     Geom::Point3D p10 = ringPoints[k][nextI];
                     Geom::Point3D p11 = ringPoints[nextK][nextI];
                     Geom::Point3D p01 = ringPoints[nextK][i];
 
-                    Geom::Vector3D n00 = ringNormals[k][i];
-                    Geom::Vector3D n10 = ringNormals[k][nextI];
-                    Geom::Vector3D n11 = ringNormals[nextK][nextI];
-                    Geom::Vector3D n01 = ringNormals[nextK][i];
-
                     auto face = std::make_shared<Face>(faceIdCounter++, SurfaceGeometryType::Ruled);
 
                     face->mesh_vertices = {
                         {{static_cast<float>(p00.x), static_cast<float>(p00.y), static_cast<float>(p00.z)},
-                         {static_cast<float>(n00.x), static_cast<float>(n00.y), static_cast<float>(n00.z)}},
+                         {static_cast<float>(nK.x), static_cast<float>(nK.y), static_cast<float>(nK.z)}},
                         {{static_cast<float>(p10.x), static_cast<float>(p10.y), static_cast<float>(p10.z)},
-                         {static_cast<float>(n10.x), static_cast<float>(n10.y), static_cast<float>(n10.z)}},
+                         {static_cast<float>(nK.x), static_cast<float>(nK.y), static_cast<float>(nK.z)}},
                         {{static_cast<float>(p11.x), static_cast<float>(p11.y), static_cast<float>(p11.z)},
-                         {static_cast<float>(n11.x), static_cast<float>(n11.y), static_cast<float>(n11.z)}},
+                         {static_cast<float>(nNextK.x), static_cast<float>(nNextK.y), static_cast<float>(nNextK.z)}},
                         {{static_cast<float>(p01.x), static_cast<float>(p01.y), static_cast<float>(p01.z)},
-                         {static_cast<float>(n01.x), static_cast<float>(n01.y), static_cast<float>(n01.z)}}
+                         {static_cast<float>(nNextK.x), static_cast<float>(nNextK.y), static_cast<float>(nNextK.z)}}
                     };
 
                     face->mesh_indices = {0, 1, 2, 0, 2, 3};

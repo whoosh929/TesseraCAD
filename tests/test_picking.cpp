@@ -1,6 +1,5 @@
 #include "engine/render/Camera.hpp"
 #include "engine/graph/ParametricGraph.hpp"
-#include "engine/graph/BoxNode.hpp"
 #include "engine/graph/SketchNode.hpp"
 #include "engine/graph/ExtrudeNode.hpp"
 #include "engine/graph/RevolveNode.hpp"
@@ -93,31 +92,37 @@ bool TestParametricGraphPickNode() {
 
     ParametricGraph graph(nullptr);
 
-    // Create a mock box node
-    auto box1 = std::make_shared<BoxNode>("Box_Front", 1.0f, 1.0f, 1.0f);
-    box1->SetPosition(0.0f, 0.0f, 0.0f);
+    // Create extruded solid features
+    auto sk1 = std::make_shared<SketchNode>("Sketch_Front", SketchPlane::XY_Front);
+    sk1->SetPresetRectangle(2.0f, 2.0f);
+    sk1->SetPosition(0.0f, 0.0f, 0.0f);
+    auto solid1 = std::make_shared<ExtrudeNode>("Solid_Front", sk1, 1.0f);
+    solid1->SetPosition(0.0f, 0.0f, 0.0f);
     AtomicMeshExchange exchange;
-    box1->Evaluate(nullptr, exchange);
-    graph.AddNode(box1);
+    solid1->Evaluate(nullptr, exchange);
+    graph.AddNode(solid1);
 
-    auto box2 = std::make_shared<BoxNode>("Box_Right", 1.0f, 1.0f, 1.0f);
-    box2->SetPosition(5.0f, 0.0f, 0.0f);
-    box2->Evaluate(nullptr, exchange);
-    graph.AddNode(box2);
+    auto sk2 = std::make_shared<SketchNode>("Sketch_Right", SketchPlane::XY_Front);
+    sk2->SetPresetRectangle(2.0f, 2.0f);
+    sk2->SetPosition(5.0f, 0.0f, 0.0f);
+    auto solid2 = std::make_shared<ExtrudeNode>("Solid_Right", sk2, 1.0f);
+    solid2->SetPosition(5.0f, 0.0f, 0.0f);
+    solid2->Evaluate(nullptr, exchange);
+    graph.AddNode(solid2);
 
-    // 1. Ray targeting Box 1 at (0, 0, 0)
+    // 1. Ray targeting Solid 1 at (0, 0, 0)
     Point3D rayOrig1(0.0, 0.0, 10.0);
     Vector3D rayDir1(0.0, 0.0, -1.0);
     double dist = 0.0;
     uint64_t pickedId1 = graph.PickNode(rayOrig1, rayDir1, &dist);
-    TEST_ASSERT(pickedId1 == box1->GetId(), "PickNode should identify Box 1");
+    TEST_ASSERT(pickedId1 == solid1->GetId(), "PickNode should identify Solid 1");
     TEST_ASSERT(dist > 0.0 && dist < 10.0, "Intersection distance must be valid");
 
-    // 2. Ray targeting Box 2 at (5, 0, 0)
+    // 2. Ray targeting Solid 2 at (5, 0, 0)
     Point3D rayOrig2(5.0, 0.0, 10.0);
     Vector3D rayDir2(0.0, 0.0, -1.0);
     uint64_t pickedId2 = graph.PickNode(rayOrig2, rayDir2, &dist);
-    TEST_ASSERT(pickedId2 == box2->GetId(), "PickNode should identify Box 2");
+    TEST_ASSERT(pickedId2 == solid2->GetId(), "PickNode should identify Solid 2");
 
     // 3. Ray through empty space (e.g. at (10, 10, 10))
     Point3D rayOrigEmpty(10.0, 10.0, 10.0);
@@ -125,15 +130,18 @@ bool TestParametricGraphPickNode() {
     uint64_t pickedEmpty = graph.PickNode(rayOrigEmpty, rayDirEmpty, &dist);
     TEST_ASSERT(pickedEmpty == 0, "PickNode on empty space should return 0 (no hit)");
 
-    // 4. Occlusion: Add Box 3 behind Box 1 at (0, 0, -5)
-    auto box3 = std::make_shared<BoxNode>("Box_Behind", 1.0f, 1.0f, 1.0f);
-    box3->SetPosition(0.0f, 0.0f, -5.0f);
-    box3->Evaluate(nullptr, exchange);
-    graph.AddNode(box3);
+    // 4. Occlusion: Add Solid 3 behind Solid 1 at (0, 0, -5)
+    auto sk3 = std::make_shared<SketchNode>("Sketch_Behind", SketchPlane::XY_Front);
+    sk3->SetPresetRectangle(2.0f, 2.0f);
+    sk3->SetPosition(0.0f, 0.0f, -5.0f);
+    auto solid3 = std::make_shared<ExtrudeNode>("Solid_Behind", sk3, 1.0f);
+    solid3->SetPosition(0.0f, 0.0f, -5.0f);
+    solid3->Evaluate(nullptr, exchange);
+    graph.AddNode(solid3);
 
-    // Ray from (0, 0, 10) pointing -Z hits both Box 1 and Box 3. Closest (Box 1) should be selected.
+    // Ray from (0, 0, 10) pointing -Z hits both Solid 1 and Solid 3. Closest (Solid 1) should be selected.
     uint64_t pickedClosest = graph.PickNode(rayOrig1, rayDir1, &dist);
-    TEST_ASSERT(pickedClosest == box1->GetId(), "PickNode must return closest occluding node");
+    TEST_ASSERT(pickedClosest == solid1->GetId(), "PickNode must return closest occluding node");
 
     return true;
 }
@@ -612,6 +620,64 @@ bool TestTopBarReferenceGeometryAndFeatureWorkflows() {
     return true;
 }
 
+bool TestRevolveCylindricalThicknessAndNoBoxFeature() {
+    std::cout << "[Test] Revolve Cylindrical Thickness Dictated by Sketch & No Box Feature...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create a 2D sketch representing a cylindrical cross-section on Front XY plane:
+    // Left edge u = 1.2, right edge u = 2.8 (wall thickness = 2.8 - 1.2 = 1.6 m)
+    // Bottom edge v = 0.0, top edge v = 4.5 (height = 4.5 m)
+    auto sketch = std::make_shared<SketchNode>("Sketch_PipeCrossSection", SketchPlane::XY_Front);
+    sketch->SetProfile({ {1.2f, 0.0f}, {2.8f, 0.0f}, {2.8f, 4.5f}, {1.2f, 4.5f} });
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    // 2. Create RevolveNode revolving around the sketch's in-plane vertical axis (V-Axis)
+    auto revolve = std::make_shared<RevolveNode>("Revolve_Pipe", sketch, 360.0f, RevolveAxisMode::Sketch_V_Axis);
+    graph.AddNode(revolve);
+    revolve->Evaluate(&mockDevice, exchange);
+
+    // Verify dimensional metrics calculated directly from the sketch drawing:
+    TEST_ASSERT(std::abs(revolve->GetInnerRadius() - 1.2f) < 1e-4f, "Inner radius must match sketch u_min (1.2m)");
+    TEST_ASSERT(std::abs(revolve->GetOuterRadius() - 2.8f) < 1e-4f, "Outer radius must match sketch u_max (2.8m)");
+    TEST_ASSERT(std::abs(revolve->GetWallThickness() - 1.6f) < 1e-4f, "Wall thickness must match sketch drawing (1.6m)");
+    TEST_ASSERT(std::abs(revolve->GetCylinderHeight() - 4.5f) < 1e-4f, "Cylinder height must match sketch drawing (4.5m)");
+
+    // 3. Verify evaluated mesh coordinates
+    const auto& verts = revolve->GetCachedVertices();
+    TEST_ASSERT(!verts.empty(), "Revolved mesh must not be empty");
+
+    float minR = 1e9f, maxR = -1e9f;
+    float minY = 1e9f, maxY = -1e9f;
+    for (const auto& v : verts) {
+        float r = std::hypot(v.position[0], v.position[2]);
+        minR = std::min(minR, r);
+        maxR = std::max(maxR, r);
+        minY = std::min(minY, v.position[1]);
+        maxY = std::max(maxY, v.position[1]);
+    }
+
+    TEST_ASSERT(std::abs(minR - 1.2f) < 0.05f, "Evaluated inner radius must be ~1.2m");
+    TEST_ASSERT(std::abs(maxR - 2.8f) < 0.05f, "Evaluated outer radius must be ~2.8m");
+    TEST_ASSERT(std::abs(minY - 0.0f) < 0.05f, "Evaluated height base must be ~0.0m");
+    TEST_ASSERT(std::abs(maxY - 4.5f) < 0.05f, "Evaluated height top must be ~4.5m");
+
+    // 4. Modify sketch drawing to change thickness:
+    // Update profile to u=1.0 to 3.5 (new thickness = 2.5m, new height = 6.0m)
+    sketch->SetProfile({ {1.0f, 0.0f}, {3.5f, 0.0f}, {3.5f, 6.0f}, {1.0f, 6.0f} });
+    TEST_ASSERT(revolve->IsDirty(), "Revolve feature must become dirty when sketch changes");
+
+    revolve->Evaluate(&mockDevice, exchange);
+    TEST_ASSERT(std::abs(revolve->GetWallThickness() - 2.5f) < 1e-4f, "New wall thickness must match updated sketch drawing (2.5m)");
+    TEST_ASSERT(std::abs(revolve->GetOuterRadius() - 3.5f) < 1e-4f, "New outer radius must match updated sketch (3.5m)");
+    TEST_ASSERT(std::abs(revolve->GetCylinderHeight() - 6.0f) < 1e-4f, "New height must match updated sketch (6.0m)");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -627,6 +693,7 @@ int main() {
     pass &= TestSketchShapeAndVertexDeletion();
     pass &= TestStandaloneSketchVisibilityAndVisualStyling();
     pass &= TestTopBarReferenceGeometryAndFeatureWorkflows();
+    pass &= TestRevolveCylindricalThicknessAndNoBoxFeature();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

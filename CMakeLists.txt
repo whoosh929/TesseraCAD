@@ -74,7 +74,7 @@ target_sources(tessera_engine
         src/engine/graph/Node.hpp
         src/engine/graph/ParametricGraph.hpp
         src/engine/graph/DatumPlaneNode.hpp
-        src/engine/graph/BoxNode.hpp
+        src/engine/graph/DatumAxisNode.hpp
         src/engine/graph/CylinderNode.hpp
         src/engine/graph/SphereNode.hpp
         src/engine/graph/SketchNode.hpp

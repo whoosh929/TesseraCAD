@@ -263,7 +263,7 @@ void CADGui::RenderTopBar(
         ImGui::SameLine();
 
         // -------------------------------------------------------------
-        // 4. Create Model Features (Extrude, Revolve, Box, etc.)
+        // 4. Create Model Features (Extrude, Revolve, etc.)
         // -------------------------------------------------------------
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.38f, 0.28f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.52f, 0.38f, 1.0f));
@@ -295,7 +295,7 @@ void CADGui::RenderTopBar(
             auto sketchNode = std::dynamic_pointer_cast<SketchNode>(selectedNode);
             if (sketchNode && !sketchNode->HasParentFeature() && !sketchNode->IsConsumed()) {
                 std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
-                auto revolve = std::make_shared<RevolveNode>(name, sketchNode, m_newRevolveAngle, Geom::Axis3D::Y());
+                auto revolve = std::make_shared<RevolveNode>(name, sketchNode, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis);
                 graph.AddNode(revolve);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(revolve->GetId());
@@ -307,32 +307,7 @@ void CADGui::RenderTopBar(
         }
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("4. Create Revolve Feature:\n- Automatically creates from selected sketch.\n- If none selected, prompts to pick from model tree or jump into sketch creation.");
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("⬒ Box", ImVec2(75, 32))) {
-            auto sketchNode = std::dynamic_pointer_cast<SketchNode>(selectedNode);
-            if (sketchNode && !sketchNode->HasParentFeature() && !sketchNode->IsConsumed()) {
-                std::string name = "Box_" + std::to_string(m_shapeCounter++);
-                auto box = std::make_shared<ExtrudeNode>(name, sketchNode, m_newBoxDims[1]);
-                graph.AddNode(box);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(box->GetId());
-            } else {
-                std::string sketchName = "Sketch_Box_" + std::to_string(m_shapeCounter);
-                auto sketch = std::make_shared<SketchNode>(sketchName, SketchPlane::XZ_Ground);
-                sketch->SetPresetRectangle(m_newBoxDims[0], m_newBoxDims[2]);
-                graph.AddNode(sketch);
-                std::string boxName = "Box_" + std::to_string(m_shapeCounter++);
-                auto box = std::make_shared<ExtrudeNode>(boxName, sketch, m_newBoxDims[1]);
-                graph.AddNode(box);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(box->GetId());
-            }
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Create Box Feature from 2D Sketch");
+            ImGui::SetTooltip("4. Create Revolve Feature:\n- Revolve sketch around an axis to create a cylindrical 3D model.\n- Cylindrical wall thickness is directly dictated by 2D sketch drawing.");
         }
 
         // Right side: Selection status and quick deselect
@@ -606,7 +581,7 @@ void CADGui::RenderRevolvePromptModal(
                 if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
                     if (!s->HasParentFeature() && !s->IsConsumed()) {
                         std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
-                        auto revolve = std::make_shared<RevolveNode>(name, s, m_newRevolveAngle, Geom::Axis3D::Y());
+                        auto revolve = std::make_shared<RevolveNode>(name, s, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis);
                         graph.AddNode(revolve);
                         graph.EvaluateDirtyNodes(device, exchange);
                         SetSelectedNodeId(revolve->GetId());
@@ -648,7 +623,7 @@ void CADGui::RenderRevolvePromptModal(
                 std::string btnLabel = "↻ Revolve Sketch: '" + s->GetName() + "' (ID " + std::to_string(s->GetId()) + ")";
                 if (ImGui::Button(btnLabel.c_str(), ImVec2(-1, 30))) {
                     std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
-                    auto revolve = std::make_shared<RevolveNode>(name, s, m_newRevolveAngle, Geom::Axis3D::Y());
+                    auto revolve = std::make_shared<RevolveNode>(name, s, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis);
                     graph.AddNode(revolve);
                     graph.EvaluateDirtyNodes(device, exchange);
                     SetSelectedNodeId(revolve->GetId());
@@ -667,8 +642,8 @@ void CADGui::RenderRevolvePromptModal(
         if (ImGui::Button("✎ Jump into 2D Sketch Creation", ImVec2(-1, 34))) {
             std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
             auto sketch = std::make_shared<SketchNode>(name, SketchPlane::XY_Front);
-            sketch->SetPresetRectangle(2.5f, 2.5f);
-            sketch->SetPosition(3.0f, 0.0f, 0.0f);
+            // Profile: rectangle from u=1.0 to 2.5, v=0.0 to 3.0 (cylinder with wall thickness 1.5m)
+            sketch->SetProfile({ {1.0f, 0.0f}, {2.5f, 0.0f}, {2.5f, 3.0f}, {1.0f, 3.0f} });
             graph.AddNode(sketch);
             graph.EvaluateDirtyNodes(device, exchange);
             SetSelectedNodeId(sketch->GetId());
@@ -993,6 +968,29 @@ void CADGui::RenderUI(
                     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Standalone Profile (No Sketch Ref)");
                 }
 
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.0f), "Cylindrical Model Dimensions:");
+                ImGui::BulletText("Wall Thickness: %.2f m (Dictated by Sketch)", revolve->GetWallThickness());
+                ImGui::BulletText("Inner Radius:   %.2f m", revolve->GetInnerRadius());
+                ImGui::BulletText("Outer Radius:   %.2f m", revolve->GetOuterRadius());
+                ImGui::BulletText("Height:         %.2f m", revolve->GetCylinderHeight());
+                ImGui::Spacing();
+
+                // Axis selection
+                int currentMode = static_cast<int>(revolve->GetAxisMode());
+                const char* axisModes[] = {
+                    "Sketch V-Axis (Vertical)",
+                    "Sketch U-Axis (Horizontal)",
+                    "World Y-Axis (0, 1, 0)",
+                    "World X-Axis (1, 0, 0)",
+                    "World Z-Axis (0, 0, 1)",
+                    "Custom Datum Axis"
+                };
+                if (ImGui::Combo("Revolution Axis", &currentMode, axisModes, IM_ARRAYSIZE(axisModes))) {
+                    revolve->SetAxisMode(static_cast<RevolveAxisMode>(currentMode));
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
                 float ang = revolve->GetAngleDegrees();
                 if (ImGui::SliderFloat("Revolve Angle", &ang, 10.0f, 360.0f, "%.1f deg")) {
                     revolve->SetAngleDegrees(ang);
@@ -1012,23 +1010,9 @@ void CADGui::RenderUI(
                 }
             }
             // -----------------------------------------------------------------
-            // C. Primitive Nodes (Box, Cylinder, Sphere)
+            // C. Primitive Nodes (Cylinder, Sphere)
             // -----------------------------------------------------------------
-            else if (auto box = std::dynamic_pointer_cast<BoxNode>(selectedNode)) {
-                float w = box->GetWidth();
-                float h = box->GetHeight();
-                float d = box->GetDepth();
-                bool changed = false;
-
-                changed |= ImGui::SliderFloat("Width",  &w, 0.2f, 15.0f, "%.2f m");
-                changed |= ImGui::SliderFloat("Height", &h, 0.2f, 15.0f, "%.2f m");
-                changed |= ImGui::SliderFloat("Depth",  &d, 0.2f, 15.0f, "%.2f m");
-
-                if (changed) {
-                    box->SetDimensions(w, h, d);
-                    graph.EvaluateDirtyNodes(device, exchange);
-                }
-            } else if (auto cyl = std::dynamic_pointer_cast<CylinderNode>(selectedNode)) {
+            else if (auto cyl = std::dynamic_pointer_cast<CylinderNode>(selectedNode)) {
                 float r = cyl->GetRadius();
                 float h = cyl->GetHeight();
                 int segs = static_cast<int>(cyl->GetSegments());

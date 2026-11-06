@@ -1,7 +1,6 @@
 #pragma once
 
 #include "engine/graph/ParametricGraph.hpp"
-#include "engine/graph/BoxNode.hpp"
 #include "engine/graph/CylinderNode.hpp"
 #include "engine/graph/SphereNode.hpp"
 #include "engine/graph/SketchNode.hpp"
@@ -148,9 +147,7 @@ private:
     std::vector<CanvasShape> m_canvasShapes;
     uint64_t m_currentEditingSketchId{0};
 
-    // Shape creation state
-    int m_selectedShapeType{0}; // 0: Box, 1: Cylinder, 2: Sphere, 3: Extrude from Sketch, 4: Revolve from Sketch
-    float m_newBoxDims[3]{2.0f, 1.0f, 3.0f};
+    // Primitive creation state
     float m_newCylinderRadius{1.5f};
     float m_newCylinderHeight{3.0f};
     int m_newCylinderSegments{32};

@@ -4,11 +4,11 @@
 #include "engine/concurrency/AtomicMeshExchange.hpp"
 #include "engine/concurrency/ThreadPool.hpp"
 #include "engine/graph/ParametricGraph.hpp"
-#include "engine/graph/BoxNode.hpp"
 #include "engine/graph/CylinderNode.hpp"
 #include "engine/graph/SphereNode.hpp"
 #include "engine/graph/SketchNode.hpp"
 #include "engine/graph/ExtrudeNode.hpp"
+#include "engine/graph/RevolveNode.hpp"
 #include "engine/render/ViewportRenderer.hpp"
 #include "CADGui.hpp"
 #include <memory>
@@ -29,9 +29,6 @@ public:
     /// Runs the interactive engine demonstration
     void Run();
 
-    /// Modifies parametric box dimensions (dirtying the DAG)
-    void SetBoxDimensions(float width, float height, float depth);
-
     void Stop();
 
 private:
@@ -48,7 +45,7 @@ private:
     std::unique_ptr<RHI::RHIDevice> m_rhiDevice;
     AtomicMeshExchange m_meshExchange;
     std::unique_ptr<ParametricGraph> m_graph;
-    std::shared_ptr<BoxNode> m_testBoxNode;
+    std::shared_ptr<RevolveNode> m_testRevolveNode;
     std::shared_ptr<CylinderNode> m_testCylinderNode;
     std::shared_ptr<ExtrudeNode> m_testExtrudeNode;
     std::shared_ptr<SphereNode> m_testSphereNode;
