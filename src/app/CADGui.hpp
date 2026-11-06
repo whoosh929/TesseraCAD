@@ -8,6 +8,7 @@
 #include "engine/graph/ExtrudeNode.hpp"
 #include "engine/graph/RevolveNode.hpp"
 #include "engine/graph/DatumPlaneNode.hpp"
+#include "engine/graph/DatumAxisNode.hpp"
 #include "engine/hal/RHI.hpp"
 #include "engine/render/Camera.hpp"
 #include "engine/render/ViewportRenderer.hpp"
@@ -74,6 +75,35 @@ public:
     }
 
 private:
+    void RenderTopBar(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes,
+        std::shared_ptr<DAGNode> selectedNode
+    );
+
+    void RenderSketchPlanePromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
+    );
+
+    void RenderExtrudePromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
+    );
+
+    void RenderRevolvePromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
+    );
+
     void RenderSketchCanvas(
         ParametricGraph& graph,
         RHI::RHIDevice* device,
@@ -83,6 +113,12 @@ private:
 
     bool m_initialized{false};
     RHI::RHIDevice* m_rhiDevice{nullptr};
+
+    // Top Bar prompts & state
+    bool m_showSketchPlanePrompt{false};
+    bool m_showExtrudePrompt{false};
+    bool m_showRevolvePrompt{false};
+    uint64_t m_promptInitialSelectedId{0};
 
     // UI Navigation Mode
     int m_paletteTab{0}; // 0: 3D Features & Solids, 1: 2D Sketching

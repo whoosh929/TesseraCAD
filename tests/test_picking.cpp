@@ -4,6 +4,8 @@
 #include "engine/graph/SketchNode.hpp"
 #include "engine/graph/ExtrudeNode.hpp"
 #include "engine/graph/RevolveNode.hpp"
+#include "engine/graph/DatumPlaneNode.hpp"
+#include "engine/graph/DatumAxisNode.hpp"
 #include <iostream>
 #include <memory>
 #include <cmath>
@@ -524,6 +526,92 @@ bool TestStandaloneSketchVisibilityAndVisualStyling() {
     return true;
 }
 
+bool TestTopBarReferenceGeometryAndFeatureWorkflows() {
+    std::cout << "[Test] Top Bar Reference Geometry (Plane, Axis) & Automatic Feature Workflows...\n";
+
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    // -------------------------------------------------------------------------
+    // 1. Reference Plane Workflow
+    // -------------------------------------------------------------------------
+    auto refPlaneXZ = std::make_shared<DatumPlaneNode>("Ref_Plane_XZ", Plane::XZ());
+    refPlaneXZ->SetOffset(4.5);
+    graph.AddNode(refPlaneXZ);
+
+    TEST_ASSERT(refPlaneXZ->GetOffset() == 4.5, "Plane offset should be 4.5m");
+    Plane evaluatedPlane = refPlaneXZ->GetPlane();
+    TEST_ASSERT(evaluatedPlane.normal.approx_equal(Vector3D::UnitY()), "XZ Plane normal must be +Y");
+    TEST_ASSERT(std::abs(evaluatedPlane.origin.y - 4.5) < 1e-5, "Offset origin Y must be 4.5m");
+
+    // -------------------------------------------------------------------------
+    // 2. Reference Axis Workflow
+    // -------------------------------------------------------------------------
+    auto refAxisY = std::make_shared<DatumAxisNode>("Ref_Axis_Y", Axis3D::Y());
+    graph.AddNode(refAxisY);
+    TEST_ASSERT(refAxisY->GetAxis().direction.approx_equal(Vector3D::UnitY()), "Axis direction must be UnitY");
+
+    auto refAxisX = std::make_shared<DatumAxisNode>("Ref_Axis_X", Axis3D::X());
+    graph.AddNode(refAxisX);
+    TEST_ASSERT(refAxisX->GetAxis().direction.approx_equal(Vector3D::UnitX()), "Axis direction must be UnitX");
+
+    // -------------------------------------------------------------------------
+    // 3. 2D Sketch Creation with Selected Plane
+    // When a plane is selected, 2D sketch creation automatically adopts its plane & origin
+    // -------------------------------------------------------------------------
+    Geom::Plane pl = refPlaneXZ->GetPlane();
+    SketchPlane sp = (std::abs(pl.normal.y) > 0.7) ? SketchPlane::XZ_Ground :
+                     (std::abs(pl.normal.z) > 0.7) ? SketchPlane::XY_Front : SketchPlane::YZ_Right;
+    TEST_ASSERT(sp == SketchPlane::XZ_Ground, "Selected XZ datum plane must yield XZ_Ground sketch plane");
+
+    auto sketchOnPlane = std::make_shared<SketchNode>("Sketch_On_XZ", sp);
+    sketchOnPlane->SetPosition(static_cast<float>(pl.origin.x), static_cast<float>(pl.origin.y), static_cast<float>(pl.origin.z));
+    sketchOnPlane->SetPresetRectangle(3.0f, 2.0f);
+    sketchOnPlane->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketchOnPlane);
+
+    TEST_ASSERT(sketchOnPlane->GetPlane() == SketchPlane::XZ_Ground, "Sketch plane must match reference plane");
+    TEST_ASSERT(std::abs(sketchOnPlane->GetPosition()[1] - 4.5f) < 1e-5f, "Sketch Y position must match plane offset");
+
+    // -------------------------------------------------------------------------
+    // 4. Automatic Feature Creation from Selected 2D Sketch
+    // When an available sketch is selected, Extrude automatically builds from it
+    // -------------------------------------------------------------------------
+    TEST_ASSERT(!sketchOnPlane->HasParentFeature(), "Sketch initially has no parent feature");
+    TEST_ASSERT(!sketchOnPlane->IsConsumed(), "Sketch initially is not consumed");
+
+    // User triggers Extrude while sketch is selected:
+    auto autoExtrude = std::make_shared<ExtrudeNode>("Auto_Extrude", sketchOnPlane, 2.0f);
+    autoExtrude->Evaluate(&mockDevice, exchange);
+    graph.AddNode(autoExtrude);
+
+    TEST_ASSERT(sketchOnPlane->HasParentFeature(), "Sketch must now have parent feature");
+    TEST_ASSERT(autoExtrude->GetChildSketch() == sketchOnPlane, "Extrude must nest sketch as its child");
+    TEST_ASSERT(sketchOnPlane->IsConsumed(), "Referenced sketch must be consumed");
+    TEST_ASSERT(autoExtrude->GetCachedVertices().size() > 0, "Extrude mesh must evaluate with vertices");
+
+    // -------------------------------------------------------------------------
+    // 5. Automatic Revolve Feature from Selected 2D Sketch
+    // -------------------------------------------------------------------------
+    auto sketchForRevolve = std::make_shared<SketchNode>("Sketch_For_Revolve", SketchPlane::XY_Front);
+    sketchForRevolve->SetPresetRectangle(2.0f, 2.0f);
+    sketchForRevolve->SetPosition(3.0f, 0.0f, 0.0f); // Offset from Y axis
+    sketchForRevolve->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketchForRevolve);
+
+    auto autoRevolve = std::make_shared<RevolveNode>("Auto_Revolve", sketchForRevolve, 360.0f, refAxisY->GetAxis());
+    autoRevolve->Evaluate(&mockDevice, exchange);
+    graph.AddNode(autoRevolve);
+
+    TEST_ASSERT(sketchForRevolve->HasParentFeature(), "Revolve sketch must now have parent feature");
+    TEST_ASSERT(autoRevolve->GetChildSketch() == sketchForRevolve, "Revolve must nest sketch as its child");
+    TEST_ASSERT(sketchForRevolve->IsConsumed(), "Revolve sketch must be consumed");
+    TEST_ASSERT(autoRevolve->GetCachedVertices().size() > 0, "Revolve mesh must evaluate with vertices");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -538,6 +626,7 @@ int main() {
     pass &= TestMultiShapeSketchAndStitching();
     pass &= TestSketchShapeAndVertexDeletion();
     pass &= TestStandaloneSketchVisibilityAndVisualStyling();
+    pass &= TestTopBarReferenceGeometryAndFeatureWorkflows();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";
