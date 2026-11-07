@@ -304,9 +304,7 @@ void ViewportRenderer::RenderFrame() {
                 }
             }
 
-            // 3. Draw SELECTED 3D CAD model:
-            // - Subtly highlighted surface with luminous cyan / steel tone
-            // - Prominently highlighted outer feature edges (vibrant electric cyan)
+            // 3a. Draw SELECTED surface (if any selected triangles exist)
             if (m_renderProxy.GetSelectedVertexBuffer() && m_renderProxy.GetSelectedIndexBuffer() && 
                 m_renderProxy.GetSelectedIndexCount() > 0 && m_shadedPipeline) {
                 CADModelUniforms selUniforms{};
@@ -322,20 +320,21 @@ void ViewportRenderer::RenderFrame() {
                 m_cmdList->SetVertexBuffer(0, m_renderProxy.GetSelectedVertexBuffer());
                 m_cmdList->SetIndexBuffer(m_renderProxy.GetSelectedIndexBuffer());
                 m_cmdList->DrawIndexed(m_renderProxy.GetSelectedIndexCount());
+            }
 
-                // Highlighted outer feature edges of the selected model (vibrant electric cyan highlight)
-                if (m_wireframePipeline && m_renderProxy.GetSelectedEdgeIndexBuffer() && 
-                    m_renderProxy.GetSelectedEdgeIndexCount() > 0) {
-                    CADWireframeUniforms selWireUniforms{};
-                    selWireUniforms.modelViewProjection = cameraUniforms.viewProjection;
-                    selWireUniforms.edgeColor = {0.0f, 0.88f, 1.0f, 1.0f}; // Vibrant electric cyan selection edge highlight!
+            // 3b. Highlighted outer feature edges & vertex markers (vibrant electric cyan highlight)
+            if (m_wireframePipeline && m_renderProxy.GetSelectedVertexBuffer() && 
+                m_renderProxy.GetSelectedEdgeIndexBuffer() && 
+                m_renderProxy.GetSelectedEdgeIndexCount() > 0) {
+                CADWireframeUniforms selWireUniforms{};
+                selWireUniforms.modelViewProjection = cameraUniforms.viewProjection;
+                selWireUniforms.edgeColor = {0.0f, 0.88f, 1.0f, 1.0f}; // Vibrant electric cyan selection edge highlight!
 
-                    m_cmdList->SetPipeline(m_wireframePipeline);
-                    m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &selWireUniforms, sizeof(selWireUniforms));
-                    m_cmdList->SetVertexBuffer(0, m_renderProxy.GetSelectedVertexBuffer());
-                    m_cmdList->SetIndexBuffer(m_renderProxy.GetSelectedEdgeIndexBuffer());
-                    m_cmdList->DrawIndexed(m_renderProxy.GetSelectedEdgeIndexCount());
-                }
+                m_cmdList->SetPipeline(m_wireframePipeline);
+                m_cmdList->SetPushConstants(RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment, &selWireUniforms, sizeof(selWireUniforms));
+                m_cmdList->SetVertexBuffer(0, m_renderProxy.GetSelectedVertexBuffer());
+                m_cmdList->SetIndexBuffer(m_renderProxy.GetSelectedEdgeIndexBuffer());
+                m_cmdList->DrawIndexed(m_renderProxy.GetSelectedEdgeIndexCount());
             }
 
             // 4. Draw standalone selected 2D sketch (visually distinct: outline with transparent shading)

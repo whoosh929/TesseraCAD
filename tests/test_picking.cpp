@@ -1312,6 +1312,15 @@ bool TestFilletAndChamferFeaturesAndEdgePicking() {
 
     int pickedEdge = pickResult.edgeIndex;
 
+    // Test Edge Selection mesh publishing: must publish selected edge even with 0 selected triangles
+    graph.SetSubElementSelection(block->GetId(), -1, -1, pickedEdge);
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, block->GetId(), -1, -1, pickedEdge);
+    auto meshEdge = exchange.AcquireLatest();
+    TEST_ASSERT(meshEdge != nullptr, "Published mesh must not be null");
+    TEST_ASSERT(meshEdge->selectedEdgeIndexCount == 2, "Selected edge buffer must contain exactly 2 line indices");
+    TEST_ASSERT(meshEdge->selectedVertexBuffer != nullptr, "Selected vertex buffer must be created even with 0 selected triangles");
+    TEST_ASSERT(meshEdge->selectedEdgeIndexBuffer != nullptr, "Selected edge index buffer must be valid");
+
     // 3. Create a FilletNode referencing this corner edge with radius = 0.5m
     auto fillet = std::make_shared<FilletNode>("Corner_Fillet", block, pickedEdge, 0.5f);
     graph.AddNode(fillet);

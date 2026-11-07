@@ -125,7 +125,8 @@ public:
         outScreenX = (ndcX + 1.0f) * 0.5f * viewportWidth;
         outScreenY = (ndcY + 1.0f) * 0.5f * viewportHeight;
 
-        return (clipZ >= 0.0f && clipZ <= clipW);
+        (void)clipZ;
+        return (ndcX >= -1.5f && ndcX <= 1.5f && ndcY >= -1.5f && ndcY <= 1.5f);
     }
 
 private:

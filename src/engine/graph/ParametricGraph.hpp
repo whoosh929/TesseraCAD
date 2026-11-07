@@ -431,22 +431,25 @@ public:
         uint32_t selTriCount = 0;
         uint32_t selEdgeCount = 0;
 
-        if (!selectedVertices.empty() && !selectedIndices.empty()) {
+        if (!selectedVertices.empty()) {
             RHI::RHIBufferDesc selVbDesc{
                 .sizeInBytes = selectedVertices.size() * sizeof(CADVertex),
                 .usage = RHI::BufferUsage::Vertex,
                 .memory = RHI::MemoryUsage::CpuToGpu,
                 .debugName = "Selected_Model_VB"
             };
-            RHI::RHIBufferDesc selIbDesc{
-                .sizeInBytes = selectedIndices.size() * sizeof(uint32_t),
-                .usage = RHI::BufferUsage::Index,
-                .memory = RHI::MemoryUsage::CpuToGpu,
-                .debugName = "Selected_Model_IB"
-            };
             selVb = device->CreateBuffer(selVbDesc, selectedVertices.data());
-            selIb = device->CreateBuffer(selIbDesc, selectedIndices.data());
-            selTriCount = static_cast<uint32_t>(selectedIndices.size());
+
+            if (!selectedIndices.empty()) {
+                RHI::RHIBufferDesc selIbDesc{
+                    .sizeInBytes = selectedIndices.size() * sizeof(uint32_t),
+                    .usage = RHI::BufferUsage::Index,
+                    .memory = RHI::MemoryUsage::CpuToGpu,
+                    .debugName = "Selected_Model_IB"
+                };
+                selIb = device->CreateBuffer(selIbDesc, selectedIndices.data());
+                selTriCount = static_cast<uint32_t>(selectedIndices.size());
+            }
 
             if (!selectedEdges.empty()) {
                 RHI::RHIBufferDesc selEdgeDesc{
@@ -611,7 +614,8 @@ public:
         const Geom::Point3D& rayOrigin,
         const Geom::Vector3D& rayDir,
         uint64_t targetNodeId,
-        double vertexTolerance = 0.20
+        double vertexTolerance = 0.25,
+        double edgeTolerance = 0.25
     ) const {
         std::lock_guard<std::mutex> lock(m_graphMutex);
         SubElementPickResult result;
@@ -659,7 +663,7 @@ public:
 
         // 2. Proximity check to feature edges (corner edges)
         const auto& edges = targetNode->GetCachedEdges();
-        double bestEdgeDist = 0.15; // 15cm picking tolerance for corner edges
+        double bestEdgeDist = edgeTolerance; // Configurable picking tolerance for corner edges
         double bestEdgeRayT = std::numeric_limits<double>::infinity();
         int bestEdgeIdx = -1;
         Geom::Point3D bestEdgeP0, bestEdgeP1;

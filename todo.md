@@ -12,3 +12,4 @@ Default Mouse Wheel Controls
 - []feature: when sketching on a face and a reference geometry is shown, make it much more subtle.
 - []feature: add a measure tool
 - [x] bug: when a vertex on a model is selected, it's not obvious on the model. Highlight the vertex on the 3d model view.
+- [] feature: allow all dimensions in a 2d sketch to be input using the keyboard.

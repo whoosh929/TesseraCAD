@@ -2101,6 +2101,80 @@ void CADGui::RenderUI(
             fg->AddText(ImVec2(leaderEndX + badgePadX, leaderEndY + badgePadY), IM_COL32(230, 245, 255, 255), badgeText);
         }
     }
+
+    // -------------------------------------------------------------------------
+    // 3D Viewport Edge Selection Highlight (Glowing Line + Endpins + Badge)
+    // -------------------------------------------------------------------------
+    if (m_selectedEdgeIndex >= 0 && selectedNode && !m_sketchModeActive) {
+        const auto& verts = selectedNode->GetCachedVertices();
+        const auto& edges = selectedNode->GetCachedEdges();
+        Geom::Point3D p0 = m_selectedEdgeP0;
+        Geom::Point3D p1 = m_selectedEdgeP1;
+
+        size_t e = static_cast<size_t>(m_selectedEdgeIndex * 2);
+        if (e + 1 < edges.size()) {
+            uint32_t i0 = edges[e];
+            uint32_t i1 = edges[e + 1];
+            if (i0 < verts.size() && i1 < verts.size()) {
+                p0 = Geom::Point3D(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]);
+                p1 = Geom::Point3D(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2]);
+                m_selectedEdgeP0 = p0;
+                m_selectedEdgeP1 = p1;
+            }
+        }
+
+        float sx0 = 0.0f, sy0 = 0.0f;
+        float sx1 = 0.0f, sy1 = 0.0f;
+        float vpW = static_cast<float>(renderer.GetWidth());
+        float vpH = static_cast<float>(renderer.GetHeight());
+        if (vpW <= 0.0f || vpH <= 0.0f) {
+            ImGuiIO& io = ImGui::GetIO();
+            vpW = io.DisplaySize.x;
+            vpH = io.DisplaySize.y;
+        }
+
+        bool vis0 = camera.WorldToScreenPoint(p0, vpW, vpH, sx0, sy0);
+        bool vis1 = camera.WorldToScreenPoint(p1, vpW, vpH, sx1, sy1);
+
+        if (vis0 && vis1) {
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            ImVec2 pt0(sx0, sy0);
+            ImVec2 pt1(sx1, sy1);
+
+            // 1. Dark outer drop shadow line
+            fg->AddLine(pt0, pt1, IM_COL32(0, 0, 0, 220), 6.0f);
+
+            // 2. Vibrant electric cyan edge line
+            fg->AddLine(pt0, pt1, IM_COL32(0, 230, 255, 255), 3.5f);
+
+            // 3. Bright white core line
+            fg->AddLine(pt0, pt1, IM_COL32(235, 250, 255, 255), 1.5f);
+
+            // 4. Endpin rings at the edge endpoints
+            fg->AddCircleFilled(pt0, 5.0f, IM_COL32(0, 230, 255, 255), 16);
+            fg->AddCircleFilled(pt0, 2.5f, IM_COL32(255, 255, 255, 255), 16);
+            fg->AddCircleFilled(pt1, 5.0f, IM_COL32(0, 230, 255, 255), 16);
+            fg->AddCircleFilled(pt1, 2.5f, IM_COL32(255, 255, 255, 255), 16);
+
+            // 5. Edge Callout Badge at midpoint
+            ImVec2 midPt((pt0.x + pt1.x) * 0.5f, (pt0.y + pt1.y) * 0.5f);
+            float length = static_cast<float>(p0.distance_to(p1));
+            char edgeBadge[64];
+            std::snprintf(edgeBadge, sizeof(edgeBadge), "Edge #%d  |  L = %.2f m", m_selectedEdgeIndex, length);
+            ImVec2 badgeSz = ImGui::CalcTextSize(edgeBadge);
+            float padX = 7.0f;
+            float padY = 3.0f;
+            float bW = badgeSz.x + padX * 2.0f;
+            float bH = badgeSz.y + padY * 2.0f;
+
+            ImVec2 bP0(midPt.x - bW * 0.5f, midPt.y - bH - 12.0f);
+            ImVec2 bP1(bP0.x + bW, bP0.y + bH);
+            fg->AddLine(midPt, ImVec2(midPt.x, bP1.y), IM_COL32(0, 220, 255, 200), 1.5f);
+            fg->AddRectFilled(bP0, bP1, IM_COL32(14, 18, 26, 230), 4.0f);
+            fg->AddRect(bP0, bP1, IM_COL32(0, 220, 255, 220), 4.0f, 0, 1.5f);
+            fg->AddText(ImVec2(bP0.x + padX, bP0.y + padY), IM_COL32(230, 245, 255, 255), edgeBadge);
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
