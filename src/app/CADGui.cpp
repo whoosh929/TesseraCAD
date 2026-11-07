@@ -1463,20 +1463,54 @@ void CADGui::RenderUI(
                 if (ImGui::Button("⌒ Apply Fillet to Corner at Vertex", ImVec2(-1, 24))) {
                     auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                     const auto& edges = target->GetCachedEdges();
-                    int matchedEdge = -1;
+                    const auto& verts = target->GetCachedVertices();
                     uint32_t vIdx = static_cast<uint32_t>(m_selectedVertexIndex);
-                    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
-                        if (edges[e] == vIdx || edges[e + 1] == vIdx) {
-                            matchedEdge = static_cast<int>(e / 2);
-                            break;
+
+                    int bestEdge = -1;
+                    float bestScore = -1.0f;
+
+                    ExtrusionData exData;
+                    Geom::Vector3D extrudeNormal(0.0, 1.0, 0.0);
+                    if (ExtractExtrusionData(target, exData)) {
+                        if (exData.useCustomPlane) {
+                            extrudeNormal = exData.customPlane.normal;
+                        } else {
+                            switch (exData.plane) {
+                                case SketchPlane::XZ_Ground: extrudeNormal = Geom::Vector3D(0, 1, 0); break;
+                                case SketchPlane::XY_Front:  extrudeNormal = Geom::Vector3D(0, 0, 1); break;
+                                case SketchPlane::YZ_Right:  extrudeNormal = Geom::Vector3D(1, 0, 0); break;
+                            }
                         }
                     }
-                    if (matchedEdge >= 0) {
+
+                    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+                        uint32_t idx0 = edges[e];
+                        uint32_t idx1 = edges[e + 1];
+                        Geom::Point3D p0(verts[idx0].position[0], verts[idx0].position[1], verts[idx0].position[2]);
+                        Geom::Point3D p1(verts[idx1].position[0], verts[idx1].position[1], verts[idx1].position[2]);
+                        bool touchesVertex = (idx0 == vIdx || idx1 == vIdx ||
+                                              p0.distance_to(m_selectedVertexPos) < 0.05 ||
+                                              p1.distance_to(m_selectedVertexPos) < 0.05);
+                        if (touchesVertex) {
+                            Geom::Vector3D dir = p1 - p0;
+                            double len = dir.length();
+                            if (len > 1e-4) {
+                                dir = dir / len;
+                                float score = static_cast<float>(std::abs(dir.dot(extrudeNormal)));
+                                if (score > bestScore) {
+                                    bestScore = score;
+                                    bestEdge = static_cast<int>(e / 2);
+                                }
+                            }
+                        }
+                    }
+
+                    if (bestEdge >= 0) {
                         std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
                         float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
                             ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
                             : m_newFilletRadius;
-                        auto fillet = std::make_shared<FilletNode>(name, target, matchedEdge, effRadius);
+                        auto fillet = std::make_shared<FilletNode>(name, target, bestEdge, effRadius);
                         if (m_filletChoice == FilletDimensionChoice::Angle) {
                             fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                             fillet->SetAngle(m_newFilletAngle);
@@ -1484,6 +1518,65 @@ void CADGui::RenderUI(
                         graph.AddNode(fillet);
                         graph.EvaluateDirtyNodes(device, exchange);
                         SetSelectedNodeId(fillet->GetId());
+                        ClearSubElementSelection();
+                    }
+                }
+
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.85f, 0.6f, 1.0f, 1.0f), "⟍ Chamfer Corner at Vertex:");
+                ImGui::InputFloat("Chamfer Distance##3DVert", &m_newChamferDistance, 0.05f, 0.2f, "%.2f m");
+                if (m_newChamferDistance < 0.01f) m_newChamferDistance = 0.01f;
+                if (ImGui::Button("⟍ Apply Chamfer to Corner at Vertex", ImVec2(-1, 24))) {
+                    auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
+                    const auto& edges = target->GetCachedEdges();
+                    const auto& verts = target->GetCachedVertices();
+                    uint32_t vIdx = static_cast<uint32_t>(m_selectedVertexIndex);
+
+                    int bestEdge = -1;
+                    float bestScore = -1.0f;
+
+                    ExtrusionData exData;
+                    Geom::Vector3D extrudeNormal(0.0, 1.0, 0.0);
+                    if (ExtractExtrusionData(target, exData)) {
+                        if (exData.useCustomPlane) {
+                            extrudeNormal = exData.customPlane.normal;
+                        } else {
+                            switch (exData.plane) {
+                                case SketchPlane::XZ_Ground: extrudeNormal = Geom::Vector3D(0, 1, 0); break;
+                                case SketchPlane::XY_Front:  extrudeNormal = Geom::Vector3D(0, 0, 1); break;
+                                case SketchPlane::YZ_Right:  extrudeNormal = Geom::Vector3D(1, 0, 0); break;
+                            }
+                        }
+                    }
+
+                    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+                        uint32_t idx0 = edges[e];
+                        uint32_t idx1 = edges[e + 1];
+                        Geom::Point3D p0(verts[idx0].position[0], verts[idx0].position[1], verts[idx0].position[2]);
+                        Geom::Point3D p1(verts[idx1].position[0], verts[idx1].position[1], verts[idx1].position[2]);
+                        bool touchesVertex = (idx0 == vIdx || idx1 == vIdx ||
+                                              p0.distance_to(m_selectedVertexPos) < 0.05 ||
+                                              p1.distance_to(m_selectedVertexPos) < 0.05);
+                        if (touchesVertex) {
+                            Geom::Vector3D dir = p1 - p0;
+                            double len = dir.length();
+                            if (len > 1e-4) {
+                                dir = dir / len;
+                                float score = static_cast<float>(std::abs(dir.dot(extrudeNormal)));
+                                if (score > bestScore) {
+                                    bestScore = score;
+                                    bestEdge = static_cast<int>(e / 2);
+                                }
+                            }
+                        }
+                    }
+
+                    if (bestEdge >= 0) {
+                        std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
+                        auto chamfer = std::make_shared<ChamferNode>(name, target, bestEdge, m_newChamferDistance);
+                        graph.AddNode(chamfer);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                        SetSelectedNodeId(chamfer->GetId());
                         ClearSubElementSelection();
                     }
                 }

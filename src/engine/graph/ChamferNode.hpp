@@ -279,19 +279,24 @@ public:
         uint32_t v1_2 = baseV + 2;
 
         for (size_t t = 0; t < baseIndices.size(); t += 3) {
+            uint32_t a = baseIndices[t + 0];
+            uint32_t b = baseIndices[t + 1];
+            uint32_t c = baseIndices[t + 2];
+            Geom::Point3D pa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
+            Geom::Point3D pb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
+            Geom::Point3D pc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
+            Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
+            double align0 = std::abs(triNorm.dot(n0));
+            double align1 = std::abs(triNorm.dot(n1));
+            if (align0 < 0.5 && align1 < 0.5) {
+                continue; // Preserve cap triangles from pulling outward
+            }
+
             for (int k = 0; k < 3; ++k) {
                 if (indices[t + k] == i0) {
-                    uint32_t other = indices[t + (k + 1) % 3];
-                    Geom::Point3D otherPt(vertices[other].position[0], vertices[other].position[1], vertices[other].position[2]);
-                    double d1 = otherPt.distance_to(p0_1);
-                    double d2 = otherPt.distance_to(p0_2);
-                    indices[t + k] = (d1 <= d2) ? v0_1 : v0_2;
+                    indices[t + k] = (align0 >= align1) ? v0_1 : v0_2;
                 } else if (indices[t + k] == i1) {
-                    uint32_t other = indices[t + (k + 1) % 3];
-                    Geom::Point3D otherPt(vertices[other].position[0], vertices[other].position[1], vertices[other].position[2]);
-                    double d1 = otherPt.distance_to(p1_1);
-                    double d2 = otherPt.distance_to(p1_2);
-                    indices[t + k] = (d1 <= d2) ? v1_1 : v1_2;
+                    indices[t + k] = (align0 >= align1) ? v1_1 : v1_2;
                 }
             }
         }

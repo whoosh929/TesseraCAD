@@ -1515,6 +1515,103 @@ bool TestChainedFilletAndChamferFeatures() {
     return true;
 }
 
+bool TestThreeCornerVertexFillet() {
+    std::cout << "[Test] 3-Corner Vertex Fillet on Solid Extrusion...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    auto sketch = std::make_shared<SketchNode>("Sketch_LBracket", SketchPlane::XZ_Ground);
+    sketch->SetPresetLBracket(4.0f, 4.0f, 1.2f);
+    sketch->SetPosition(-3.0f, 0.0f, 0.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_LBracket", sketch, 3.0f);
+    extrude->SetPosition(-3.0f, 0.0f, 0.0f);
+    extrude->Evaluate(&mockDevice, exchange);
+    graph.AddNode(extrude);
+
+    const auto& verts = extrude->GetCachedVertices();
+    const auto& edges = extrude->GetCachedEdges();
+
+    // 1. Find a 3-corner vertex on the top cap at (-1.0, 3.0, -2.0)
+    int cornerVertIdx = -1;
+    for (size_t i = 0; i < verts.size(); ++i) {
+        if (std::abs(verts[i].position[0] - (-1.0f)) < 0.1f &&
+            std::abs(verts[i].position[1] - 3.0f) < 0.1f &&
+            std::abs(verts[i].position[2] - (-2.0f)) < 0.1f) {
+            cornerVertIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    TEST_ASSERT(cornerVertIdx >= 0, "Must find 3-corner top vertex at (-1, 3, -2)");
+
+    // 2. Count incident edges at this vertex: there must be 3 incident edges meeting at this 3D position
+    Geom::Point3D cornerPos(verts[cornerVertIdx].position[0], verts[cornerVertIdx].position[1], verts[cornerVertIdx].position[2]);
+    std::vector<int> incidentEdges;
+    uint32_t vIdx = static_cast<uint32_t>(cornerVertIdx);
+    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+        uint32_t idx0 = edges[e];
+        uint32_t idx1 = edges[e + 1];
+        Geom::Point3D p0(verts[idx0].position[0], verts[idx0].position[1], verts[idx0].position[2]);
+        Geom::Point3D p1(verts[idx1].position[0], verts[idx1].position[1], verts[idx1].position[2]);
+        if (idx0 == vIdx || idx1 == vIdx || p0.distance_to(cornerPos) < 0.05 || p1.distance_to(cornerPos) < 0.05) {
+            incidentEdges.push_back(static_cast<int>(e / 2));
+        }
+    }
+    TEST_ASSERT(incidentEdges.size() >= 3, "Corner vertex must have at least 3 incident edges meeting at it");
+
+    // 3. Test extrusion normal alignment: must select the vertical corner edge
+    ExtrusionData exData;
+    bool hasEx = ExtractExtrusionData(extrude, exData);
+    TEST_ASSERT(hasEx, "Extrude must provide extrusion data");
+    Geom::Vector3D extrudeNormal(0, 1, 0);
+
+    int bestCornerEdge = -1;
+    float bestScore = -1.0f;
+    for (int e : incidentEdges) {
+        uint32_t idx0 = edges[e * 2];
+        uint32_t idx1 = edges[e * 2 + 1];
+        Geom::Point3D p0(verts[idx0].position[0], verts[idx0].position[1], verts[idx0].position[2]);
+        Geom::Point3D p1(verts[idx1].position[0], verts[idx1].position[1], verts[idx1].position[2]);
+        Geom::Vector3D dir = (p1 - p0).normalized();
+        float score = static_cast<float>(std::abs(dir.dot(extrudeNormal)));
+        if (score > bestScore) {
+            bestScore = score;
+            bestCornerEdge = e;
+        }
+    }
+    TEST_ASSERT(bestCornerEdge >= 0, "Must find best corner edge");
+    TEST_ASSERT(bestScore > 0.9f, "Best corner edge must be parallel to vertical extrusion normal");
+
+    // 4. Create FilletNode with this corner edge
+    auto fillet = std::make_shared<FilletNode>("Vertex_Corner_Fillet", extrude, bestCornerEdge, 0.35f);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!fillet->HasConflict(), "Fillet feature must not have conflict");
+    // Original 6 profile points + 6 arc points = 12 profile points
+    TEST_ASSERT(fillet->GetProfile().size() == 12, "Filleting the 3-corner vertex must round the profile corner (+6 arc vertices)");
+
+    // 5. Verify that top and bottom vertices around the corner now lie on the rounded arc (no protruding sharp corner!)
+    const auto& fVerts = fillet->GetCachedVertices();
+    bool hasProtrudingCorner = false;
+    for (const auto& fv : fVerts) {
+        // The original corner was at (-1, 3, -2). Any vertex at that exact coordinate would indicate an un-filleted protrusion.
+        if (std::abs(fv.position[0] - (-1.0f)) < 0.05f &&
+            std::abs(fv.position[1] - 3.0f) < 0.05f &&
+            std::abs(fv.position[2] - (-2.0f)) < 0.05f) {
+            hasProtrudingCorner = true;
+            break;
+        }
+    }
+    TEST_ASSERT(!hasProtrudingCorner, "The corner vertex must be replaced by the rounded arc, without sharp protrusion");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1541,6 +1638,7 @@ int main() {
     pass &= TestDirectionalExtrusion();
     pass &= TestFilletAndChamferFeaturesAndEdgePicking();
     pass &= TestChainedFilletAndChamferFeatures();
+    pass &= TestThreeCornerVertexFillet();
     pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {
