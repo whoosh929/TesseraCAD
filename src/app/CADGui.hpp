@@ -56,6 +56,8 @@ public:
 
     [[nodiscard]] bool GetShowWireframe() const noexcept { return m_showWireframe; }
     [[nodiscard]] bool GetShowGrid() const noexcept { return m_showGrid; }
+    [[nodiscard]] bool GetShowReferenceFeature() const noexcept { return m_showReferenceFeature; }
+    void SetShowReferenceFeature(bool show) noexcept { m_showReferenceFeature = show; }
 
     [[nodiscard]] bool IsSketchModeActive() const noexcept { return m_sketchModeActive; }
     void EnterSketchMode(uint64_t sketchId) noexcept { 
@@ -146,6 +148,12 @@ private:
         const std::vector<std::shared_ptr<DAGNode>>& nodes
     );
 
+    void RenderEmptySketchPromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange
+    );
+
     bool m_initialized{false};
     RHI::RHIDevice* m_rhiDevice{nullptr};
 
@@ -227,9 +235,14 @@ private:
     bool m_showConflictPrompt{false};
     uint64_t m_conflictedNodeId{0};
 
+    // Empty Sketch Exit Confirmation Modal
+    bool m_showEmptySketchExitPrompt{false};
+    uint64_t m_emptySketchToExitId{0};
+
     // Viewport display toggles
     bool m_showWireframe{true};
     bool m_showGrid{true};
+    bool m_showReferenceFeature{true};
     float m_surfaceColor[4]{0.72f, 0.76f, 0.82f, 1.0f};
 };
 

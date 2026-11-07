@@ -214,10 +214,14 @@ public:
 
         Geom::Point3D sketchOrigin(m_position[0], m_position[1], m_position[2]);
         Geom::Plane sketchPlane;
-        switch (m_sketchNode->GetPlane()) {
-            case SketchPlane::XZ_Ground: sketchPlane = Geom::Plane::XZ(sketchOrigin); break;
-            case SketchPlane::XY_Front:  sketchPlane = Geom::Plane::XY(sketchOrigin); break;
-            case SketchPlane::YZ_Right:  sketchPlane = Geom::Plane::YZ(sketchOrigin); break;
+        if (m_sketchNode->HasCustomPlane()) {
+            sketchPlane = m_sketchNode->GetCustomPlane();
+        } else {
+            switch (m_sketchNode->GetPlane()) {
+                case SketchPlane::XZ_Ground: sketchPlane = Geom::Plane::XZ(sketchOrigin); break;
+                case SketchPlane::XY_Front:  sketchPlane = Geom::Plane::XY(sketchOrigin); break;
+                case SketchPlane::YZ_Right:  sketchPlane = Geom::Plane::YZ(sketchOrigin); break;
+            }
         }
 
         Geom::Axis3D effectiveAxis = ComputeEffectiveAxis(sketchPlane);

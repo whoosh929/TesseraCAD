@@ -157,6 +157,16 @@ void CADGui::RenderTopBar(
                     SetSelectedNodeId(node->GetId());
                 }
                 ImGui::Separator();
+            } else if (m_selectedVertexIndex >= 0 && selectedNode) {
+                if (ImGui::MenuItem("★ Tie to Selected Model Vertex")) {
+                    std::string name = "Plane_Vertex_" + std::to_string(m_shapeCounter++);
+                    Geom::Plane pl = Geom::Plane::XZ(m_selectedVertexPos);
+                    auto node = std::make_shared<DatumPlaneNode>(name, selectedNode, m_selectedVertexIndex, pl, true);
+                    graph.AddNode(node);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    SetSelectedNodeId(node->GetId());
+                }
+                ImGui::Separator();
             }
             if (ImGui::MenuItem("Top Plane (XZ Ground)")) {
                 std::string name = "Plane_XZ_" + std::to_string(m_shapeCounter++);
@@ -261,6 +271,22 @@ void CADGui::RenderTopBar(
 
                 std::string name = "Sketch_Face_" + std::to_string(m_shapeCounter++);
                 auto sketch = std::make_shared<SketchNode>(name, planeNode);
+                sketch->SetPosition(static_cast<float>(m_selectedFacePlane.origin.x), static_cast<float>(m_selectedFacePlane.origin.y), static_cast<float>(m_selectedFacePlane.origin.z));
+                graph.AddNode(sketch);
+                graph.EvaluateDirtyNodes(device, exchange);
+                SetSelectedNodeId(sketch->GetId());
+                m_activeSketchId = sketch->GetId();
+                m_sketchModeActive = true;
+                m_showSketchPlanePrompt = false;
+            } else if (m_selectedVertexIndex >= 0 && selectedNode) {
+                std::string planeName = "Plane_Vertex_" + std::to_string(m_shapeCounter);
+                Geom::Plane pl = Geom::Plane::XZ(m_selectedVertexPos);
+                auto planeNode = std::make_shared<DatumPlaneNode>(planeName, selectedNode, m_selectedVertexIndex, pl, true);
+                graph.AddNode(planeNode);
+
+                std::string name = "Sketch_Vertex_" + std::to_string(m_shapeCounter++);
+                auto sketch = std::make_shared<SketchNode>(name, planeNode);
+                sketch->SetPosition(static_cast<float>(m_selectedVertexPos.x), static_cast<float>(m_selectedVertexPos.y), static_cast<float>(m_selectedVertexPos.z));
                 graph.AddNode(sketch);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(sketch->GetId());
@@ -269,13 +295,8 @@ void CADGui::RenderTopBar(
                 m_showSketchPlanePrompt = false;
             } else if (auto planeNode = std::dynamic_pointer_cast<DatumPlaneNode>(selectedNode)) {
                 Geom::Plane pl = planeNode->GetPlane();
-                SketchPlane sp = SketchPlane::XZ_Ground;
-                if (std::abs(pl.normal.y) > 0.7) sp = SketchPlane::XZ_Ground;
-                else if (std::abs(pl.normal.z) > 0.7) sp = SketchPlane::XY_Front;
-                else if (std::abs(pl.normal.x) > 0.7) sp = SketchPlane::YZ_Right;
-
                 std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
-                auto sketch = std::make_shared<SketchNode>(name, sp);
+                auto sketch = std::make_shared<SketchNode>(name, planeNode);
                 sketch->SetPosition(static_cast<float>(pl.origin.x), static_cast<float>(pl.origin.y), static_cast<float>(pl.origin.z));
                 graph.AddNode(sketch);
                 graph.EvaluateDirtyNodes(device, exchange);
@@ -378,7 +399,7 @@ void CADGui::RenderSketchPlanePromptModal(
     if (!m_showSketchPlanePrompt) return;
 
     // Check if user clicked a node on the model or tree while prompt was active
-    if (m_selectedNodeId != 0 && (m_selectedNodeId != m_promptInitialSelectedId || m_selectedFaceIndex >= 0)) {
+    if (m_selectedNodeId != 0 && (m_selectedNodeId != m_promptInitialSelectedId || m_selectedFaceIndex >= 0 || m_selectedVertexIndex >= 0)) {
         for (const auto& n : nodes) {
             if (n->GetId() == m_selectedNodeId) {
                 if (m_selectedFaceIndex >= 0) {
@@ -389,6 +410,24 @@ void CADGui::RenderSketchPlanePromptModal(
 
                     std::string name = "Sketch_Face_" + std::to_string(m_shapeCounter++);
                     auto newSketch = std::make_shared<SketchNode>(name, planeNode);
+                    newSketch->SetPosition(static_cast<float>(m_selectedFacePlane.origin.x), static_cast<float>(m_selectedFacePlane.origin.y), static_cast<float>(m_selectedFacePlane.origin.z));
+                    graph.AddNode(newSketch);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    SetSelectedNodeId(newSketch->GetId());
+                    m_activeSketchId = newSketch->GetId();
+                    m_sketchModeActive = true;
+                    m_showSketchPlanePrompt = false;
+                    return;
+                } else if (m_selectedVertexIndex >= 0) {
+                    // Clicked on a model vertex: bind vertex datum plane and sketch centered at vertex!
+                    std::string planeName = "Plane_Vertex_" + std::to_string(m_shapeCounter);
+                    Geom::Plane pl = Geom::Plane::XZ(m_selectedVertexPos);
+                    auto planeNode = std::make_shared<DatumPlaneNode>(planeName, n, m_selectedVertexIndex, pl, true);
+                    graph.AddNode(planeNode);
+
+                    std::string name = "Sketch_Vertex_" + std::to_string(m_shapeCounter++);
+                    auto newSketch = std::make_shared<SketchNode>(name, planeNode);
+                    newSketch->SetPosition(static_cast<float>(m_selectedVertexPos.x), static_cast<float>(m_selectedVertexPos.y), static_cast<float>(m_selectedVertexPos.z));
                     graph.AddNode(newSketch);
                     graph.EvaluateDirtyNodes(device, exchange);
                     SetSelectedNodeId(newSketch->GetId());
@@ -398,13 +437,8 @@ void CADGui::RenderSketchPlanePromptModal(
                     return;
                 } else if (auto p = std::dynamic_pointer_cast<DatumPlaneNode>(n)) {
                     Geom::Plane pl = p->GetPlane();
-                    SketchPlane sp = SketchPlane::XZ_Ground;
-                    if (std::abs(pl.normal.y) > 0.7) sp = SketchPlane::XZ_Ground;
-                    else if (std::abs(pl.normal.z) > 0.7) sp = SketchPlane::XY_Front;
-                    else if (std::abs(pl.normal.x) > 0.7) sp = SketchPlane::YZ_Right;
-
                     std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
-                    auto newSketch = std::make_shared<SketchNode>(name, sp);
+                    auto newSketch = std::make_shared<SketchNode>(name, p);
                     newSketch->SetPosition(static_cast<float>(pl.origin.x), static_cast<float>(pl.origin.y), static_cast<float>(pl.origin.z));
                     graph.AddNode(newSketch);
                     graph.EvaluateDirtyNodes(device, exchange);
@@ -414,7 +448,7 @@ void CADGui::RenderSketchPlanePromptModal(
                     m_showSketchPlanePrompt = false;
                     return;
                 } else {
-                    // Clicked on a solid model in 3D: use its top face as sketch plane!
+                    // Clicked on a solid model in 3D: use its position as sketch plane!
                     std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
                     auto sketch = std::make_shared<SketchNode>(name, SketchPlane::XZ_Ground);
                     sketch->SetPosition(n->GetPosition()[0], n->GetPosition()[1], n->GetPosition()[2]);
@@ -491,13 +525,8 @@ void CADGui::RenderSketchPlanePromptModal(
                 std::string btnLabel = "⊞ Use: " + p->GetName() + " (Offset: " + std::to_string(p->GetOffset()) + "m)";
                 if (ImGui::Button(btnLabel.c_str(), ImVec2(-1, 28))) {
                     Geom::Plane pl = p->GetPlane();
-                    SketchPlane sp = SketchPlane::XZ_Ground;
-                    if (std::abs(pl.normal.y) > 0.7) sp = SketchPlane::XZ_Ground;
-                    else if (std::abs(pl.normal.z) > 0.7) sp = SketchPlane::XY_Front;
-                    else if (std::abs(pl.normal.x) > 0.7) sp = SketchPlane::YZ_Right;
-
                     std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
-                    auto newSketch = std::make_shared<SketchNode>(name, sp);
+                    auto newSketch = std::make_shared<SketchNode>(name, p);
                     newSketch->SetPosition(static_cast<float>(pl.origin.x), static_cast<float>(pl.origin.y), static_cast<float>(pl.origin.z));
                     graph.AddNode(newSketch);
                     graph.EvaluateDirtyNodes(device, exchange);
@@ -761,21 +790,40 @@ void CADGui::RenderConflictPromptModal(
         ImGui::Spacing();
 
         if (auto plane = std::dynamic_pointer_cast<DatumPlaneNode>(conflictedNode)) {
-            if (m_selectedFaceIndex >= 0 && m_selectedNodeId != 0 && m_selectedNodeId != plane->GetId()) {
-                std::shared_ptr<DAGNode> selModel = nullptr;
-                for (const auto& n : nodes) {
-                    if (n->GetId() == m_selectedNodeId) { selModel = n; break; }
-                }
-                if (selModel) {
-                    std::string reattachLabel = "Re-attach to Selected Face #" + std::to_string(m_selectedFaceIndex) + " on '" + selModel->GetName() + "'";
-                    if (ImGui::Button(reattachLabel.c_str(), ImVec2(-1, 30))) {
-                        plane->SetFaceReference(selModel, m_selectedFaceIndex, m_selectedFacePlane);
-                        graph.EvaluateDirtyNodes(device, exchange);
-                        m_showConflictPrompt = false;
+            if (plane->IsFaceAssociative()) {
+                if (m_selectedFaceIndex >= 0 && m_selectedNodeId != 0 && m_selectedNodeId != plane->GetId()) {
+                    std::shared_ptr<DAGNode> selModel = nullptr;
+                    for (const auto& n : nodes) {
+                        if (n->GetId() == m_selectedNodeId) { selModel = n; break; }
                     }
+                    if (selModel) {
+                        std::string reattachLabel = "Re-attach to Selected Face #" + std::to_string(m_selectedFaceIndex) + " on '" + selModel->GetName() + "'";
+                        if (ImGui::Button(reattachLabel.c_str(), ImVec2(-1, 30))) {
+                            plane->SetFaceReference(selModel, m_selectedFaceIndex, m_selectedFacePlane);
+                            graph.EvaluateDirtyNodes(device, exchange);
+                            m_showConflictPrompt = false;
+                        }
+                    }
+                } else {
+                    ImGui::TextDisabled("(To re-attach: select a face on any 3D model in viewport)");
                 }
-            } else {
-                ImGui::TextDisabled("(To re-attach: select a face on any 3D model in viewport)");
+            } else if (plane->IsVertexAssociative()) {
+                if (m_selectedVertexIndex >= 0 && m_selectedNodeId != 0 && m_selectedNodeId != plane->GetId()) {
+                    std::shared_ptr<DAGNode> selModel = nullptr;
+                    for (const auto& n : nodes) {
+                        if (n->GetId() == m_selectedNodeId) { selModel = n; break; }
+                    }
+                    if (selModel) {
+                        std::string reattachLabel = "Re-attach to Selected Vertex #" + std::to_string(m_selectedVertexIndex) + " on '" + selModel->GetName() + "'";
+                        if (ImGui::Button(reattachLabel.c_str(), ImVec2(-1, 30))) {
+                            plane->SetVertexReference(selModel, m_selectedVertexIndex, Geom::Plane::XZ(m_selectedVertexPos));
+                            graph.EvaluateDirtyNodes(device, exchange);
+                            m_showConflictPrompt = false;
+                        }
+                    }
+                } else {
+                    ImGui::TextDisabled("(To re-attach: select a vertex on any 3D model in viewport)");
+                }
             }
 
             if (ImGui::Button("Convert to Fixed Datum Plane (Keep Current 3D Position)", ImVec2(-1, 30))) {
@@ -829,6 +877,58 @@ void CADGui::RenderConflictPromptModal(
         ImGui::Spacing();
         if (ImGui::Button("Close", ImVec2(-1, 24))) {
             m_showConflictPrompt = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+}
+
+void CADGui::RenderEmptySketchPromptModal(
+    ParametricGraph& graph,
+    RHI::RHIDevice* device,
+    AtomicMeshExchange& exchange
+) {
+    if (!m_showEmptySketchExitPrompt) return;
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 220.0f, ImGui::GetIO().DisplaySize.y * 0.5f - 85.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.14f, 0.16f, 0.20f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.45f, 0.2f, 1.0f));
+
+    if (ImGui::Begin("Empty Sketch Confirmation###EmptySketchModal", &m_showEmptySketchExitPrompt, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.2f, 1.0f), "⚠ Sketch Is Empty");
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::TextWrapped("This 2D sketch contains no shapes. Exiting will delete this empty sketch from the model tree. Do you wish to delete it?");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.28f, 0.28f, 1.0f));
+        if (ImGui::Button("🗑 Delete Sketch", ImVec2(140, 30))) {
+            if (m_emptySketchToExitId != 0) {
+                graph.RemoveNode(m_emptySketchToExitId);
+                graph.EvaluateDirtyNodes(device, exchange);
+                m_emptySketchToExitId = 0;
+            }
+            m_canvasShapes.clear();
+            m_sketchModeActive = false;
+            m_showEmptySketchExitPrompt = false;
+            m_selectedNodeId = 0;
+            m_lastPublishedSelectedNodeId = 0;
+            graph.PublishCombinedSceneMesh(device, exchange, 0);
+        }
+        ImGui::PopStyleColor(2);
+
+        ImGui::SameLine();
+        if (ImGui::Button("Keep Editing", ImVec2(130, 30))) {
+            m_showEmptySketchExitPrompt = false;
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(80, 30))) {
+            m_showEmptySketchExitPrompt = false;
         }
     }
     ImGui::End();
@@ -904,6 +1004,7 @@ void CADGui::RenderUI(
     RenderExtrudePromptModal(graph, device, exchange, nodes);
     RenderRevolvePromptModal(graph, device, exchange, nodes);
     RenderConflictPromptModal(graph, device, exchange, nodes);
+    RenderEmptySketchPromptModal(graph, device, exchange);
 
 
 
@@ -942,7 +1043,7 @@ void CADGui::RenderUI(
             } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
                 prefix = "[Revolve] ";
             } else if (auto p = std::dynamic_pointer_cast<DatumPlaneNode>(node)) {
-                prefix = p->IsFaceAssociative() ? "[DatumPlane (Face Tied)] " : "[DatumPlane] ";
+                prefix = p->IsFaceAssociative() ? "[DatumPlane (Face Tied)] " : (p->IsVertexAssociative() ? "[DatumPlane (Vertex Tied)] " : "[DatumPlane] ");
             } else if (auto a = std::dynamic_pointer_cast<DatumAxisNode>(node)) {
                 prefix = a->IsVertexAssociative() ? "[DatumAxis (Vertex Tied)] " : "[DatumAxis] ";
             }
@@ -1045,6 +1146,7 @@ void CADGui::RenderUI(
 
                     std::string sketchName = "Sketch_Face_" + std::to_string(m_shapeCounter++);
                     auto sketch = std::make_shared<SketchNode>(sketchName, planeNode);
+                    sketch->SetPosition(static_cast<float>(m_selectedFacePlane.origin.x), static_cast<float>(m_selectedFacePlane.origin.y), static_cast<float>(m_selectedFacePlane.origin.z));
                     graph.AddNode(sketch);
                     graph.EvaluateDirtyNodes(device, exchange);
                     SetSelectedNodeId(sketch->GetId());
@@ -1070,12 +1172,35 @@ void CADGui::RenderUI(
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.2f, 0.9f, 0.4f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.20f, 0.12f, 0.9f));
-                ImGui::BeginChild("VertexSubElementCard", ImVec2(0, 115), true);
+                ImGui::BeginChild("VertexSubElementCard", ImVec2(0, 175), true);
                 ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "● Sub-Element Selected: Vertex #%d", m_selectedVertexIndex);
                 ImGui::Text("Position: (%.2f, %.2f, %.2f)", m_selectedVertexPos.x, m_selectedVertexPos.y, m_selectedVertexPos.z);
                 ImGui::Spacing();
 
-                if (ImGui::Button("⌖ Create Associative Datum Axis", ImVec2(-1, 26))) {
+                if (ImGui::Button("✎ Sketch on this Vertex", ImVec2(-1, 26))) {
+                    std::string planeName = "Plane_Vertex_" + std::to_string(m_shapeCounter);
+                    Geom::Plane pl = Geom::Plane::XZ(m_selectedVertexPos);
+                    auto planeNode = std::make_shared<DatumPlaneNode>(planeName, selectedNode, m_selectedVertexIndex, pl, true);
+                    graph.AddNode(planeNode);
+
+                    std::string sketchName = "Sketch_Vertex_" + std::to_string(m_shapeCounter++);
+                    auto sketch = std::make_shared<SketchNode>(sketchName, planeNode);
+                    sketch->SetPosition(static_cast<float>(m_selectedVertexPos.x), static_cast<float>(m_selectedVertexPos.y), static_cast<float>(m_selectedVertexPos.z));
+                    graph.AddNode(sketch);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    SetSelectedNodeId(sketch->GetId());
+                    m_activeSketchId = sketch->GetId();
+                    m_sketchModeActive = true;
+                }
+                if (ImGui::Button("⊞ Create Associative Datum Plane", ImVec2(-1, 24))) {
+                    std::string planeName = "Plane_Vertex_" + std::to_string(m_shapeCounter++);
+                    Geom::Plane pl = Geom::Plane::XZ(m_selectedVertexPos);
+                    auto planeNode = std::make_shared<DatumPlaneNode>(planeName, selectedNode, m_selectedVertexIndex, pl, true);
+                    graph.AddNode(planeNode);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    SetSelectedNodeId(planeNode->GetId());
+                }
+                if (ImGui::Button("⌖ Create Associative Datum Axis", ImVec2(-1, 24))) {
                     std::string axisName = "Axis_Vertex_" + std::to_string(m_shapeCounter++);
                     auto axisNode = std::make_shared<DatumAxisNode>(axisName, selectedNode, m_selectedVertexIndex, Geom::Vector3D(0.0, 1.0, 0.0));
                     graph.AddNode(axisNode);
@@ -1112,7 +1237,12 @@ void CADGui::RenderUI(
                     }
                 } else {
                     if (ImGui::Button("✓ Close 2D Sketch Canvas", ImVec2(-1, 28))) {
-                        m_sketchModeActive = false;
+                        if (m_canvasShapes.empty() && sketch->GetShapes().empty()) {
+                            m_showEmptySketchExitPrompt = true;
+                            m_emptySketchToExitId = sketch->GetId();
+                        } else {
+                            m_sketchModeActive = false;
+                        }
                     }
                 }
                 ImGui::Spacing();
@@ -1370,6 +1500,23 @@ void CADGui::RenderUI(
                             graph.EvaluateDirtyNodes(device, exchange);
                         }
                     }
+                } else if (planeNode->IsVertexAssociative()) {
+                    if (auto parent = planeNode->GetReferencedFeature()) {
+                        ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1.0f), "Associative Link: Vertex #%d on '%s'", planeNode->GetReferencedVertexIndex(), parent->GetName().c_str());
+                    } else {
+                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Associative Link: Feature MISSING!");
+                    }
+                    if (planeNode->HasConflict()) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[!] CONFLICT: %s", planeNode->GetConflictMessage().c_str());
+                        if (ImGui::Button("Resolve Relationship Conflict...", ImVec2(-1, 28))) {
+                            OpenConflictPrompt(planeNode->GetId());
+                        }
+                    } else {
+                        if (ImGui::Button("Break Link (Convert to Fixed Plane)", ImVec2(-1, 24))) {
+                            planeNode->ConvertToFixed();
+                            graph.EvaluateDirtyNodes(device, exchange);
+                        }
+                    }
                 } else {
                     ImGui::TextDisabled("Type: Fixed Datum Plane");
                 }
@@ -1388,6 +1535,7 @@ void CADGui::RenderUI(
                 if (ImGui::Button("✎ Create 2D Sketch on this Plane", ImVec2(-1, 30))) {
                     std::string name = "Sketch_" + std::to_string(m_shapeCounter++);
                     auto newSketch = std::make_shared<SketchNode>(name, planeNode);
+                    newSketch->SetPosition(static_cast<float>(pl.origin.x), static_cast<float>(pl.origin.y), static_cast<float>(pl.origin.z));
                     graph.AddNode(newSketch);
                     graph.EvaluateDirtyNodes(device, exchange);
                     SetSelectedNodeId(newSketch->GetId());
@@ -1477,7 +1625,7 @@ void CADGui::RenderUI(
                 }
             }
 
-            if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+            if (!m_sketchModeActive && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
                 if (!isChildSketch) {
                     uint64_t delId = selectedNode->GetId();
                     auto child = selectedNode->GetChildSketch();
@@ -1690,12 +1838,24 @@ void CADGui::RenderSketchCanvas(
     std::string winTitle = "2D Sketch Canvas - " + activeSketch->GetName() + " (" + GetSketchPlaneName(activeSketch->GetPlane()) + ")###SketchCanvas";
     bool isOpen = true;
     if (!ImGui::Begin(winTitle.c_str(), &isOpen)) {
-        if (!isOpen) m_sketchModeActive = false;
+        if (!isOpen) {
+            if (m_canvasShapes.empty() && activeSketch->GetShapes().empty()) {
+                m_showEmptySketchExitPrompt = true;
+                m_emptySketchToExitId = activeSketch->GetId();
+            } else {
+                m_sketchModeActive = false;
+            }
+        }
         ImGui::End();
         return;
     }
     if (!isOpen) {
-        m_sketchModeActive = false;
+        if (m_canvasShapes.empty() && activeSketch->GetShapes().empty()) {
+            m_showEmptySketchExitPrompt = true;
+            m_emptySketchToExitId = activeSketch->GetId();
+        } else {
+            m_sketchModeActive = false;
+        }
         ImGui::End();
         return;
     }
@@ -1773,6 +1933,12 @@ void CADGui::RenderSketchCanvas(
         m_canvasPanX = avail.x * 0.5f;
         m_canvasPanY = avail.y * 0.5f;
         m_canvasZoom = 35.0f;
+    }
+    ImGui::SameLine();
+
+    ImGui::Checkbox("👁 Ref Feature", &m_showReferenceFeature);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Project 3D feature edges and vertices onto 2D sketch canvas as reference geometry");
     }
     ImGui::SameLine();
 
@@ -1876,7 +2042,12 @@ void CADGui::RenderSketchCanvas(
     ImGui::SameLine();
 
     if (ImGui::Button("✕ Cancel", ImVec2(65, 28))) {
-        m_sketchModeActive = false;
+        if (m_canvasShapes.empty() && activeSketch->GetShapes().empty()) {
+            m_showEmptySketchExitPrompt = true;
+            m_emptySketchToExitId = activeSketch->GetId();
+        } else {
+            m_sketchModeActive = false;
+        }
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Discard changes and close sketch canvas.");
@@ -1999,6 +2170,90 @@ void CADGui::RenderSketchCanvas(
     }
 
     // -------------------------------------------------------------------------
+    // Render Reference 3D Feature Geometry (If Enabled)
+    // -------------------------------------------------------------------------
+    std::vector<std::array<float, 2>> refSnapPoints;
+    if (m_showReferenceFeature) {
+        std::shared_ptr<DAGNode> refFeature = nullptr;
+        if (activeSketch->GetDatumPlaneReference()) {
+            refFeature = activeSketch->GetDatumPlaneReference()->GetReferencedFeature();
+        }
+        if (!refFeature && activeSketch->GetParentFeature()) {
+            refFeature = activeSketch->GetParentFeature();
+        }
+        if (!refFeature && m_selectedNodeId != 0 && m_selectedNodeId != activeSketch->GetId()) {
+            for (const auto& n : graph.GetNodes()) {
+                if (n->GetId() == m_selectedNodeId) {
+                    refFeature = n;
+                    break;
+                }
+            }
+        }
+        if (!refFeature) {
+            for (const auto& n : graph.GetNodes()) {
+                if (std::dynamic_pointer_cast<ExtrudeNode>(n) || 
+                    std::dynamic_pointer_cast<RevolveNode>(n) ||
+                    std::dynamic_pointer_cast<CylinderNode>(n) ||
+                    std::dynamic_pointer_cast<SphereNode>(n)) {
+                    refFeature = n;
+                }
+            }
+        }
+
+        if (refFeature) {
+            Geom::Plane sketchPlane;
+            if (activeSketch->HasCustomPlane()) {
+                sketchPlane = activeSketch->GetCustomPlane();
+            } else {
+                Geom::Point3D orig(activeSketch->GetPosition()[0], activeSketch->GetPosition()[1], activeSketch->GetPosition()[2]);
+                switch (activeSketch->GetPlane()) {
+                    case SketchPlane::XZ_Ground: sketchPlane = Geom::Plane::XZ(orig); break;
+                    case SketchPlane::XY_Front:  sketchPlane = Geom::Plane::XY(orig); break;
+                    case SketchPlane::YZ_Right:  sketchPlane = Geom::Plane::YZ(orig); break;
+                }
+            }
+
+            const auto& rVerts = refFeature->GetCachedVertices();
+            const auto& rEdges = refFeature->GetCachedEdges();
+
+            for (size_t e = 0; e + 1 < rEdges.size(); e += 2) {
+                uint32_t i0 = rEdges[e];
+                uint32_t i1 = rEdges[e + 1];
+                if (i0 < rVerts.size() && i1 < rVerts.size()) {
+                    Geom::Point3D p0(rVerts[i0].position[0], rVerts[i0].position[1], rVerts[i0].position[2]);
+                    Geom::Point3D p1(rVerts[i1].position[0], rVerts[i1].position[1], rVerts[i1].position[2]);
+
+                    Geom::Point2D uv0 = sketchPlane.to_local(p0);
+                    Geom::Point2D uv1 = sketchPlane.to_local(p1);
+
+                    refSnapPoints.push_back({ static_cast<float>(uv0.u), static_cast<float>(uv0.v) });
+                    refSnapPoints.push_back({ static_cast<float>(uv1.u), static_cast<float>(uv1.v) });
+
+                    ImVec2 s0 = ToScreen(static_cast<float>(uv0.u), static_cast<float>(uv0.v));
+                    ImVec2 s1 = ToScreen(static_cast<float>(uv1.u), static_cast<float>(uv1.v));
+
+                    // Draw reference silhouette line in cyan/slate-blue
+                    drawList->AddLine(s0, s1, IM_COL32(75, 175, 235, 180), 1.8f);
+                }
+            }
+
+            // Draw vertex dots for vertices near the sketch plane
+            for (const auto& v : rVerts) {
+                Geom::Point3D pt(v.position[0], v.position[1], v.position[2]);
+                if (std::abs(sketchPlane.distance_to(pt)) < 0.05) {
+                    Geom::Point2D uv = sketchPlane.to_local(pt);
+                    ImVec2 sPos = ToScreen(static_cast<float>(uv.u), static_cast<float>(uv.v));
+                    drawList->AddCircleFilled(sPos, 3.5f, IM_COL32(100, 215, 255, 220));
+                }
+            }
+
+            // Draw reference feature tag
+            std::string refBadge = "👁 Ref Feature: " + refFeature->GetName();
+            drawList->AddText(ImVec2(canvasP0.x + 12.0f, canvasP1.y - 24.0f), IM_COL32(110, 195, 250, 220), refBadge.c_str());
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Render Canvas Shapes (Enclosed shapes signified by shaded area)
     // -------------------------------------------------------------------------
     for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
@@ -2080,6 +2335,7 @@ void CADGui::RenderSketchCanvas(
 
     // Check vertex snapping across all existing shapes (enabling vertex stitching)
     bool snappedToVertex = false;
+    bool snappedToRef = false;
     float bestSnapDist = 14.0f; // Screen pixel snap distance
     for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
         for (size_t v = 0; v < m_canvasShapes[s].points.size(); ++v) {
@@ -2090,18 +2346,32 @@ void CADGui::RenderSketchCanvas(
                 snapU = m_canvasShapes[s].points[v][0];
                 snapV = m_canvasShapes[s].points[v][1];
                 snappedToVertex = true;
+                snappedToRef = false;
             }
+        }
+    }
+    for (const auto& rpt : refSnapPoints) {
+        ImVec2 scr = ToScreen(rpt[0], rpt[1]);
+        float d = std::hypot(io.MousePos.x - scr.x, io.MousePos.y - scr.y);
+        if (d < bestSnapDist) {
+            bestSnapDist = d;
+            snapU = rpt[0];
+            snapV = rpt[1];
+            snappedToVertex = true;
+            snappedToRef = true;
         }
     }
     ImVec2 snapPosScr = ToScreen(snapU, snapV);
 
     if (isHovered) {
         if (snappedToVertex) {
-            drawList->AddCircle(snapPosScr, 7.0f, IM_COL32(255, 230, 0, 255), 16, 2.0f);
+            ImU32 snapCol = snappedToRef ? IM_COL32(80, 210, 255, 255) : IM_COL32(255, 230, 0, 255);
+            ImU32 rectCol = snappedToRef ? IM_COL32(80, 210, 255, 220) : IM_COL32(255, 230, 0, 220);
+            drawList->AddCircle(snapPosScr, 7.0f, snapCol, 16, 2.0f);
             drawList->AddRect(ImVec2(snapPosScr.x - 5.0f, snapPosScr.y - 5.0f),
                               ImVec2(snapPosScr.x + 5.0f, snapPosScr.y + 5.0f),
-                              IM_COL32(255, 230, 0, 220), 0.0f, 0, 1.5f);
-            drawList->AddText(ImVec2(snapPosScr.x + 9.0f, snapPosScr.y - 12.0f), IM_COL32(255, 230, 0, 255), "Snap to Vertex");
+                              rectCol, 0.0f, 0, 1.5f);
+            drawList->AddText(ImVec2(snapPosScr.x + 9.0f, snapPosScr.y - 12.0f), snapCol, snappedToRef ? "Snap to Ref Feature" : "Snap to Vertex");
         } else {
             drawList->AddCircle(snapPosScr, 4.0f, IM_COL32(0, 255, 255, 180), 8, 1.2f);
         }

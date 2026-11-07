@@ -96,6 +96,10 @@ public:
         if (m_sketchNode) {
             m_profile = m_sketchNode->GetProfile();
             m_plane = m_sketchNode->GetPlane();
+            m_useCustomPlane = m_sketchNode->HasCustomPlane();
+            if (m_useCustomPlane) {
+                m_customPlane = m_sketchNode->GetCustomPlane();
+            }
             m_position[0] = m_sketchNode->GetPosition()[0];
             m_position[1] = m_sketchNode->GetPosition()[1];
             m_position[2] = m_sketchNode->GetPosition()[2];
@@ -128,7 +132,13 @@ public:
         const float halfH = h * 0.5f;
 
         // Helper lambdas to map 2D point (u, v) and extrusion coordinate w to 3D based on sketch plane
-        auto MakePos = [this](float u, float v, float w) -> std::array<float, 3> {
+        auto MakePos = [this, halfH](float u, float v, float w) -> std::array<float, 3> {
+            if (m_useCustomPlane) {
+                double dist = static_cast<double>(w + halfH);
+                Geom::Point3D ptOnPlane = m_customPlane.to_world(Geom::Point2D(u, v));
+                Geom::Point3D pt3D = ptOnPlane + m_customPlane.normal * dist;
+                return { static_cast<float>(pt3D.x), static_cast<float>(pt3D.y), static_cast<float>(pt3D.z) };
+            }
             switch (m_plane) {
                 case SketchPlane::XZ_Ground:
                     return {u + m_position[0], w + m_position[1], v + m_position[2]};
@@ -141,6 +151,12 @@ public:
         };
 
         auto MakeNormal = [this](float nu, float nv, float nw) -> std::array<float, 3> {
+            if (m_useCustomPlane) {
+                Geom::Vector3D n = m_customPlane.to_world_vector(Geom::Vector2D(nu, nv)) + m_customPlane.normal * nw;
+                double len = n.length();
+                if (len > 1e-6) n = n / len;
+                return { static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z) };
+            }
             switch (m_plane) {
                 case SketchPlane::XZ_Ground:
                     return {nu, nw, nv};
@@ -238,11 +254,16 @@ public:
         ClearDirty();
     }
 
+    [[nodiscard]] bool HasCustomPlane() const noexcept { return m_useCustomPlane; }
+    [[nodiscard]] Geom::Plane GetCustomPlane() const noexcept { return m_customPlane; }
+
 private:
     std::shared_ptr<SketchNode> m_sketchNode{nullptr};
     std::vector<std::array<float, 2>> m_profile;
     float m_height{2.0f};
     SketchPlane m_plane{SketchPlane::XZ_Ground};
+    bool m_useCustomPlane{false};
+    Geom::Plane m_customPlane{Geom::Plane::XY()};
 };
 
 } // namespace Tessera

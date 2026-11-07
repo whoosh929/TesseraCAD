@@ -17,7 +17,8 @@ enum class DatumPlanePreset : uint8_t {
 
 enum class DatumPlaneType : uint8_t {
     Fixed = 0,
-    FaceAssociative = 1
+    FaceAssociative = 1,
+    VertexAssociative = 2
 };
 
 class DatumPlaneNode : public DAGNode {
@@ -34,11 +35,39 @@ public:
           m_plane(initialPlane),
           m_lastValidPlane(initialPlane) {}
 
+    DatumPlaneNode(std::string name, std::shared_ptr<DAGNode> feature, int vertexIndex, Geom::Plane initialPlane, bool isVertex)
+        : DAGNode(std::move(name)),
+          m_type(DatumPlaneType::VertexAssociative),
+          m_parentFeature(feature),
+          m_parentFeatureId(feature ? feature->GetId() : 0),
+          m_vertexIndex(vertexIndex),
+          m_plane(initialPlane),
+          m_lastValidPlane(initialPlane) {
+        (void)isVertex;
+    }
+
     void SetFaceReference(std::shared_ptr<DAGNode> feature, int faceIndex, Geom::Plane initialPlane) {
         m_type = DatumPlaneType::FaceAssociative;
         m_parentFeature = feature;
         m_parentFeatureId = feature ? feature->GetId() : 0;
         m_faceIndex = faceIndex;
+        m_vertexIndex = -1;
+        m_plane = initialPlane;
+        m_lastValidPlane = initialPlane;
+        m_hasConflict = false;
+        m_conflictMessage.clear();
+        if (feature) {
+            AddInput(feature);
+        }
+        MarkDirty();
+    }
+
+    void SetVertexReference(std::shared_ptr<DAGNode> feature, int vertexIndex, Geom::Plane initialPlane) {
+        m_type = DatumPlaneType::VertexAssociative;
+        m_parentFeature = feature;
+        m_parentFeatureId = feature ? feature->GetId() : 0;
+        m_vertexIndex = vertexIndex;
+        m_faceIndex = -1;
         m_plane = initialPlane;
         m_lastValidPlane = initialPlane;
         m_hasConflict = false;
@@ -55,6 +84,7 @@ public:
         m_parentFeature.reset();
         m_parentFeatureId = 0;
         m_faceIndex = -1;
+        m_vertexIndex = -1;
         m_hasConflict = false;
         m_conflictMessage.clear();
         MarkDirty();
@@ -66,6 +96,8 @@ public:
         m_type = DatumPlaneType::Fixed;
         m_parentFeature.reset();
         m_parentFeatureId = 0;
+        m_faceIndex = -1;
+        m_vertexIndex = -1;
         m_hasConflict = false;
         m_conflictMessage.clear();
         MarkDirty();
@@ -83,18 +115,20 @@ public:
     [[nodiscard]] double GetOffset() const noexcept { return m_offset; }
     [[nodiscard]] DatumPlaneType GetPlaneType() const noexcept { return m_type; }
     [[nodiscard]] bool IsFaceAssociative() const noexcept { return m_type == DatumPlaneType::FaceAssociative; }
+    [[nodiscard]] bool IsVertexAssociative() const noexcept { return m_type == DatumPlaneType::VertexAssociative; }
 
     [[nodiscard]] bool HasConflict() const noexcept override { return m_hasConflict; }
     [[nodiscard]] std::string GetConflictMessage() const noexcept override { return m_conflictMessage; }
     void ClearConflict() noexcept { m_hasConflict = false; m_conflictMessage.clear(); }
 
     [[nodiscard]] int GetReferencedFaceIndex() const noexcept { return m_faceIndex; }
+    [[nodiscard]] int GetReferencedVertexIndex() const noexcept { return m_vertexIndex; }
     [[nodiscard]] std::shared_ptr<DAGNode> GetReferencedFeature() const noexcept { return m_parentFeature.lock(); }
     [[nodiscard]] uint64_t GetReferencedFeatureId() const noexcept { return m_parentFeatureId; }
 
     void OnParentRemoved(uint64_t parentId) override {
         DAGNode::OnParentRemoved(parentId);
-        if (m_parentFeatureId == parentId || (m_parentFeature.expired() && m_type == DatumPlaneType::FaceAssociative)) {
+        if (m_parentFeatureId == parentId || (m_parentFeature.expired() && m_type != DatumPlaneType::Fixed)) {
             m_parentFeature.reset();
             m_hasConflict = true;
             m_conflictMessage = "Referenced parent feature was deleted from the model tree.";
@@ -134,6 +168,29 @@ public:
             m_conflictMessage.clear();
             m_plane = face.plane;
             m_lastValidPlane = face.plane;
+        } else if (m_type == DatumPlaneType::VertexAssociative) {
+            if (m_hasConflict) {
+                return;
+            }
+            auto feature = m_parentFeature.lock();
+            if (!feature) {
+                m_hasConflict = true;
+                m_conflictMessage = "Referenced parent feature was deleted from the model tree.";
+                return;
+            }
+
+            Geom::Point3D vPos;
+            if (!feature->GetVertexPosition(m_vertexIndex, vPos)) {
+                m_hasConflict = true;
+                m_conflictMessage = "Referenced vertex #" + std::to_string(m_vertexIndex) + 
+                                    " on feature '" + feature->GetName() + "' is missing.";
+                return;
+            }
+
+            m_hasConflict = false;
+            m_conflictMessage.clear();
+            m_plane.origin = vPos;
+            m_lastValidPlane.origin = vPos;
         }
 
         ClearDirty();
@@ -148,6 +205,7 @@ private:
     std::weak_ptr<DAGNode> m_parentFeature;
     uint64_t m_parentFeatureId{0};
     int m_faceIndex{-1};
+    int m_vertexIndex{-1};
     bool m_hasConflict{false};
     std::string m_conflictMessage;
 };

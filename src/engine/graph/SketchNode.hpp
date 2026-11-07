@@ -71,6 +71,9 @@ public:
             AddInput(planeNode);
             m_customPlane = planeNode->GetPlane();
             m_useCustomPlane = true;
+            m_position[0] = static_cast<float>(m_customPlane.origin.x);
+            m_position[1] = static_cast<float>(m_customPlane.origin.y);
+            m_position[2] = static_cast<float>(m_customPlane.origin.z);
         } else {
             m_useCustomPlane = false;
         }
@@ -300,6 +303,9 @@ public:
         if (m_datumPlaneRef) {
             m_customPlane = m_datumPlaneRef->GetPlane();
             m_useCustomPlane = true;
+            m_position[0] = static_cast<float>(m_customPlane.origin.x);
+            m_position[1] = static_cast<float>(m_customPlane.origin.y);
+            m_position[2] = static_cast<float>(m_customPlane.origin.z);
         }
 
         uint64_t currentGen = GetGeneration();

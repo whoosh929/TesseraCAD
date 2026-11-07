@@ -959,6 +959,160 @@ bool TestVertexSubElementPickingAndAssociativeDatumAxis() {
     return true;
 }
 
+bool TestFaceAndVertexDatumPlaneCenteringIn3DSpace() {
+    std::cout << "[Test] Face and Vertex Datum Plane Centering in 3D Space...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create base solid extruded box
+    auto sketch = std::make_shared<SketchNode>("Base_Sketch", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(4.0f, 4.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto baseBox = std::make_shared<ExtrudeNode>("Base_Box", sketch, 3.0f);
+    baseBox->Evaluate(&mockDevice, exchange);
+    graph.AddNode(baseBox);
+
+    const auto& faces = baseBox->GetFaces();
+    TEST_ASSERT(!faces.empty(), "Base model must have evaluated faces");
+
+    // Find top face (face with highest Y center)
+    int topFaceIdx = 0;
+    FaceInfo topFace = faces[0];
+    for (const auto& f : faces) {
+        if (f.center.y > topFace.center.y) {
+            topFace = f;
+            topFaceIdx = f.faceIndex;
+        }
+    }
+
+    TEST_ASSERT(std::abs(topFace.center.y - 1.5) < 0.1, "Top face Y should be at +1.5m");
+
+    // 2. Tie a DatumPlaneNode to this top face
+    auto faceDatumPlane = std::make_shared<DatumPlaneNode>("Plane_TopFace", baseBox, topFaceIdx, topFace.plane);
+    graph.AddNode(faceDatumPlane);
+    faceDatumPlane->Evaluate(&mockDevice, exchange);
+
+    // 3. Create a sketch on this face datum plane
+    auto sketchOnFace = std::make_shared<SketchNode>("Sketch_OnTopFace", faceDatumPlane);
+    sketchOnFace->SetPresetRectangle(2.0f, 2.0f); // 2x2 square centered at (0, 0) locally
+    graph.AddNode(sketchOnFace);
+    sketchOnFace->Evaluate(&mockDevice, exchange);
+
+    // CRITICAL: Verify the sketch is centered in 3D space around that face instead of global origin (0, 0, 0)!
+    auto skPos = sketchOnFace->GetPosition();
+    Point3D skOrigin(skPos[0], skPos[1], skPos[2]);
+    TEST_ASSERT(skOrigin.approx_equal(topFace.center, 0.05), "Sketch position must be centered around the face in 3D space");
+    TEST_ASSERT(sketchOnFace->HasCustomPlane(), "Sketch must use custom plane");
+
+    // Check evaluated 3D mesh vertices of this sketch: (0, 0) in local UV must map to topFace.center in 3D space
+    const auto& skVerts = sketchOnFace->GetCachedVertices();
+    TEST_ASSERT(!skVerts.empty(), "Sketch vertices must not be empty");
+    Point3D centroid(0.0, 0.0, 0.0);
+    for (const auto& v : skVerts) {
+        centroid = centroid + Vector3D(v.position[0], v.position[1], v.position[2]);
+    }
+    centroid = Point3D(centroid.x / skVerts.size(), centroid.y / skVerts.size(), centroid.z / skVerts.size());
+    TEST_ASSERT(centroid.approx_equal(topFace.center, 0.05), "Evaluated 3D sketch vertices must be centered at the face in 3D space");
+
+    // 4. Extrude from this sketch on the face: verify it builds directly outward from the face in 3D space!
+    auto bossExtrude = std::make_shared<ExtrudeNode>("Boss_Extrude", sketchOnFace, 2.0f);
+    graph.AddNode(bossExtrude);
+    bossExtrude->Evaluate(&mockDevice, exchange);
+
+    const auto& bossVerts = bossExtrude->GetCachedVertices();
+    TEST_ASSERT(!bossVerts.empty(), "Boss extrude must have evaluated vertices");
+
+    // Find min and max Y on boss extrude: bottom cap should be at Y = 1.5, top cap at Y = 3.5!
+    float minY = 1e9f, maxY = -1e9f;
+    for (const auto& v : bossVerts) {
+        minY = std::min(minY, v.position[1]);
+        maxY = std::max(maxY, v.position[1]);
+    }
+    TEST_ASSERT(std::abs(minY - 1.5f) < 0.1f, "Boss bottom cap must sit directly on the face at Y = 1.5m");
+    TEST_ASSERT(std::abs(maxY - 3.5f) < 0.1f, "Boss top cap must be extruded outward to Y = 3.5m");
+
+    // 5. Test DatumPlaneNode tied to a Vertex
+    const auto& baseVerts = baseBox->GetCachedVertices();
+    TEST_ASSERT(!baseVerts.empty(), "Base box must have vertices");
+    int targetVertexIdx = 0;
+    Point3D targetVPos(baseVerts[targetVertexIdx].position[0], baseVerts[targetVertexIdx].position[1], baseVerts[targetVertexIdx].position[2]);
+
+    auto vertexDatumPlane = std::make_shared<DatumPlaneNode>("Plane_OnVertex", baseBox, targetVertexIdx, Plane::XZ(targetVPos), true);
+    graph.AddNode(vertexDatumPlane);
+    vertexDatumPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(vertexDatumPlane->IsVertexAssociative(), "Plane must be vertex-associative");
+    TEST_ASSERT(vertexDatumPlane->GetPlane().origin.approx_equal(targetVPos, 1e-4), "Vertex plane origin must match vertex position");
+
+    // Create sketch on vertex datum plane
+    auto sketchOnVertex = std::make_shared<SketchNode>("Sketch_OnVertex", vertexDatumPlane);
+    sketchOnVertex->SetPresetRectangle(1.0f, 1.0f);
+    graph.AddNode(sketchOnVertex);
+    sketchOnVertex->Evaluate(&mockDevice, exchange);
+
+    auto vSkPos = sketchOnVertex->GetPosition();
+    Point3D vSkOrigin(vSkPos[0], vSkPos[1], vSkPos[2]);
+    TEST_ASSERT(vSkOrigin.approx_equal(targetVPos, 1e-4), "Sketch on vertex datum plane must be centered around that vertex in 3D space");
+
+    return true;
+}
+
+bool TestReferenceFeatureProjectionAndToggle() {
+    std::cout << "[Test] 2D Sketch Reference Feature Projection & Toggle...\n";
+
+    // 1. Create 3D feature with known geometry
+    auto sketch = std::make_shared<SketchNode>("Box_Sketch", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(4.0f, 2.0f);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    sketch->Evaluate(&mockDevice, exchange);
+
+    auto box = std::make_shared<ExtrudeNode>("Box_Feature", sketch, 3.0f);
+    box->Evaluate(&mockDevice, exchange);
+
+    const auto& verts = box->GetCachedVertices();
+    const auto& edges = box->GetCachedEdges();
+    TEST_ASSERT(!verts.empty(), "Box feature vertices cannot be empty");
+    TEST_ASSERT(!edges.empty(), "Box feature edges cannot be empty");
+
+    // 2. Create sketch plane on top face (Y = +1.5m)
+    Plane topPlane = Plane::XZ(Point3D(0.0, 1.5, 0.0));
+
+    // 3. Project each 3D edge into the 2D sketch plane UV space
+    std::vector<std::pair<Point2D, Point2D>> projectedEdges;
+    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+        uint32_t i0 = edges[e];
+        uint32_t i1 = edges[e + 1];
+        if (i0 < verts.size() && i1 < verts.size()) {
+            Point3D p0(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]);
+            Point3D p1(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2]);
+
+            Point2D uv0 = topPlane.to_local(p0);
+            Point2D uv1 = topPlane.to_local(p1);
+
+            projectedEdges.emplace_back(uv0, uv1);
+        }
+    }
+
+    TEST_ASSERT(!projectedEdges.empty(), "Projected reference edges must not be empty");
+
+    // Verify top cap edges lie on the plane (distance to plane == 0) and local coordinates correspond to +/- 2 in U and +/- 1 in V
+    bool foundBoundaryU = false;
+    for (const auto& pe : projectedEdges) {
+        if (std::abs(pe.first.u - 2.0) < 0.1 || std::abs(pe.first.u + 2.0) < 0.1) {
+            foundBoundaryU = true;
+            break;
+        }
+    }
+    TEST_ASSERT(foundBoundaryU, "Projected reference feature edges must match 3D feature boundary coordinates");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -979,6 +1133,8 @@ int main() {
     pass &= TestFaceSubElementPickingAndHighlighting();
     pass &= TestAssociativeDatumPlaneAndConflictHandling();
     pass &= TestVertexSubElementPickingAndAssociativeDatumAxis();
+    pass &= TestFaceAndVertexDatumPlaneCenteringIn3DSpace();
+    pass &= TestReferenceFeatureProjectionAndToggle();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

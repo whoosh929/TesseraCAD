@@ -188,7 +188,12 @@ protected:
             Geom::Vector3D n = (p1 - p0).cross(p2 - p0);
             double len = n.length();
             if (len > 1e-6) {
-                triPlanes[i].normal = n / len;
+                n = n / len;
+                Geom::Vector3D vn(m_cachedVertices[i0].normal[0], m_cachedVertices[i0].normal[1], m_cachedVertices[i0].normal[2]);
+                if (vn.length_squared() > 1e-4 && n.dot(vn) < 0.0) {
+                    n = -n;
+                }
+                triPlanes[i].normal = n;
                 triPlanes[i].d = -(triPlanes[i].normal.x * p0.x + triPlanes[i].normal.y * p0.y + triPlanes[i].normal.z * p0.z);
                 triPlanes[i].valid = true;
             }

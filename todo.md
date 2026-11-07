@@ -1,0 +1,1 @@
+- [x] Bug: When in 2d sketch and I delete a shape, it goes to another sketch for some reason. It should just remain in that 'sketch' until I exit it. If I exit that sketch and it's empty, prompt confirmation from the user that the sketch is empty and thus, will be deleted.
