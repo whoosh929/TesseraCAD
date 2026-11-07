@@ -62,6 +62,11 @@ target_sources(tessera_engine
         src/engine/modeling/ExtrudeOp.hpp
         src/engine/modeling/RevolveOp.hpp
         src/engine/modeling/Tessellator.hpp
+        src/engine/modeling/BlendGeometry.hpp
+        src/engine/modeling/BlendGeometry.cpp
+        src/engine/modeling/FilletOp.hpp
+        src/engine/modeling/FilletOp.cpp
+        src/engine/modeling/CornerBlend.hpp
 
         # Concurrency & Lock-Free Primitives
         src/engine/concurrency/AtomicMeshExchange.hpp
