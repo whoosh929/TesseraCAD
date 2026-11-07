@@ -133,7 +133,13 @@ void Application::SetupCallbacks() {
                 if (!overUI) {
                     app->m_leftMouseDown = true;
                 }
-            } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
+            } else if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+                app->m_pressMouseX = curX;
+                app->m_pressMouseY = curY;
+                if (!overUI) {
+                    app->m_middleMouseDown = true;
+                }
+            } else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
                 if (!overUI) {
                     app->m_rightMouseDown = true;
                 }
@@ -209,7 +215,9 @@ void Application::SetupCallbacks() {
                         }
                     }
                 }
-            } else if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
+            } else if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+                app->m_middleMouseDown = false;
+            } else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
                 app->m_rightMouseDown = false;
             }
         }
@@ -227,17 +235,28 @@ void Application::SetupCallbacks() {
         app->m_lastMouseX = xpos;
         app->m_lastMouseY = ypos;
 
-        // If neither button is down and GUI wants mouse, ignore for camera
-        if (!app->m_leftMouseDown && !app->m_rightMouseDown && app->m_gui && app->m_gui->WantCaptureMouse()) {
+        // If no navigation button is down and GUI wants mouse, ignore for camera
+        if (!app->m_middleMouseDown && !app->m_rightMouseDown && app->m_gui && app->m_gui->WantCaptureMouse()) {
             return;
         }
 
-        if (app->m_leftMouseDown && app->m_renderer) {
-            // Orbit camera
-            app->m_renderer->OrbitCamera(static_cast<float>(dx) * 0.005f, static_cast<float>(dy) * 0.005f);
+        bool isCtrl = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || 
+                       glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS);
+
+        // SOLIDWORKS Navigation:
+        // • Rotate: Press and hold down the middle mouse button (click the wheel) and drag to rotate.
+        // • Pan: Hold Ctrl + press and hold the middle mouse button, then drag to pan side to side.
+        if (app->m_middleMouseDown && app->m_renderer) {
+            if (isCtrl) {
+                float panSpeed = 0.0012f * app->m_renderer->GetCamera().GetDistance();
+                app->m_renderer->PanCamera(static_cast<float>(-dx) * panSpeed, static_cast<float>(dy) * panSpeed);
+            } else {
+                app->m_renderer->OrbitCamera(static_cast<float>(dx) * 0.005f, static_cast<float>(dy) * 0.005f);
+            }
         } else if (app->m_rightMouseDown && app->m_renderer) {
-            // Pan camera
-            app->m_renderer->PanCamera(static_cast<float>(-dx) * 0.005f, static_cast<float>(dy) * 0.005f);
+            // Secondary pan support with Right Mouse Button
+            float panSpeed = 0.0012f * app->m_renderer->GetCamera().GetDistance();
+            app->m_renderer->PanCamera(static_cast<float>(-dx) * panSpeed, static_cast<float>(dy) * panSpeed);
         }
     });
 
@@ -253,7 +272,20 @@ void Application::SetupCallbacks() {
         }
 
         if (app->m_renderer) {
-            app->m_renderer->ZoomCamera(static_cast<float>(yoffset) * 0.4f);
+            double curX = 0.0, curY = 0.0;
+            glfwGetCursorPos(window, &curX, &curY);
+            bool isShift = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || 
+                            glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+
+            // SOLIDWORKS Navigation:
+            // • Zoom: Roll the scroll wheel up or down to zoom in or out centered on your cursor.
+            // • Smooth Zoom: Hold Shift + roll the mouse wheel for finer, smoother zooming.
+            app->m_renderer->ZoomCameraCentered(
+                static_cast<float>(curX),
+                static_cast<float>(curY),
+                static_cast<float>(yoffset),
+                isShift
+            );
         }
     });
 

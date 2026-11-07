@@ -54,6 +54,7 @@ private:
 
     // Mouse interaction tracking
     bool m_leftMouseDown{false};
+    bool m_middleMouseDown{false};
     bool m_rightMouseDown{false};
     double m_lastMouseX{0.0};
     double m_lastMouseY{0.0};

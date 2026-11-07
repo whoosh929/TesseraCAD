@@ -45,6 +45,57 @@ public:
         UpdateMatrices();
     }
 
+    /// SOLIDWORKS-style cursor-centered zoom:
+    /// Rolls scroll wheel up (scrollDelta > 0) to zoom IN, down (scrollDelta < 0) to zoom OUT centered on the cursor.
+    /// When smooth=true (Shift key held), uses a finer zoom factor.
+    void ZoomCentered(
+        float screenX, 
+        float screenY, 
+        float viewportWidth, 
+        float viewportHeight, 
+        float scrollDelta, 
+        bool smooth = false
+    ) noexcept {
+        if (viewportWidth <= 0.0f || viewportHeight <= 0.0f || std::abs(scrollDelta) < 1e-4f) return;
+
+        // SOLIDWORKS: scroll up (delta > 0) zooms IN (factor < 1); scroll down (delta < 0) zooms OUT (factor > 1).
+        float baseFactor = smooth ? 0.96f : 0.85f;
+        float factor = (scrollDelta > 0.0f) ? std::pow(baseFactor, std::abs(scrollDelta)) 
+                                            : std::pow(1.0f / baseFactor, std::abs(scrollDelta));
+
+        float oldDist = m_distance;
+        float newDist = std::clamp(oldDist * factor, 0.05f, 2000.0f);
+        if (std::abs(newDist - oldDist) < 1e-5f) return;
+
+        // Compute 3D ray through cursor
+        Ray ray = ScreenPointToRay(screenX, screenY, viewportWidth, viewportHeight);
+
+        float forward[3], right[3], up[3];
+        GetBasisVectors(forward, right, up);
+        Geom::Vector3D camFwd(forward[0], forward[1], forward[2]);
+
+        double denom = ray.direction.dot(camFwd);
+        if (std::abs(denom) > 1e-4) {
+            Geom::Point3D targetPt(m_target[0], m_target[1], m_target[2]);
+            double t = (targetPt - ray.origin).dot(camFwd) / denom;
+            if (t > 0.0) {
+                Geom::Point3D cursorWorldPt = ray.origin + ray.direction * t;
+                double ratio = static_cast<double>(newDist / oldDist);
+                Geom::Vector3D shift = (cursorWorldPt - targetPt) * (1.0 - ratio);
+
+                m_target[0] += static_cast<float>(shift.x);
+                m_target[1] += static_cast<float>(shift.y);
+                m_target[2] += static_cast<float>(shift.z);
+            }
+        }
+
+        m_distance = newDist;
+        UpdateMatrices();
+    }
+
+    [[nodiscard]] float GetDistance() const noexcept { return m_distance; }
+    [[nodiscard]] const float* GetTarget() const noexcept { return m_target; }
+
     void SetViewportSize(float width, float height) noexcept {
         if (width > 0.0f && height > 0.0f) {
             m_aspect = width / height;

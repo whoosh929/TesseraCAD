@@ -38,6 +38,7 @@ public:
     void OrbitCamera(float deltaAzimuth, float deltaElevation);
     void PanCamera(float deltaX, float deltaY);
     void ZoomCamera(float deltaDistance);
+    void ZoomCameraCentered(float screenX, float screenY, float scrollDelta, bool smooth = false);
     void OnResize(uint32_t width, uint32_t height);
 
     [[nodiscard]] Ray ScreenPointToRay(float screenX, float screenY) {

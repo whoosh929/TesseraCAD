@@ -2607,8 +2607,10 @@ void CADGui::RenderSketchCanvas(
 
         if (io.MouseWheel != 0.0f) {
             float oldZoom = m_canvasZoom;
-            float factor = (io.MouseWheel > 0.0f) ? 1.15f : (1.0f / 1.15f);
-            float newZoom = std::clamp(m_canvasZoom * factor, 5.0f, 300.0f);
+            bool isSmooth = io.KeyShift;
+            float step = isSmooth ? 1.04f : 1.15f;
+            float factor = (io.MouseWheel > 0.0f) ? step : (1.0f / step);
+            float newZoom = std::clamp(m_canvasZoom * factor, 5.0f, 600.0f);
 
             float mouseU = (io.MousePos.x - canvasP0.x - m_canvasPanX) / oldZoom;
             float mouseV = -(io.MousePos.y - canvasP0.y - m_canvasPanY) / oldZoom;
@@ -2618,7 +2620,7 @@ void CADGui::RenderSketchCanvas(
             m_canvasPanY = io.MousePos.y - canvasP0.y + mouseV * newZoom;
         }
 
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) || ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
             m_canvasPanX += io.MouseDelta.x;
             m_canvasPanY += io.MouseDelta.y;
         }

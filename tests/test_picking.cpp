@@ -100,6 +100,56 @@ bool TestCameraScreenPointToRay() {
     return true;
 }
 
+bool TestSolidWorksMouseNavigation() {
+    std::cout << "[Test] SOLIDWORKS Mouse Navigation (Cursor-Centered Zoom, Smooth Zoom, Rotate, Pan)...\n";
+
+    Camera camera;
+    float vpW = 1600.0f;
+    float vpH = 900.0f;
+
+    float initDist = camera.GetDistance();
+    TEST_ASSERT(std::abs(initDist - 10.0f) < 1e-4f, "Initial camera distance should be 10.0m");
+
+    // 1. Zoom In centered at viewport center (800, 450)
+    camera.ZoomCentered(800.0f, 450.0f, vpW, vpH, 1.0f, false);
+    float zoomInDist = camera.GetDistance();
+    TEST_ASSERT(zoomInDist < initDist, "Scroll up must zoom in (decrease distance)");
+    TEST_ASSERT(std::abs(zoomInDist - initDist * 0.85f) < 1e-3f, "Zoom in factor should match 0.85");
+    // Target should remain at (0, 0, 0) for center zoom
+    TEST_ASSERT(std::abs(camera.GetTarget()[0]) < 1e-4f, "Center zoom must keep target X at 0");
+    TEST_ASSERT(std::abs(camera.GetTarget()[1]) < 1e-4f, "Center zoom must keep target Y at 0");
+    TEST_ASSERT(std::abs(camera.GetTarget()[2]) < 1e-4f, "Center zoom must keep target Z at 0");
+
+    // 2. Smooth Zoom (Shift held)
+    float preSmoothDist = camera.GetDistance();
+    camera.ZoomCentered(800.0f, 450.0f, vpW, vpH, 1.0f, true); // smooth = true
+    float postSmoothDist = camera.GetDistance();
+    TEST_ASSERT(postSmoothDist < preSmoothDist, "Smooth scroll up must zoom in");
+    TEST_ASSERT(std::abs(postSmoothDist - preSmoothDist * 0.96f) < 1e-3f, "Smooth zoom factor should match 0.96 (finer)");
+
+    // 3. Zoom Out (Scroll down)
+    float preOutDist = camera.GetDistance();
+    camera.ZoomCentered(800.0f, 450.0f, vpW, vpH, -1.0f, false);
+    float postOutDist = camera.GetDistance();
+    TEST_ASSERT(postOutDist > preOutDist, "Scroll down must zoom out (increase distance)");
+
+    // 4. Cursor-Centered Zoom off-center (e.g. at 1200, 200)
+    camera.ZoomCentered(1200.0f, 200.0f, vpW, vpH, 1.0f, false);
+    const float* target = camera.GetTarget();
+    TEST_ASSERT(std::abs(target[0]) > 0.01f || std::abs(target[1]) > 0.01f || std::abs(target[2]) > 0.01f, 
+                "Cursor-centered zoom off-center must shift camera target toward cursor ray");
+
+    // 5. Pan and Rotate (Orbit)
+    Camera cam2;
+    cam2.Pan(1.5f, -0.5f);
+    TEST_ASSERT(std::abs(cam2.GetTarget()[0]) > 0.1f || std::abs(cam2.GetTarget()[1]) > 0.1f, "Pan must shift target point");
+
+    cam2.Orbit(0.2f, -0.1f);
+    TEST_ASSERT(cam2.GetUniforms().eyePosition[0] != camera.GetUniforms().eyePosition[0], "Orbit must rotate eye position");
+
+    return true;
+}
+
 bool TestParametricGraphPickNode() {
     std::cout << "[Test] ParametricGraph::PickNode...\n";
 
@@ -1395,6 +1445,7 @@ int main() {
     pass &= TestNegativeExtrudeGraphAndCustomPlane();
     pass &= TestDirectionalExtrusion();
     pass &= TestFilletAndChamferFeaturesAndEdgePicking();
+    pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

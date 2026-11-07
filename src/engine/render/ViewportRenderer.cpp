@@ -49,6 +49,11 @@ void ViewportRenderer::ZoomCamera(float deltaDistance) {
     m_camera.Zoom(deltaDistance);
 }
 
+void ViewportRenderer::ZoomCameraCentered(float screenX, float screenY, float scrollDelta, bool smooth) {
+    std::lock_guard<std::mutex> lock(m_cameraMutex);
+    m_camera.ZoomCentered(screenX, screenY, static_cast<float>(m_width), static_cast<float>(m_height), scrollDelta, smooth);
+}
+
 void ViewportRenderer::OnResize(uint32_t width, uint32_t height) {
     m_width = width;
     m_height = height;
