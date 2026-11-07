@@ -98,6 +98,36 @@ public:
         return {eye, dir};
     }
 
+    [[nodiscard]] bool WorldToScreenPoint(
+        const Geom::Point3D& worldPt, 
+        float viewportWidth, 
+        float viewportHeight, 
+        float& outScreenX, 
+        float& outScreenY
+    ) const noexcept {
+        if (viewportWidth <= 0.0f || viewportHeight <= 0.0f) return false;
+        const float* m = m_uniforms.viewProjection.data();
+        float x = static_cast<float>(worldPt.x);
+        float y = static_cast<float>(worldPt.y);
+        float z = static_cast<float>(worldPt.z);
+
+        // Column-major P * V: clip = M * [x, y, z, 1]^T
+        float clipX = m[0] * x + m[4] * y + m[8]  * z + m[12];
+        float clipY = m[1] * x + m[5] * y + m[9]  * z + m[13];
+        float clipZ = m[2] * x + m[6] * y + m[10] * z + m[14];
+        float clipW = m[3] * x + m[7] * y + m[11] * z + m[15];
+
+        if (clipW <= 1e-4f) return false; // Behind camera eye plane
+
+        float ndcX = clipX / clipW;
+        float ndcY = clipY / clipW;
+
+        outScreenX = (ndcX + 1.0f) * 0.5f * viewportWidth;
+        outScreenY = (ndcY + 1.0f) * 0.5f * viewportHeight;
+
+        return (clipZ >= 0.0f && clipZ <= clipW);
+    }
+
 private:
     void GetBasisVectors(float forward[3], float right[3], float up[3]) const noexcept {
         float cosElev = std::cos(m_elevation);

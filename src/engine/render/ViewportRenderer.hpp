@@ -45,6 +45,9 @@ public:
         return m_camera.ScreenPointToRay(screenX, screenY, static_cast<float>(m_width), static_cast<float>(m_height));
     }
 
+    [[nodiscard]] uint32_t GetWidth() const noexcept { return m_width; }
+    [[nodiscard]] uint32_t GetHeight() const noexcept { return m_height; }
+
     [[nodiscard]] double GetAverageFrameTimeMs() const noexcept {
         return m_avgFrameTimeMs.load(std::memory_order_relaxed);
     }

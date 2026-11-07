@@ -86,6 +86,17 @@ bool TestCameraScreenPointToRay() {
     Vector3D toTarget = (target - expectedEye).normalized();
     TEST_ASSERT(centerRay.direction.approx_equal(toTarget, 1e-3), "Center ray should point at camera target");
 
+    // Test WorldToScreenPoint at target (0, 0, 0)
+    float sx = 0.0f, sy = 0.0f;
+    bool visible = camera.WorldToScreenPoint(target, vpW, vpH, sx, sy);
+    TEST_ASSERT(visible, "Target at origin should be visible in front of camera");
+    TEST_ASSERT(std::abs(sx - 800.0f) < 2.0f, "Target should project to viewport center X (approx 800)");
+    TEST_ASSERT(std::abs(sy - 450.0f) < 2.0f, "Target should project to viewport center Y (approx 450)");
+
+    // Point far behind camera should return false (not visible)
+    Point3D behindEye = expectedEye + (expectedEye - target) * 5.0;
+    TEST_ASSERT(!camera.WorldToScreenPoint(behindEye, vpW, vpH, sx, sy), "Point behind camera must return false");
+
     return true;
 }
 
@@ -931,7 +942,7 @@ bool TestVertexSubElementPickingAndAssociativeDatumAxis() {
     auto meshVert = exchange.AcquireLatest();
     TEST_ASSERT(meshVert != nullptr, "Published mesh must not be null");
     TEST_ASSERT(meshVert->selectedIndexCount == 24, "Vertex marker has 8 triangles (24 indices)");
-    TEST_ASSERT(meshVert->selectedEdgeIndexCount == 24, "Vertex marker has 12 edges (24 line indices)");
+    TEST_ASSERT(meshVert->selectedEdgeIndexCount >= 30, "Vertex highlight includes marker edges, 3D crosshair, and incident model edges");
     TEST_ASSERT(meshVert->indexCount == model->GetCachedIndices().size(), "Model triangles remain in unselected buffer");
 
     // Create associative DatumAxisNode tied to this vertex

@@ -152,3 +152,4 @@ inline bool ApplyFillet2D(
 }
 
 } // namespace Tessera::Sketch
+

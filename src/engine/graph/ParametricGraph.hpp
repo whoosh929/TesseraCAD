@@ -311,18 +311,30 @@ public:
                         for (uint32_t edgeIdx : edges) selectedEdges.push_back(edgeIdx + vOffset);
                     }
                 } else if (isSelected && m_selectedVertexIndex >= 0 && static_cast<size_t>(m_selectedVertexIndex) < verts.size()) {
-                    // Vertex drill-down selection: render model normally + 3D marker for vertex
+                    // Vertex drill-down selection: render model normally + 3D marker for vertex + highlight all incident edges in cyan!
                     uint32_t unselBase = static_cast<uint32_t>(combinedVertices.size());
                     combinedVertices.insert(combinedVertices.end(), verts.begin(), verts.end());
                     for (uint32_t idx : indices) combinedIndices.push_back(idx + unselBase);
                     for (uint32_t edgeIdx : edges) combinedEdges.push_back(edgeIdx + unselBase);
 
-                    // 3D diamond octahedron marker for selected vertex
+                    // 1. Highlight all incident model edges connecting to this selected vertex in vibrant electric cyan!
+                    uint32_t vIdx = static_cast<uint32_t>(m_selectedVertexIndex);
+                    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+                        if (edges[e] == vIdx || edges[e + 1] == vIdx) {
+                            uint32_t selBase = static_cast<uint32_t>(selectedVertices.size());
+                            selectedVertices.push_back(verts[edges[e]]);
+                            selectedVertices.push_back(verts[edges[e + 1]]);
+                            selectedEdges.push_back(selBase);
+                            selectedEdges.push_back(selBase + 1);
+                        }
+                    }
+
+                    // 2. Prominent 3D diamond octahedron marker for selected vertex
                     const auto& v = verts[m_selectedVertexIndex];
                     float vx = v.position[0];
                     float vy = v.position[1];
                     float vz = v.position[2];
-                    float s = 0.08f;
+                    float s = 0.22f; // Increased from 0.08f so it is clearly visible in 3D
 
                     uint32_t markBase = static_cast<uint32_t>(selectedVertices.size());
                     selectedVertices.push_back({.position = {vx, vy + s, vz}, .normal = {0, 1, 0}});
@@ -343,6 +355,22 @@ public:
                         1, 3,  3, 2,  2, 4,  4, 1
                     };
                     for (uint32_t me : mEdges) selectedEdges.push_back(markBase + me);
+
+                    // 3. Multi-axis 3D reticle crosshair along X, Y, Z at vertex
+                    float axisLen = 0.35f;
+                    uint32_t axisBase = static_cast<uint32_t>(selectedVertices.size());
+                    selectedVertices.push_back({.position = {vx - axisLen, vy, vz}, .normal = {1, 0, 0}});
+                    selectedVertices.push_back({.position = {vx + axisLen, vy, vz}, .normal = {1, 0, 0}});
+                    selectedVertices.push_back({.position = {vx, vy - axisLen, vz}, .normal = {0, 1, 0}});
+                    selectedVertices.push_back({.position = {vx, vy + axisLen, vz}, .normal = {0, 1, 0}});
+                    selectedVertices.push_back({.position = {vx, vy, vz - axisLen}, .normal = {0, 0, 1}});
+                    selectedVertices.push_back({.position = {vx, vy, vz + axisLen}, .normal = {0, 0, 1}});
+                    selectedEdges.push_back(axisBase + 0);
+                    selectedEdges.push_back(axisBase + 1);
+                    selectedEdges.push_back(axisBase + 2);
+                    selectedEdges.push_back(axisBase + 3);
+                    selectedEdges.push_back(axisBase + 4);
+                    selectedEdges.push_back(axisBase + 5);
                 } else {
                     auto& targetVerts = isSelected ? selectedVertices : combinedVertices;
                     auto& targetIndices = isSelected ? selectedIndices : combinedIndices;

@@ -2025,6 +2025,82 @@ void CADGui::RenderUI(
             m_sketchModeActive = false;
         }
     }
+
+    // -------------------------------------------------------------------------
+    // 3D Viewport Vertex Selection Highlight (Reticle + Callout Badge)
+    // -------------------------------------------------------------------------
+    if (m_selectedVertexIndex >= 0 && selectedNode && !m_sketchModeActive) {
+        const auto& verts = selectedNode->GetCachedVertices();
+        Geom::Point3D vPos = m_selectedVertexPos;
+        if (static_cast<size_t>(m_selectedVertexIndex) < verts.size()) {
+            vPos = Geom::Point3D(
+                verts[m_selectedVertexIndex].position[0],
+                verts[m_selectedVertexIndex].position[1],
+                verts[m_selectedVertexIndex].position[2]
+            );
+            m_selectedVertexPos = vPos;
+        }
+
+        float sx = 0.0f, sy = 0.0f;
+        float vpW = static_cast<float>(renderer.GetWidth());
+        float vpH = static_cast<float>(renderer.GetHeight());
+        if (vpW <= 0.0f || vpH <= 0.0f) {
+            ImGuiIO& io = ImGui::GetIO();
+            vpW = io.DisplaySize.x;
+            vpH = io.DisplaySize.y;
+        }
+
+        if (camera.WorldToScreenPoint(vPos, vpW, vpH, sx, sy)) {
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            ImVec2 center(sx, sy);
+
+            // 1. Outer dark shadow ring for high contrast against any geometry
+            fg->AddCircle(center, 13.0f, IM_COL32(0, 0, 0, 220), 32, 4.0f);
+
+            // 2. Outer glowing vibrant electric cyan ring
+            fg->AddCircle(center, 10.0f, IM_COL32(0, 230, 255, 255), 32, 2.5f);
+
+            // 3. Inner bright white core & cyan center point
+            fg->AddCircleFilled(center, 5.0f, IM_COL32(255, 255, 255, 255), 16);
+            fg->AddCircleFilled(center, 2.5f, IM_COL32(0, 180, 255, 255), 16);
+
+            // 4. Reticle crosshair ticks
+            float tickInner = 14.0f;
+            float tickOuter = 21.0f;
+            fg->AddLine(ImVec2(center.x - tickOuter, center.y), ImVec2(center.x - tickInner, center.y), IM_COL32(0, 240, 255, 255), 2.0f);
+            fg->AddLine(ImVec2(center.x + tickInner, center.y), ImVec2(center.x + tickOuter, center.y), IM_COL32(0, 240, 255, 255), 2.0f);
+            fg->AddLine(ImVec2(center.x, center.y - tickOuter), ImVec2(center.x, center.y - tickInner), IM_COL32(0, 240, 255, 255), 2.0f);
+            fg->AddLine(ImVec2(center.x, center.y + tickInner), ImVec2(center.x, center.y + tickOuter), IM_COL32(0, 240, 255, 255), 2.0f);
+
+            // 5. Sleek CAD Callout Leader & Badge Pill
+            char badgeText[128];
+            std::snprintf(badgeText, sizeof(badgeText), "Vertex #%d  (%.2f, %.2f, %.2f)", 
+                m_selectedVertexIndex, vPos.x, vPos.y, vPos.z);
+            ImVec2 textSize = ImGui::CalcTextSize(badgeText);
+            float badgePadX = 8.0f;
+            float badgePadY = 4.0f;
+            float badgeW = textSize.x + badgePadX * 2.0f;
+            float badgeH = textSize.y + badgePadY * 2.0f;
+
+            // Offset badge to upper-right or adjust for screen boundaries
+            float leaderEndX = center.x + 35.0f;
+            float leaderEndY = center.y - 30.0f;
+            if (leaderEndX + badgeW > vpW - 10.0f) leaderEndX = center.x - 35.0f - badgeW;
+            if (leaderEndY < 65.0f) leaderEndY = center.y + 30.0f;
+
+            // Leader line
+            fg->AddLine(ImVec2(center.x + 10.0f * 0.707f, center.y - 10.0f * 0.707f), 
+                        ImVec2(leaderEndX, leaderEndY + badgeH * 0.5f), 
+                        IM_COL32(0, 220, 255, 200), 1.5f);
+
+            // Badge box
+            ImVec2 bP0(leaderEndX, leaderEndY);
+            ImVec2 bP1(leaderEndX + badgeW, leaderEndY + badgeH);
+            fg->AddRectFilled(bP0, bP1, IM_COL32(14, 18, 26, 230), 4.0f);
+            fg->AddRect(bP0, bP1, IM_COL32(0, 220, 255, 220), 4.0f, 0, 1.5f);
+            fg->AddText(ImVec2(leaderEndX + badgePadX, leaderEndY + badgePadY), IM_COL32(230, 245, 255, 255), badgeText);
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
