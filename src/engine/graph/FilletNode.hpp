@@ -408,7 +408,7 @@ public:
             int bestEdgeIdx = -1;
             Geom::Point3D bestP0, bestP1;
             Geom::Vector3D bestDir, bestNormB, bestUA, bestUB;
-            double bestScore = -0.2; // allow corner turns up to ~100 degrees
+            double bestScore = 0.35; // tangent-continuous chaining only (no wrapping around sharp corners)
 
             for (size_t e = 0; e < baseEdges.size() / 2; ++e) {
                 if (visitedEdges.count(e)) continue;
@@ -484,8 +484,7 @@ public:
             if (bestEdgeIdx >= 0) {
                 visitedEdges.insert(static_cast<size_t>(bestEdgeIdx));
                 chain.push_back({bestP0, bestP1, bestDir, bestNormB, bestUA, bestUB, seedRadius});
-                // Corner-only propagation: after wrapping a sharp corner, do not keep following the rim
-                grewForward = (bestScore >= 0.7);
+                grewForward = true;
             }
         }
 
@@ -503,7 +502,7 @@ public:
             int bestEdgeIdx = -1;
             Geom::Point3D bestP0, bestP1;
             Geom::Vector3D bestDir, bestNormB, bestUA, bestUB;
-            double bestScore = -0.2; // allow corner turns up to ~100 degrees
+            double bestScore = 0.35; // tangent-continuous chaining only (no wrapping around sharp corners)
 
             for (size_t e = 0; e < baseEdges.size() / 2; ++e) {
                 if (visitedEdges.count(e)) continue;
@@ -579,7 +578,7 @@ public:
             if (bestEdgeIdx >= 0) {
                 visitedEdges.insert(static_cast<size_t>(bestEdgeIdx));
                 chain.insert(chain.begin(), {bestP0, bestP1, bestDir, bestNormB, bestUA, bestUB, seedRadius});
-                grewBackward = (bestScore >= 0.7);
+                grewBackward = true;
             }
         }
 

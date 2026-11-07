@@ -1877,8 +1877,8 @@ bool TestFilletChamferChildRelationshipAndSafeFeatureDeletion() {
     return true;
 }
 
-bool TestFilletPropagatesAroundCornerToAdjoiningEdges() {
-    std::cout << "[Test] Fillet Propagates Around Corner to Adjoining Rim Edges (Mitered)...\n";
+bool TestFilletDoesNotWrapOntoAdjoiningEdges() {
+    std::cout << "[Test] Fillet Does Not Wrap Onto Adjoining Rim Edges...\n";
     MockTestDevice mockDevice;
     AtomicMeshExchange exchange;
     ParametricGraph graph(nullptr);
@@ -1919,8 +1919,8 @@ bool TestFilletPropagatesAroundCornerToAdjoiningEdges() {
             minZ = std::min(minZ, v.position[2]); maxZ = std::max(maxZ, v.position[2]);
         }
     }
-    TEST_ASSERT((maxX - minX) > 1.0f && (maxZ - minZ) > 1.0f,
-                "Fillet must wrap around the corner onto the adjoining rim edge (uniform round)");
+    TEST_ASSERT(!((maxX - minX) > 1.0f && (maxZ - minZ) > 1.0f),
+                "Fillet must stay on the selected edge and not round the adjoining rim edge");
     return true;
 }
 
@@ -1954,7 +1954,7 @@ int main() {
     pass &= TestHorizontalAndGeneral3DEdgeFilletAndChamfer();
     pass &= TestLBracketTopRimFilletWithTangentChainAndVerticalCornerFillets();
     pass &= TestFilletChamferChildRelationshipAndSafeFeatureDeletion();
-    pass &= TestFilletPropagatesAroundCornerToAdjoiningEdges();
+    pass &= TestFilletDoesNotWrapOntoAdjoiningEdges();
     pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {
