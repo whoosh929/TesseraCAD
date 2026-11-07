@@ -1250,88 +1250,111 @@ void CADGui::RenderUI(
         ImGui::Separator();
 
         ImGui::BeginChild("NodeList", ImVec2(0, 180), true);
-        for (const auto& node : nodes) {
-            // Child sketches are displayed underneath their parent feature in the hierarchy
-            if (node->HasParentFeature()) {
-                continue;
-            }
 
-            auto childSketch = node->GetChildSketch();
-            bool isSelected = (node->GetId() == m_selectedNodeId);
+        // Recursive tree renderer for nodes, child sketches, and child features (Fillets, Chamfers)
+        std::function<void(const std::shared_ptr<DAGNode>&, int)> renderNodeTree =
+            [&](const std::shared_ptr<DAGNode>& node, int depth) {
+                if (!node) return;
 
-            std::string prefix = "[Solid] ";
-            if (node->HasConflict()) {
-                prefix = "[!] CONFLICT: ";
-            } else if (std::dynamic_pointer_cast<SketchNode>(node)) {
-                if (isSelected) {
-                    prefix = "[Sketch ✦ Outline/Shaded] ";
-                } else {
-                    prefix = "[Sketch 👁 Hidden] ";
-                }
-            } else if (auto e = std::dynamic_pointer_cast<ExtrudeNode>(node)) {
-                prefix = "[Extrude] ";
-            } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
-                prefix = "[Revolve] ";
-            } else if (auto p = std::dynamic_pointer_cast<DatumPlaneNode>(node)) {
-                prefix = p->IsFaceAssociative() ? "[DatumPlane (Face Tied)] " : (p->IsVertexAssociative() ? "[DatumPlane (Vertex Tied)] " : "[DatumPlane] ");
-            } else if (auto a = std::dynamic_pointer_cast<DatumAxisNode>(node)) {
-                prefix = a->IsVertexAssociative() ? "[DatumAxis (Vertex Tied)] " : "[DatumAxis] ";
-            } else if (std::dynamic_pointer_cast<FilletNode>(node)) {
-                prefix = "[⌒ Fillet] ";
-            } else if (std::dynamic_pointer_cast<ChamferNode>(node)) {
-                prefix = "[⟍ Chamfer] ";
-            }
+                bool isSelected = (node->GetId() == m_selectedNodeId);
+                auto childSketch = node->GetChildSketch();
 
-            std::string label = prefix + node->GetName() + " (ID " + std::to_string(node->GetId()) + ")";
-
-            if (childSketch) {
-                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
-                if (isSelected) {
-                    flags |= ImGuiTreeNodeFlags_Selected;
+                // Find all child features whose parent feature is this node
+                std::vector<std::shared_ptr<DAGNode>> childFeatures;
+                for (const auto& n : nodes) {
+                    if (n && n->GetParentFeature() == node) {
+                        childFeatures.push_back(n);
+                    }
                 }
 
-                bool nodeOpen = ImGui::TreeNodeEx(reinterpret_cast<void*>(node->GetId()), flags, "%s", label.c_str());
-                if (ImGui::IsItemClicked()) {
-                    m_selectedNodeId = node->GetId();
-                    ClearSubElementSelection();
-                    graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
-                }
-                if (isSelected && m_selectionScrollPending) {
-                    ImGui::SetScrollHereY(0.5f);
+                bool hasChildren = (childSketch != nullptr) || !childFeatures.empty();
+
+                std::string prefix = (depth > 0) ? "↳ [Solid] " : "[Solid] ";
+                if (node->HasConflict()) {
+                    prefix = (depth > 0) ? "↳ [!] CONFLICT: " : "[!] CONFLICT: ";
+                } else if (std::dynamic_pointer_cast<SketchNode>(node)) {
+                    if (isSelected) {
+                        prefix = (depth > 0) ? "↳ [Sketch ✦ Outline/Shaded] " : "[Sketch ✦ Outline/Shaded] ";
+                    } else {
+                        prefix = (depth > 0) ? "↳ [Sketch 👁 Hidden] " : "[Sketch 👁 Hidden] ";
+                    }
+                } else if (auto e = std::dynamic_pointer_cast<ExtrudeNode>(node)) {
+                    prefix = (depth > 0) ? "↳ [Extrude] " : "[Extrude] ";
+                } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
+                    prefix = (depth > 0) ? "↳ [Revolve] " : "[Revolve] ";
+                } else if (auto p = std::dynamic_pointer_cast<DatumPlaneNode>(node)) {
+                    prefix = p->IsFaceAssociative() ? "↳ [DatumPlane (Face Tied)] " : (p->IsVertexAssociative() ? "↳ [DatumPlane (Vertex Tied)] " : "↳ [DatumPlane] ");
+                } else if (auto a = std::dynamic_pointer_cast<DatumAxisNode>(node)) {
+                    prefix = a->IsVertexAssociative() ? "↳ [DatumAxis (Vertex Tied)] " : "↳ [DatumAxis] ";
+                } else if (std::dynamic_pointer_cast<FilletNode>(node)) {
+                    prefix = (depth > 0) ? "↳ [⌒ Fillet] " : "[⌒ Fillet] ";
+                } else if (std::dynamic_pointer_cast<ChamferNode>(node)) {
+                    prefix = (depth > 0) ? "↳ [⟍ Chamfer] " : "[⟍ Chamfer] ";
                 }
 
-                if (nodeOpen) {
-                    bool isChildSelected = (childSketch->GetId() == m_selectedNodeId);
-                    std::string childPrefix = childSketch->HasConflict() ? "↳ [!] CONFLICT: " : "↳ [Sketch] ";
-                    std::string childLabel = childPrefix + childSketch->GetName() + " (ID " + std::to_string(childSketch->GetId()) + ")";
+                std::string label = prefix + node->GetName() + " (ID " + std::to_string(node->GetId()) + ")";
 
-                    if (ImGui::Selectable(childLabel.c_str(), isChildSelected)) {
-                        m_selectedNodeId = childSketch->GetId();
+                if (hasChildren) {
+                    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+                    if (isSelected) {
+                        flags |= ImGuiTreeNodeFlags_Selected;
+                    }
+
+                    bool nodeOpen = ImGui::TreeNodeEx(reinterpret_cast<void*>(node->GetId()), flags, "%s", label.c_str());
+                    if (ImGui::IsItemClicked()) {
+                        m_selectedNodeId = node->GetId();
                         ClearSubElementSelection();
                         graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
                     }
-                    if (isChildSelected && m_selectionScrollPending) {
+                    if (isSelected && m_selectionScrollPending) {
                         ImGui::SetScrollHereY(0.5f);
                     }
-                    ImGui::TreePop();
-                }
-            } else {
-                if (ImGui::Selectable(label.c_str(), isSelected)) {
-                    m_selectedNodeId = node->GetId();
-                    ClearSubElementSelection();
-                    graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
-                }
-                if (std::dynamic_pointer_cast<SketchNode>(node) && ImGui::IsItemHovered()) {
-                    if (isSelected) {
-                        ImGui::SetTooltip("Standalone Sketch is SELECTED:\nRendered in 3D viewport as a vibrant outline with transparent shading.");
-                    } else {
-                        ImGui::SetTooltip("Standalone Sketch is NOT selected:\nHidden from 3D viewport. Click to select on feature tree and display with outline & transparent shading.");
+
+                    if (nodeOpen) {
+                        if (childSketch) {
+                            bool isChildSelected = (childSketch->GetId() == m_selectedNodeId);
+                            std::string childPrefix = childSketch->HasConflict() ? "↳ [!] CONFLICT: " : "↳ [Sketch] ";
+                            std::string childLabel = childPrefix + childSketch->GetName() + " (ID " + std::to_string(childSketch->GetId()) + ")";
+
+                            if (ImGui::Selectable(childLabel.c_str(), isChildSelected)) {
+                                m_selectedNodeId = childSketch->GetId();
+                                ClearSubElementSelection();
+                                graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
+                            }
+                            if (isChildSelected && m_selectionScrollPending) {
+                                ImGui::SetScrollHereY(0.5f);
+                            }
+                        }
+                        for (const auto& cf : childFeatures) {
+                            renderNodeTree(cf, depth + 1);
+                        }
+                        ImGui::TreePop();
+                    }
+                } else {
+                    if (ImGui::Selectable(label.c_str(), isSelected)) {
+                        m_selectedNodeId = node->GetId();
+                        ClearSubElementSelection();
+                        graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
+                    }
+                    if (std::dynamic_pointer_cast<SketchNode>(node) && ImGui::IsItemHovered()) {
+                        if (isSelected) {
+                            ImGui::SetTooltip("Standalone Sketch is SELECTED:\nRendered in 3D viewport as a vibrant outline with transparent shading.");
+                        } else {
+                            ImGui::SetTooltip("Standalone Sketch is NOT selected:\nHidden from 3D viewport. Click to select on feature tree and display with outline & transparent shading.");
+                        }
+                    }
+                    if (isSelected && m_selectionScrollPending) {
+                        ImGui::SetScrollHereY(0.5f);
                     }
                 }
-                if (isSelected && m_selectionScrollPending) {
-                    ImGui::SetScrollHereY(0.5f);
-                }
+            };
+
+        for (const auto& node : nodes) {
+            // Child features & child sketches are displayed underneath their parent feature in the hierarchy
+            if (node->HasParentFeature()) {
+                continue;
             }
+            renderNodeTree(node, 0);
         }
         if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemHovered()) {
             m_selectedNodeId = 0; // Deselect on clicking empty background in Model Tree
@@ -2117,6 +2140,10 @@ void CADGui::RenderUI(
                     }
                     ImGui::TextDisabled("(Deleting the parent feature will promote this sketch)");
                 }
+            } else if (selectedNode->HasParentFeature()) {
+                if (auto parent = selectedNode->GetParentFeature()) {
+                    ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Child feature of: '%s'", parent->GetName().c_str());
+                }
             }
 
             std::string delBtnText = "Delete Selected Object";
@@ -2134,13 +2161,18 @@ void CADGui::RenderUI(
                 if (ImGui::Button(delBtnText.c_str(), ImVec2(-1, 28))) {
                     uint64_t delId = selectedNode->GetId();
                     auto child = selectedNode->GetChildSketch();
+                    auto parent = selectedNode->GetParentFeature();
                     graph.RemoveNode(delId);
                     graph.EvaluateDirtyNodes(device, exchange);
-                    if (child) {
+                    if (parent && graph.GetNode(parent->GetId())) {
+                        m_selectedNodeId = parent->GetId();
+                    } else if (child && graph.GetNode(child->GetId())) {
                         m_selectedNodeId = child->GetId();
                     } else {
                         m_selectedNodeId = 0;
                     }
+                    ClearSubElementSelection();
+                    graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
                     m_lastPublishedSelectedNodeId = m_selectedNodeId;
                     graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
                 }
@@ -2150,13 +2182,18 @@ void CADGui::RenderUI(
                 if (!isChildSketch) {
                     uint64_t delId = selectedNode->GetId();
                     auto child = selectedNode->GetChildSketch();
+                    auto parent = selectedNode->GetParentFeature();
                     graph.RemoveNode(delId);
                     graph.EvaluateDirtyNodes(device, exchange);
-                    if (child) {
+                    if (parent && graph.GetNode(parent->GetId())) {
+                        m_selectedNodeId = parent->GetId();
+                    } else if (child && graph.GetNode(child->GetId())) {
                         m_selectedNodeId = child->GetId();
                     } else {
                         m_selectedNodeId = 0;
                     }
+                    ClearSubElementSelection();
+                    graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
                     m_lastPublishedSelectedNodeId = m_selectedNodeId;
                     graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
                 }

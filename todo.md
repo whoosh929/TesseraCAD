@@ -15,5 +15,8 @@ Default Mouse Wheel Controls
 - [] feature: allow all dimensions in a 2d sketch to be input using the keyboard.
 - [x] feature: When applying a fillet to a vertex, give the choice for distance or angle.
 - [] feature: when applying a 3d feature like chamfer or extrude, continue to allow for preview of the model as done now, but don't apply the chain until the user confirms. The user confirmation/cancellation should be like you confirm/cancel a 2d sketch .
-- [] bug: when applying a feature like a fillet, not being satisified with it and clicking delete feature, the entire assocaited model gets deleted temporarily and then it comes back. Can you make it so when you delete the feature, it doesn't delete the whole associated model?
-- [] bug: fillet and chamfer features should be childs of the assocaited model.
+- [x] bug: when applying a feature like a fillet, not being satisified with it and clicking delete feature, the entire assocaited model gets deleted temporarily and then it comes back. Can you make it so when you delete the feature, it doesn't delete the whole associated model?
+- [x] bug: fillet and chamfer features should be childs of the assocaited model.
+- [] feature: add a sublte x/y/z axes reference.
+- [] feature: add a control that recenters view on top, side, and isometric origin.
+- [] bug: when applying a fillet, sometimes the round is inverted, creating a concave shape at a corner instead of a convex.

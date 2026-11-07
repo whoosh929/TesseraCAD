@@ -545,6 +545,16 @@ public:
         return m_nodes;
     }
 
+    [[nodiscard]] std::shared_ptr<DAGNode> GetNode(uint64_t id) const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        for (const auto& node : m_nodes) {
+            if (node && node->GetId() == id) {
+                return node;
+            }
+        }
+        return nullptr;
+    }
+
     void RemoveNode(uint64_t id) {
         std::lock_guard<std::mutex> lock(m_graphMutex);
         std::shared_ptr<DAGNode> targetNode = nullptr;
@@ -557,6 +567,38 @@ public:
             }
         }
         if (targetNode) {
+            // Unconsume upstream parent features if this node was consuming them
+            for (const auto& parent : targetNode->GetInputs()) {
+                if (!parent) continue;
+                bool stillConsumed = false;
+                for (const auto& dep : parent->GetDependents()) {
+                    if (dep && dep != targetNode && dep->GetId() != id) {
+                        for (const auto& n : m_nodes) {
+                            if (n && n == dep && !n->HasConflict()) {
+                                stillConsumed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (stillConsumed) break;
+                }
+                if (!stillConsumed) {
+                    parent->SetConsumed(false);
+                    parent->MarkDirty();
+                }
+            }
+
+            // If the deleted node is currently selected, update selection to its parent or child
+            if (m_selectedNodeId == id) {
+                if (targetNode->GetParentFeature()) {
+                    m_selectedNodeId = targetNode->GetParentFeature()->GetId();
+                } else if (targetNode->GetChildSketch()) {
+                    m_selectedNodeId = targetNode->GetChildSketch()->GetId();
+                } else {
+                    m_selectedNodeId = 0;
+                }
+            }
+
             targetNode->NotifyRemoval();
         }
         m_nodes.erase(std::remove_if(m_nodes.begin(), m_nodes.end(), [id](const auto& n) {

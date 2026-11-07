@@ -136,3 +136,4 @@ CornerBlendResult VertexBlend3Corner::Solve(
 }
 
 } // namespace Tessera::Modeling::Blend
+

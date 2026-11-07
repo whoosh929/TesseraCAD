@@ -1778,6 +1778,81 @@ bool TestLBracketTopRimFilletWithTangentChainAndVerticalCornerFillets() {
     return true;
 }
 
+bool TestFilletChamferChildRelationshipAndSafeFeatureDeletion() {
+    std::cout << "[Test] Fillet & Chamfer Child Feature Hierarchy and Non-Disappearing Model Deletion...\n";
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    // 1. Create a base extrude block
+    auto sketch = std::make_shared<SketchNode>("Block_Sketch", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(4.0f, 4.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto baseBlock = std::make_shared<ExtrudeNode>("BaseBlock", sketch, 3.0f);
+    baseBlock->Evaluate(&mockDevice, exchange);
+    graph.AddNode(baseBlock);
+
+    TEST_ASSERT(!baseBlock->IsConsumed(), "BaseBlock must not be consumed initially");
+
+    // 2. Add FilletNode to BaseBlock
+    auto fillet = std::make_shared<FilletNode>("Fillet_Child", baseBlock, 0, 0.4f);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    // Child relationship verification
+    TEST_ASSERT(fillet->HasParentFeature(), "Fillet feature must have parent feature");
+    TEST_ASSERT(fillet->GetParentFeature() == baseBlock, "Fillet parent feature must be BaseBlock");
+    TEST_ASSERT(baseBlock->IsConsumed(), "BaseBlock must be consumed when Fillet is active");
+
+    // Publish combined scene mesh: fillet should be rendered, not baseBlock
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, fillet->GetId());
+    auto meshFillet = exchange.AcquireLatest();
+    TEST_ASSERT(meshFillet != nullptr && (meshFillet->indexCount > 0 || meshFillet->selectedIndexCount > 0),
+                "Scene mesh must have indices for Fillet");
+
+    // 3. User is not satisfied with the fillet and deletes it via graph.RemoveNode
+    uint64_t filletId = fillet->GetId();
+    graph.RemoveNode(filletId);
+
+    // CRITICAL: BaseBlock must IMMEDIATELY become unconsumed!
+    TEST_ASSERT(!baseBlock->IsConsumed(), "BaseBlock must be unconsumed IMMEDIATELY upon deleting fillet feature");
+    TEST_ASSERT(baseBlock->IsDirty(), "BaseBlock must be marked dirty upon fillet deletion for immediate re-evaluation");
+
+    // Re-evaluate dirty nodes: BaseBlock evaluates cleanly
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!baseBlock->GetCachedVertices().empty(), "BaseBlock cached vertices must remain intact");
+
+    // Scene publishing MUST contain BaseBlock
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, baseBlock->GetId());
+    auto meshAfterDelete = exchange.AcquireLatest();
+    TEST_ASSERT(meshAfterDelete != nullptr, "Published mesh after delete must not be null");
+    TEST_ASSERT((meshAfterDelete->indexCount > 0 || meshAfterDelete->selectedIndexCount > 0),
+                "BaseBlock must be present in scene mesh IMMEDIATELY (no temporary disappearance!)");
+
+    // 4. Repeat check with ChamferNode
+    auto chamfer = std::make_shared<ChamferNode>("Chamfer_Child", baseBlock, 0, 0.3f);
+    graph.AddNode(chamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(chamfer->HasParentFeature(), "Chamfer feature must have parent feature");
+    TEST_ASSERT(chamfer->GetParentFeature() == baseBlock, "Chamfer parent feature must be BaseBlock");
+    TEST_ASSERT(baseBlock->IsConsumed(), "BaseBlock must be consumed when Chamfer is active");
+
+    uint64_t chamferId = chamfer->GetId();
+    graph.RemoveNode(chamferId);
+
+    TEST_ASSERT(!baseBlock->IsConsumed(), "BaseBlock must be unconsumed IMMEDIATELY upon deleting chamfer feature");
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, baseBlock->GetId());
+    auto meshAfterChamferDelete = exchange.AcquireLatest();
+    TEST_ASSERT(meshAfterChamferDelete != nullptr && (meshAfterChamferDelete->indexCount > 0 || meshAfterChamferDelete->selectedIndexCount > 0),
+                "BaseBlock must remain present immediately upon chamfer deletion");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1807,6 +1882,7 @@ int main() {
     pass &= TestThreeCornerVertexFillet();
     pass &= TestHorizontalAndGeneral3DEdgeFilletAndChamfer();
     pass &= TestLBracketTopRimFilletWithTangentChainAndVerticalCornerFillets();
+    pass &= TestFilletChamferChildRelationshipAndSafeFeatureDeletion();
     pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {

@@ -114,7 +114,7 @@ public:
     }
 
     /// Notifies all downstream dependent nodes that this node is being removed from the graph
-    void NotifyRemoval() {
+    virtual void NotifyRemoval() {
         for (auto& depWeak : m_dependents) {
             if (auto dep = depWeak.lock()) {
                 dep->OnParentRemoved(m_id);

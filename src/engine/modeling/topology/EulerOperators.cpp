@@ -176,3 +176,4 @@ bool EulerOperators::SewHalfEdges(HHalfEdge* h1, HHalfEdge* h2) {
 }
 
 } // namespace Tessera::Modeling::Topology
+

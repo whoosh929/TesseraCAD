@@ -38,6 +38,8 @@ public:
     }
 
     [[nodiscard]] std::shared_ptr<DAGNode> GetTargetFeature() const noexcept { return m_targetNode; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetParentFeature() const noexcept override { return m_targetNode; }
+    [[nodiscard]] bool HasParentFeature() const noexcept override { return m_targetNode != nullptr; }
     [[nodiscard]] int GetReferencedEdgeIndex() const noexcept { return m_edgeIndex; }
     [[nodiscard]] float GetDistance() const noexcept { return m_distance; }
     [[nodiscard]] Geom::Point3D GetEdgeP0() const noexcept { return m_edgeP0; }
@@ -69,6 +71,14 @@ public:
 
     [[nodiscard]] bool HasConflict() const noexcept override { return m_hasConflict; }
     [[nodiscard]] std::string GetConflictMessage() const noexcept override { return m_conflictMessage; }
+
+    void NotifyRemoval() override {
+        if (m_targetNode) {
+            m_targetNode->SetConsumed(false);
+            m_targetNode->MarkDirty();
+        }
+        DAGNode::NotifyRemoval();
+    }
 
     void OnParentRemoved(uint64_t parentId) override {
         if (m_targetNodeId == parentId) {

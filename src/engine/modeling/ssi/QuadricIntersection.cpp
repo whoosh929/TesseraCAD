@@ -164,3 +164,4 @@ bool QuadricIntersection::IntersectSegmentPlane(
 }
 
 } // namespace Tessera::Modeling::SSI
+
