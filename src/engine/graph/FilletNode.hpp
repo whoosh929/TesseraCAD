@@ -408,7 +408,7 @@ public:
             int bestEdgeIdx = -1;
             Geom::Point3D bestP0, bestP1;
             Geom::Vector3D bestDir, bestNormB, bestUA, bestUB;
-            double bestScore = 0.35;
+            double bestScore = -0.2; // allow corner turns up to ~100 degrees
 
             for (size_t e = 0; e < baseEdges.size() / 2; ++e) {
                 if (visitedEdges.count(e)) continue;
@@ -502,7 +502,7 @@ public:
             int bestEdgeIdx = -1;
             Geom::Point3D bestP0, bestP1;
             Geom::Vector3D bestDir, bestNormB, bestUA, bestUB;
-            double bestScore = 0.35;
+            double bestScore = -0.2; // allow corner turns up to ~100 degrees
 
             for (size_t e = 0; e < baseEdges.size() / 2; ++e) {
                 if (visitedEdges.count(e)) continue;
@@ -598,31 +598,73 @@ public:
         std::vector<Geom::Point3D> sA_pts(chainCount + 1);
         std::vector<uint32_t> v_sA(chainCount + 1);
 
+        // Exact mitered offset point at a junction: the point p on face A with p.u1 = d1 and p.u2 = d2,
+        // i.e. the intersection of the two setback lines. Handles sharp corner turns (e.g. 90 degrees).
+        auto miterPoint = [](const Geom::Point3D& J, const Geom::Vector3D& u1, double d1,
+                             const Geom::Vector3D& u2, double d2) -> Geom::Point3D {
+            double c = u1.dot(u2);
+            double den = 1.0 - c * c;
+            if (den < 1e-3) {
+                return J + (u1 + u2).normalized() * ((d1 + d2) * 0.5);
+            }
+            double a = (d1 - d2 * c) / den;
+            double b = (d2 - d1 * c) / den;
+            return J + u1 * a + u2 * b;
+        };
+
         for (size_t i = 0; i <= chainCount; ++i) {
             Geom::Point3D junctionPt;
-            Geom::Vector3D uA_avg;
-            double dEff = seedRadius;
             if (i == 0) {
                 junctionPt = chain.front().p0;
-                uA_avg = isLoop ? (chain.back().uA + chain.front().uA).normalized() : chain.front().uA;
-                dEff = setbackD.front();
+                sA_pts[i] = isLoop
+                    ? miterPoint(junctionPt, chain.back().uA, setbackD.back(), chain.front().uA, setbackD.front())
+                    : junctionPt + chain.front().uA * setbackD.front();
             } else if (i == chainCount) {
                 junctionPt = chain.back().p1;
-                uA_avg = isLoop ? (chain.back().uA + chain.front().uA).normalized() : chain.back().uA;
-                dEff = setbackD.back();
+                sA_pts[i] = isLoop
+                    ? miterPoint(junctionPt, chain.back().uA, setbackD.back(), chain.front().uA, setbackD.front())
+                    : junctionPt + chain.back().uA * setbackD.back();
             } else {
                 junctionPt = chain[i].p0;
-                uA_avg = (chain[i - 1].uA + chain[i].uA).normalized();
-                dEff = (setbackD[i - 1] + setbackD[i]) * 0.5;
+                sA_pts[i] = miterPoint(junctionPt, chain[i - 1].uA, setbackD[i - 1], chain[i].uA, setbackD[i]);
             }
 
-            sA_pts[i] = junctionPt + uA_avg * dEff;
             v_sA[i] = static_cast<uint32_t>(vertices.size());
             vertices.push_back({
                 {static_cast<float>(sA_pts[i].x), static_cast<float>(sA_pts[i].y), static_cast<float>(sA_pts[i].z)},
                 {static_cast<float>(normalA.x), static_cast<float>(normalA.y), static_cast<float>(normalA.z)}
             });
         }
+
+        // Slide a cross-section point of segment i along its edge direction so it lies on the miter
+        // (bisector) plane of the junction at the segment's start or end. Makes adjacent filleted edges
+        // meet cleanly at a corner instead of overlapping or leaving gaps.
+        auto toMiterPlane = [&](const Geom::Point3D& pt, size_t i, bool atEnd) -> Geom::Point3D {
+            const Geom::Vector3D* prevDir = nullptr;
+            const Geom::Vector3D* nextDir = nullptr;
+            Geom::Point3D J;
+            if (atEnd) {
+                J = chain[i].p1;
+                if (i + 1 < chainCount) nextDir = &chain[i + 1].edgeVec;
+                else if (isLoop) nextDir = &chain.front().edgeVec;
+                if (!nextDir) return pt;
+                prevDir = &chain[i].edgeVec;
+            } else {
+                J = chain[i].p0;
+                if (i > 0) prevDir = &chain[i - 1].edgeVec;
+                else if (isLoop) prevDir = &chain.back().edgeVec;
+                if (!prevDir) return pt;
+                nextDir = &chain[i].edgeVec;
+            }
+            Geom::Vector3D sum = *prevDir + *nextDir;
+            if (sum.length() < 1e-6) return pt;
+            Geom::Vector3D nm = sum.normalized();
+            const Geom::Vector3D& e = chain[i].edgeVec;
+            double denom = e.dot(nm);
+            if (std::abs(denom) < 0.2) return pt;
+            double s = -((pt - J).dot(nm)) / denom;
+            return pt + e * s;
+        };
 
         // Compute setback points on side Face B for each segment
         std::vector<uint32_t> v_sB0(chainCount);
@@ -631,8 +673,8 @@ public:
         std::vector<Geom::Point3D> sB1_pts(chainCount);
 
         for (size_t i = 0; i < chainCount; ++i) {
-            sB0_pts[i] = chain[i].p0 + chain[i].uB * setbackD[i];
-            sB1_pts[i] = chain[i].p1 + chain[i].uB * setbackD[i];
+            sB0_pts[i] = toMiterPlane(chain[i].p0 + chain[i].uB * setbackD[i], i, false);
+            sB1_pts[i] = toMiterPlane(chain[i].p1 + chain[i].uB * setbackD[i], i, true);
 
             v_sB0[i] = static_cast<uint32_t>(vertices.size());
             vertices.push_back({
@@ -721,12 +763,12 @@ public:
                 float t = static_cast<float>(b) / static_cast<float>(numBands);
                 Geom::Vector3D filletNorm = (normalA * (1.0f - t) + chain[i].normalB * t).normalized();
 
-                Geom::Point3D pt0 = isConvex
+                Geom::Point3D pt0 = toMiterPlane(isConvex
                     ? (center0 + filletNorm * seedRadius)
-                    : (center0 - filletNorm * seedRadius);
-                Geom::Point3D pt1 = isConvex
+                    : (center0 - filletNorm * seedRadius), i, false);
+                Geom::Point3D pt1 = toMiterPlane(isConvex
                     ? (center1 + filletNorm * seedRadius)
-                    : (center1 - filletNorm * seedRadius);
+                    : (center1 - filletNorm * seedRadius), i, true);
 
                 band0[b] = static_cast<uint32_t>(vertices.size());
                 vertices.push_back({

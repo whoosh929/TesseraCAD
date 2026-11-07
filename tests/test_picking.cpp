@@ -1696,9 +1696,10 @@ bool TestHorizontalAndGeneral3DEdgeFilletAndChamfer() {
     bool foundConvexVertex = false;
     for (const auto& v : fVerts) {
         Geom::Point3D pt(v.position[0], v.position[1], v.position[2]);
-        // For vertices at the start of the fillet (near z=0), check distance to sharp corner ep0 (0, 2, 0)
-        if (std::abs(pt.z - ep0.z) < 1e-3) {
-            double d = std::hypot(pt.x - ep0.x, pt.y - ep0.y);
+        // Perpendicular distance from the sharp edge line (end sections may be mitered along the edge)
+        {
+            double proj = (pt - ep0).dot(eAxis);
+            double d = pt.distance_to(ep0 + eAxis * proj);
             if (d > 0.10 && d < 0.22) {
                 foundConvexVertex = true;
                 break;
@@ -1876,6 +1877,53 @@ bool TestFilletChamferChildRelationshipAndSafeFeatureDeletion() {
     return true;
 }
 
+bool TestFilletPropagatesAroundCornerToAdjoiningEdges() {
+    std::cout << "[Test] Fillet Propagates Around Corner to Adjoining Rim Edges (Mitered)...\n";
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    auto sketch = std::make_shared<SketchNode>("Sketch_LBracket", SketchPlane::XZ_Ground);
+    sketch->SetPresetLBracket(4.0f, 4.0f, 1.2f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_LBracket", sketch, 3.0f);
+    extrude->Evaluate(&mockDevice, exchange);
+    graph.AddNode(extrude);
+
+    const auto& edges = extrude->GetCachedEdges();
+    const auto& verts = extrude->GetCachedVertices();
+    int topEdge = -1;
+    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+        Geom::Point3D p0(verts[edges[e]].position[0], verts[edges[e]].position[1], verts[edges[e]].position[2]);
+        Geom::Point3D p1(verts[edges[e + 1]].position[0], verts[edges[e + 1]].position[1], verts[edges[e + 1]].position[2]);
+        if (std::abs(p0.y - 3.0) < 0.05 && std::abs(p1.y - 3.0) < 0.05 && p0.distance_to(p1) > 1.0) {
+            topEdge = static_cast<int>(e / 2);
+            break;
+        }
+    }
+    TEST_ASSERT(topEdge >= 0, "Must find a top rim edge on the L-bracket");
+
+    auto fillet = std::make_shared<FilletNode>("Rim_Fillet", extrude, topEdge, 0.3f);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!fillet->HasConflict(), "Rim fillet must not conflict");
+
+    float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f;
+    for (const auto& v : fillet->GetCachedVertices()) {
+        TEST_ASSERT(std::isfinite(v.position[0]) && std::isfinite(v.position[1]) && std::isfinite(v.position[2]),
+                    "Rim fillet vertices must be finite");
+        if (v.position[1] > 2.6f && v.position[1] < 2.99f) {
+            minX = std::min(minX, v.position[0]); maxX = std::max(maxX, v.position[0]);
+            minZ = std::min(minZ, v.position[2]); maxZ = std::max(maxZ, v.position[2]);
+        }
+    }
+    TEST_ASSERT((maxX - minX) > 1.0f && (maxZ - minZ) > 1.0f,
+                "Fillet must wrap around the corner onto the adjoining rim edge (uniform round)");
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1906,6 +1954,7 @@ int main() {
     pass &= TestHorizontalAndGeneral3DEdgeFilletAndChamfer();
     pass &= TestLBracketTopRimFilletWithTangentChainAndVerticalCornerFillets();
     pass &= TestFilletChamferChildRelationshipAndSafeFeatureDeletion();
+    pass &= TestFilletPropagatesAroundCornerToAdjoiningEdges();
     pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {
