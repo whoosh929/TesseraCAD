@@ -8,6 +8,11 @@
 #include "engine/modeling/BlendGeometry.hpp"
 #include "engine/modeling/CornerBlend.hpp"
 #include "engine/modeling/FilletOp.hpp"
+#include "engine/modeling/ssi/QuadricIntersection.hpp"
+#include "engine/modeling/topology/HalfEdgeMesh.hpp"
+#include "engine/modeling/topology/EulerOperators.hpp"
+#include "engine/modeling/blend/FilletSpine.hpp"
+#include "engine/modeling/blend/VertexBlend3Corner.hpp"
 #include <iostream>
 #include <cmath>
 #include <cassert>
@@ -472,6 +477,151 @@ bool TestFilletOpExecution() {
     return true;
 }
 
+bool TestQuadricIntersection() {
+    std::cout << "[Test] SSI QuadricIntersection (Plane-Cylinder, Cylinder-Sphere, Miter, Segment-Plane)...\n";
+
+    // 1. Perpendicular Plane-Cylinder intersection: should yield a circle
+    SSI::AnalyticalPlane perpPlane(Point3D(0, 0, 5), Vector3D(0, 0, 1));
+    SSI::AnalyticalCylinder cylinder(Point3D(0, 0, 0), Vector3D(0, 0, 1), 2.0);
+    auto resPerp = SSI::QuadricIntersection::IntersectPlaneCylinder(perpPlane, cylinder, 32);
+    TEST_ASSERT(resPerp.type == SSI::IntersectionType::Circle, "Perpendicular plane-cylinder intersection must be Circle");
+    TEST_ASSERT(std::abs(resPerp.major_radius - 2.0) < 1e-4, "Circle radius must match cylinder radius (2.0)");
+    TEST_ASSERT(std::abs(resPerp.minor_radius - 2.0) < 1e-4, "Circle minor radius must match 2.0");
+    TEST_ASSERT(resPerp.center.approx_equal(Point3D(0, 0, 5), 1e-4), "Circle center must be at Z=5");
+    TEST_ASSERT(resPerp.discrete_points.size() == 32, "Circle must have 32 sampled points");
+
+    // 2. Oblique Plane-Cylinder intersection: should yield an ellipse
+    SSI::AnalyticalPlane obliquePlane(Point3D(0, 0, 0), Vector3D(0, 1, 1).normalized());
+    auto resOblique = SSI::QuadricIntersection::IntersectPlaneCylinder(obliquePlane, cylinder, 32);
+    TEST_ASSERT(resOblique.type == SSI::IntersectionType::Ellipse, "Oblique plane-cylinder intersection must be Ellipse");
+    TEST_ASSERT(std::abs(resOblique.minor_radius - 2.0) < 1e-4, "Ellipse minor radius must equal cylinder radius");
+    TEST_ASSERT(std::abs(resOblique.major_radius - 2.0 * std::sqrt(2.0)) < 1e-3, "Major radius must match R * sqrt(2)");
+
+    // 3. Cylinder-Sphere Tangent intersection
+    SSI::AnalyticalSphere sphere(Point3D(0, 0, 2), 2.0);
+    auto resSph = SSI::QuadricIntersection::IntersectCylinderSphereTangent(cylinder, sphere, 32);
+    TEST_ASSERT(resSph.type == SSI::IntersectionType::Circle, "Cylinder-Sphere tangent seam must be Circle");
+    TEST_ASSERT(std::abs(resSph.major_radius - 2.0) < 1e-4, "Seam circle radius must match R");
+    TEST_ASSERT(resSph.center.approx_equal(Point3D(0, 0, 2), 1e-4), "Seam circle center must be at sphere center");
+
+    // 4. Cylinder-Cylinder Miter (Steinmetz intersection)
+    SSI::AnalyticalCylinder cylX(Point3D(0, 0, 0), Vector3D(1, 0, 0), 2.0);
+    SSI::AnalyticalCylinder cylY(Point3D(0, 0, 0), Vector3D(0, 1, 0), 2.0);
+    auto resMiter = SSI::QuadricIntersection::IntersectCylinderCylinderMiter(cylX, cylY, 32);
+    TEST_ASSERT(resMiter.type == SSI::IntersectionType::Ellipse, "Orthogonal cylinder miter seam must be Ellipse");
+    TEST_ASSERT(std::abs(resMiter.minor_radius - 2.0) < 1e-4, "Miter minor radius must match cylinder radius");
+
+    // 5. Line segment-plane intersection
+    Point3D segP0(0, -2, 0);
+    Point3D segP1(0, 2, 0);
+    SSI::AnalyticalPlane planeXZ(Point3D(0, 0, 0), Vector3D(0, 1, 0));
+    double tInt = 0.0;
+    Point3D ptInt;
+    bool hasInt = SSI::QuadricIntersection::IntersectSegmentPlane(segP0, segP1, planeXZ, tInt, ptInt);
+    TEST_ASSERT(hasInt, "Segment crossing plane must intersect");
+    TEST_ASSERT(std::abs(tInt - 0.5) < 1e-4, "Intersection parameter must be 0.5");
+    TEST_ASSERT(ptInt.approx_equal(Point3D(0, 0, 0), 1e-4), "Intersection point must be (0, 0, 0)");
+
+    return true;
+}
+
+bool TestHalfEdgeTopologyAndEulerOperators() {
+    std::cout << "[Test] HalfEdgeMesh Representation & Euler Operators (SplitEdge, SplitFace, ToCADMesh)...\n";
+
+    // 1. Build a simple quad mesh with 2 triangles
+    std::vector<CADVertex> verts = {
+        {{0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}},
+        {{0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}}
+    };
+    std::vector<uint32_t> indices = {
+        0, 1, 2,
+        0, 2, 3
+    };
+
+    auto heMesh = Topology::HalfEdgeMesh::FromIndexedMesh(verts, indices);
+    TEST_ASSERT(heMesh.vertices.size() == 4, "Expected 4 half-edge vertices");
+    TEST_ASSERT(heMesh.faces.size() == 2, "Expected 2 half-edge faces");
+    TEST_ASSERT(heMesh.edges.size() == 5, "Expected 5 half-edge edges for 2 sharing triangles");
+    TEST_ASSERT(heMesh.half_edges.size() == 10, "Expected 10 half-edges (5 edges * 2 twins)");
+
+    // 2. Test SplitEdge on edge 0
+    size_t origHECount = heMesh.half_edges.size();
+    size_t origVCount = heMesh.vertices.size();
+    Point3D midPt(0.5, 0.0, 0.0);
+    Topology::HVertex* newV = Topology::EulerOperators::SplitEdge(heMesh, heMesh.edges[0].get(), midPt);
+    TEST_ASSERT(newV != nullptr, "SplitEdge should succeed");
+    TEST_ASSERT(heMesh.vertices.size() == origVCount + 1, "SplitEdge should add 1 vertex");
+    TEST_ASSERT(newV->point.approx_equal(midPt, 1e-4), "New vertex point must match midPt");
+    TEST_ASSERT(heMesh.half_edges.size() == origHECount + 2, "SplitEdge should add 2 half-edges (1 split edge)");
+
+    // 3. Test ToCADMesh conversion
+    CADMesh cadMesh = heMesh.ToCADMesh();
+    TEST_ASSERT(!cadMesh.vertices.empty(), "ToCADMesh must produce vertices");
+    TEST_ASSERT(!cadMesh.indices.empty(), "ToCADMesh must produce indices");
+
+    return true;
+}
+
+bool TestFilletSpineAnd3CornerBlend() {
+    std::cout << "[Test] FilletSpine Trajectory & VertexBlend3Corner Solver...\n";
+
+    // 1. Evaluate FilletSpine on an orthogonal edge
+    Point3D p0(0, 0, 0);
+    Point3D p1(0, 0, 4);
+    Vector3D n1(0, 1, 0);
+    Vector3D n2(1, 0, 0);
+    double radius = 0.5;
+    bool isConvex = true;
+
+    Blend::FilletSpine spine;
+    spine.Evaluate(p0, p1, n1, n2, radius, isConvex, 8);
+    TEST_ASSERT(spine.samples.size() == 9, "Expected 9 spine samples");
+
+    for (const auto& smp : spine.samples) {
+        TEST_ASSERT(smp.center_pt.x < 0.0 && smp.center_pt.y < 0.0, "Rolling ball center must be inside solid for convex edge");
+        TEST_ASSERT(std::abs(smp.rail1_pt.y - 0.0) < 1e-4, "Contact rail 1 must lie on Face 1 (Y=0 plane)");
+        TEST_ASSERT(std::abs(smp.rail2_pt.x - 0.0) < 1e-4, "Contact rail 2 must lie on Face 2 (X=0 plane)");
+    }
+
+    // 2. Test FilletSpine trimming at a bounding plane
+    SSI::AnalyticalPlane trimPlane(Point3D(0, 0, 3), Vector3D(0, 0, 1));
+    spine.TrimEndAtPlane(trimPlane);
+    TEST_ASSERT(spine.samples.back().edge_pt.z <= 3.0 + 1e-4, "TrimEndAtPlane must clip spine to plane at Z=3");
+
+    // 3. Test VertexBlend3Corner::Solve for 3 orthogonal edges meeting at a corner
+    Point3D cornerV(2, 2, 2);
+    std::array<Blend::CornerBranch, 3> branches;
+    branches[0].edge_endpoint = cornerV;
+    branches[0].edge_direction = Vector3D(-1, 0, 0);
+    branches[0].face_normal_a = Vector3D(0, 1, 0);
+    branches[0].face_normal_b = Vector3D(0, 0, 1);
+    branches[0].radius = 0.3;
+
+    branches[1].edge_endpoint = cornerV;
+    branches[1].edge_direction = Vector3D(0, -1, 0);
+    branches[1].face_normal_a = Vector3D(1, 0, 0);
+    branches[1].face_normal_b = Vector3D(0, 0, 1);
+    branches[1].radius = 0.3;
+
+    branches[2].edge_endpoint = cornerV;
+    branches[2].edge_direction = Vector3D(0, 0, -1);
+    branches[2].face_normal_a = Vector3D(1, 0, 0);
+    branches[2].face_normal_b = Vector3D(0, 1, 0);
+    branches[2].radius = 0.3;
+
+    auto result = Blend::VertexBlend3Corner::Solve(cornerV, branches, 0.3, true, 2);
+    TEST_ASSERT(result.success, "3-corner blend solver must succeed for orthogonal corner");
+    TEST_ASSERT(result.sphere_center.x < cornerV.x && result.sphere_center.y < cornerV.y && result.sphere_center.z < cornerV.z,
+                "Sphere center must be recessed inside corner for convex blend");
+    TEST_ASSERT(!result.patch_vertices.empty(), "Spherical patch must have vertices");
+    TEST_ASSERT(!result.patch_indices.empty(), "Spherical patch must have indices");
+    TEST_ASSERT(result.branch_trim_planes.size() == 3, "Must have 3 branch trimming planes");
+
+    return true;
+}
+
 int main() {
     std::cout << "=========================================================\n";
     std::cout << "     TesseraCAD Modeling Operators Unit Tests            \n";
@@ -489,6 +639,9 @@ int main() {
     passed &= TestCornerSphereCenterIntersection();
     passed &= TestSphericalCornerPatchGeneration();
     passed &= TestFilletOpExecution();
+    passed &= TestQuadricIntersection();
+    passed &= TestHalfEdgeTopologyAndEulerOperators();
+    passed &= TestFilletSpineAnd3CornerBlend();
 
     std::cout << "=========================================================\n";
     if (passed) {

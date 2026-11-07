@@ -411,7 +411,7 @@ public:
             indices.push_back(v_s0A); indices.push_back(v_s0B); indices.push_back(v_s1B);
         }
 
-        // 6. Add end caps at p0 and p1 if side faces met at the ends of the edge
+        // 6. Add end caps at p0 and p1 only if actual capping faces meet at the ends of the edge
         bool hasEnd0Face = false;
         bool hasEnd1Face = false;
         for (size_t t = 0; t < numTriangles; ++t) {
@@ -423,11 +423,15 @@ public:
             Geom::Point3D tpc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
             Geom::Vector3D triNorm = (tpb - tpa).cross(tpc - tpa).normalized();
             if (triNorm.dot(normalA) <= 0.85 && triNorm.dot(normalB) <= 0.85) {
-                if (tpa.distance_to(m_edgeP0) < 0.05 || tpb.distance_to(m_edgeP0) < 0.05 || tpc.distance_to(m_edgeP0) < 0.05) {
-                    hasEnd0Face = true;
+                if (triNorm.dot(-edgeVec) > 0.5) {
+                    if (tpa.distance_to(m_edgeP0) < 0.05 || tpb.distance_to(m_edgeP0) < 0.05 || tpc.distance_to(m_edgeP0) < 0.05) {
+                        hasEnd0Face = true;
+                    }
                 }
-                if (tpa.distance_to(m_edgeP1) < 0.05 || tpb.distance_to(m_edgeP1) < 0.05 || tpc.distance_to(m_edgeP1) < 0.05) {
-                    hasEnd1Face = true;
+                if (triNorm.dot(edgeVec) > 0.5) {
+                    if (tpa.distance_to(m_edgeP1) < 0.05 || tpb.distance_to(m_edgeP1) < 0.05 || tpc.distance_to(m_edgeP1) < 0.05) {
+                        hasEnd1Face = true;
+                    }
                 }
             }
         }

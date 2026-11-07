@@ -67,6 +67,14 @@ target_sources(tessera_engine
         src/engine/modeling/FilletOp.hpp
         src/engine/modeling/FilletOp.cpp
         src/engine/modeling/CornerBlend.hpp
+        src/engine/modeling/ssi/QuadricIntersection.hpp
+        src/engine/modeling/ssi/QuadricIntersection.cpp
+        src/engine/modeling/topology/HalfEdgeMesh.hpp
+        src/engine/modeling/topology/EulerOperators.hpp
+        src/engine/modeling/topology/EulerOperators.cpp
+        src/engine/modeling/blend/FilletSpine.hpp
+        src/engine/modeling/blend/VertexBlend3Corner.hpp
+        src/engine/modeling/blend/VertexBlend3Corner.cpp
 
         # Concurrency & Lock-Free Primitives
         src/engine/concurrency/AtomicMeshExchange.hpp

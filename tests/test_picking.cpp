@@ -1702,6 +1702,82 @@ bool TestHorizontalAndGeneral3DEdgeFilletAndChamfer() {
     return true;
 }
 
+bool TestLBracketTopRimFilletWithTangentChainAndVerticalCornerFillets() {
+    std::cout << "[Test] L-Bracket Top Rim Fillet with Tangent Chaining & Vertical Corner Fillets...\n";
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    // 1. Create L-bracket extrusion
+    auto sketch = std::make_shared<SketchNode>("Sketch_LBracket", SketchPlane::XZ_Ground);
+    sketch->SetPresetLBracket(4.0f, 4.0f, 1.2f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_LBracket", sketch, 3.0f);
+    extrude->Evaluate(&mockDevice, exchange);
+    graph.AddNode(extrude);
+
+    // 2. Fillet vertical corner edges
+    const auto& edges = extrude->GetCachedEdges();
+    const auto& verts = extrude->GetCachedVertices();
+
+    int vertCornerEdge = -1;
+    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+        uint32_t i0 = edges[e];
+        uint32_t i1 = edges[e + 1];
+        Geom::Point3D p0(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]);
+        Geom::Point3D p1(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2]);
+        // Vertical edge has same X and Z, varying Y
+        if (std::abs(p0.x - p1.x) < 0.05 && std::abs(p0.z - p1.z) < 0.05 && std::abs(p0.y - p1.y) > 2.0) {
+            vertCornerEdge = static_cast<int>(e / 2);
+            break;
+        }
+    }
+    TEST_ASSERT(vertCornerEdge >= 0, "Must find vertical corner edge on L-bracket");
+
+    auto vertFillet = std::make_shared<FilletNode>("Vert_Fillet", extrude, vertCornerEdge, 0.35f);
+    graph.AddNode(vertFillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!vertFillet->HasConflict(), "Vertical fillet must evaluate cleanly");
+
+    // 3. Locate a horizontal top rim edge on the filleted L-bracket (at Y = 3.0)
+    const auto& vfEdges = vertFillet->GetCachedEdges();
+    const auto& vfVerts = vertFillet->GetCachedVertices();
+    int topHorizEdge = -1;
+
+    for (size_t e = 0; e + 1 < vfEdges.size(); e += 2) {
+        uint32_t i0 = vfEdges[e];
+        uint32_t i1 = vfEdges[e + 1];
+        Geom::Point3D p0(vfVerts[i0].position[0], vfVerts[i0].position[1], vfVerts[i0].position[2]);
+        Geom::Point3D p1(vfVerts[i1].position[0], vfVerts[i1].position[1], vfVerts[i1].position[2]);
+        if (std::abs(p0.y - 3.0) < 0.05 && std::abs(p1.y - 3.0) < 0.05 && p0.distance_to(p1) > 0.5) {
+            topHorizEdge = static_cast<int>(e / 2);
+            break;
+        }
+    }
+    TEST_ASSERT(topHorizEdge >= 0, "Must find horizontal top edge at Y = 3.0");
+
+    // 4. Apply horizontal fillet: tangent chaining should propagate and avoid spurious cliff walls
+    auto topFillet = std::make_shared<FilletNode>("Top_Fillet", vertFillet, topHorizEdge, 0.25f);
+    graph.AddNode(topFillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!topFillet->HasConflict(), "Top horizontal fillet must not conflict");
+    const auto& tfVerts = topFillet->GetCachedVertices();
+    const auto& tfIndices = topFillet->GetCachedIndices();
+    TEST_ASSERT(!tfVerts.empty() && !tfIndices.empty(), "Top fillet must have geometry");
+
+    for (const auto& v : tfVerts) {
+        TEST_ASSERT(std::isfinite(v.position[0]) && std::isfinite(v.position[1]) && std::isfinite(v.position[2]),
+                    "All top fillet vertex coordinates must be finite");
+        TEST_ASSERT(std::isfinite(v.normal[0]) && std::isfinite(v.normal[1]) && std::isfinite(v.normal[2]),
+                    "All top fillet normals must be finite");
+    }
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1730,6 +1806,7 @@ int main() {
     pass &= TestChainedFilletAndChamferFeatures();
     pass &= TestThreeCornerVertexFillet();
     pass &= TestHorizontalAndGeneral3DEdgeFilletAndChamfer();
+    pass &= TestLBracketTopRimFilletWithTangentChainAndVerticalCornerFillets();
     pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {

@@ -164,3 +164,4 @@ std::optional<Geom::Point3D> BlendGeometry::ComputeCornerSphereCenter(
 }
 
 } // namespace Tessera::Modeling
+
