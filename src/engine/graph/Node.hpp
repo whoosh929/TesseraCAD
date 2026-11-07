@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GeometryTypes.hpp"
+#include "ExtrusionCommon.hpp"
 #include "engine/concurrency/AtomicMeshExchange.hpp"
 #include "engine/geom/Plane.hpp"
 #include <string>
@@ -65,6 +66,45 @@ public:
     /// Consumed status for features modified by downstream operations (e.g. Fillet, Chamfer, Extrude)
     [[nodiscard]] virtual bool IsConsumed() const noexcept { return m_isConsumed; }
     virtual void SetConsumed(bool consumed) noexcept { m_isConsumed = consumed; }
+
+    /// Extrusion profile & coordinate metadata query for chaining 3D solid operations (Fillet, Chamfer, Boss)
+    virtual bool IsExtrusionBased(ExtrusionData& out) const { (void)out; return false; }
+
+    [[nodiscard]] const std::vector<std::shared_ptr<DAGNode>>& GetInputs() const noexcept { return m_inputs; }
+
+    [[nodiscard]] std::vector<std::shared_ptr<DAGNode>> GetDependents() const {
+        std::vector<std::shared_ptr<DAGNode>> result;
+        for (const auto& depWeak : m_dependents) {
+            if (auto dep = depWeak.lock()) {
+                result.push_back(dep);
+            }
+        }
+        return result;
+    }
+
+    /// Recursively traces downstream solid feature dependencies to find the latest active leaf feature
+    [[nodiscard]] std::shared_ptr<DAGNode> GetActiveLeafFeature() {
+        std::shared_ptr<DAGNode> curr = shared_from_this();
+        bool advanced = true;
+        while (advanced) {
+            advanced = false;
+            std::shared_ptr<DAGNode> bestNext = nullptr;
+            for (const auto& depWeak : curr->m_dependents) {
+                if (auto dep = depWeak.lock()) {
+                    if (dep->HasConflict()) continue;
+                    bestNext = dep;
+                    if (!dep->IsConsumed()) {
+                        break;
+                    }
+                }
+            }
+            if (bestNext && bestNext != curr) {
+                curr = bestNext;
+                advanced = true;
+            }
+        }
+        return curr;
+    }
 
     /// Connects this node to depend on an upstream parent
     void AddInput(std::shared_ptr<DAGNode> parent) {
@@ -300,6 +340,16 @@ protected:
 private:
     static inline std::atomic<uint64_t> s_nextId{1};
 };
+
+inline bool ExtractExtrusionData(const std::shared_ptr<DAGNode>& node, ExtrusionData& out) {
+    if (!node) return false;
+    if (node->IsExtrusionBased(out)) return true;
+    auto leaf = node->GetActiveLeafFeature();
+    if (leaf && leaf != node && leaf->IsExtrusionBased(out)) {
+        return true;
+    }
+    return false;
+}
 
 } // namespace Tessera
 

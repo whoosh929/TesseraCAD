@@ -243,6 +243,23 @@ public:
                 if (node->IsConsumed()) {
                     continue; // Consumed features are superseded by their downstream operations
                 }
+
+                // If this node is an earlier sibling targeting the same base feature as an active downstream/selected sibling, skip it
+                bool superseded = false;
+                for (const auto& other : m_nodes) {
+                    if (other && other != node && !other->IsConsumed()) {
+                        if (!node->GetInputs().empty() && !other->GetInputs().empty()) {
+                            if (node->GetInputs()[0] == other->GetInputs()[0]) {
+                                if (other->GetId() == m_selectedNodeId || other->GetId() > node->GetId()) {
+                                    superseded = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (superseded) continue;
+
                 const auto& verts = node->GetCachedVertices();
                 const auto& indices = node->GetCachedIndices();
                 const auto& edges = node->GetCachedEdges();
@@ -565,6 +582,9 @@ public:
         for (const auto& node : m_nodes) {
             if (!node) continue;
 
+            // Never pick consumed solid features (they are hidden/superseded by downstream operations)
+            if (node->IsConsumed()) continue;
+
             // If it's a sketch node:
             // 1) Child sketches under a feature are picked via the feature's 3D solid
             // 2) Parentless sketches do not show up unless selected on the feature tree
@@ -629,6 +649,14 @@ public:
             }
         }
         if (!targetNode) return result;
+
+        if (targetNode->IsConsumed()) {
+            auto leaf = targetNode->GetActiveLeafFeature();
+            if (leaf) {
+                targetNode = leaf;
+                result.nodeId = leaf->GetId();
+            }
+        }
 
         const auto& verts = targetNode->GetCachedVertices();
         const auto& indices = targetNode->GetCachedIndices();

@@ -87,6 +87,19 @@ public:
     [[nodiscard]] float GetHeight() const noexcept { return m_height; }
     [[nodiscard]] const std::vector<std::array<float, 2>>& GetProfile() const noexcept { return m_profile; }
     [[nodiscard]] SketchPlane GetPlane() const noexcept { return m_plane; }
+    void SetPlane(SketchPlane plane) { m_plane = plane; MarkDirty(); }
+    void SetCustomPlane(const Geom::Plane& plane) { m_customPlane = plane; m_useCustomPlane = true; MarkDirty(); }
+    [[nodiscard]] bool UsesCustomPlane() const noexcept { return m_useCustomPlane; }
+
+    bool IsExtrusionBased(ExtrusionData& out) const override {
+        out.profile = m_profile;
+        out.height = m_height;
+        out.position = {m_position[0], m_position[1], m_position[2]};
+        out.plane = m_plane;
+        out.useCustomPlane = m_useCustomPlane;
+        out.customPlane = m_customPlane;
+        return !out.profile.empty();
+    }
 
     void Evaluate(RHI::RHIDevice* device, AtomicMeshExchange& exchange) override {
         (void)device;

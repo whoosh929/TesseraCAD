@@ -372,11 +372,12 @@ void CADGui::RenderTopBar(
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.48f, 0.64f, 1.0f));
         if (ImGui::Button("⌒ Fillet", ImVec2(80, 32))) {
             if (m_selectedEdgeIndex >= 0 && selectedNode) {
+                auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                 std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
                 float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
                     ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
                     : m_newFilletRadius;
-                auto fillet = std::make_shared<FilletNode>(name, selectedNode, m_selectedEdgeIndex, effRadius);
+                auto fillet = std::make_shared<FilletNode>(name, target, m_selectedEdgeIndex, effRadius);
                 if (m_filletChoice == FilletDimensionChoice::Angle) {
                     fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                     fillet->SetAngle(m_newFilletAngle);
@@ -384,6 +385,7 @@ void CADGui::RenderTopBar(
                 graph.AddNode(fillet);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(fillet->GetId());
+                ClearSubElementSelection();
                 m_showFilletPrompt = false;
             } else {
                 m_showFilletPrompt = true;
@@ -400,11 +402,13 @@ void CADGui::RenderTopBar(
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.48f, 0.32f, 0.58f, 1.0f));
         if (ImGui::Button("⟍ Chamfer", ImVec2(90, 32))) {
             if (m_selectedEdgeIndex >= 0 && selectedNode) {
+                auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                 std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
-                auto chamfer = std::make_shared<ChamferNode>(name, selectedNode, m_selectedEdgeIndex, m_newChamferDistance);
+                auto chamfer = std::make_shared<ChamferNode>(name, target, m_selectedEdgeIndex, m_newChamferDistance);
                 graph.AddNode(chamfer);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(chamfer->GetId());
+                ClearSubElementSelection();
                 m_showChamferPrompt = false;
             } else {
                 m_showChamferPrompt = true;
@@ -806,11 +810,12 @@ void CADGui::RenderFilletPromptModal(
     if (m_selectedEdgeIndex >= 0 && m_selectedNodeId != 0) {
         for (const auto& n : nodes) {
             if (n->GetId() == m_selectedNodeId) {
+                auto target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
                 std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
                 float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
                     ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
                     : m_newFilletRadius;
-                auto fillet = std::make_shared<FilletNode>(name, n, m_selectedEdgeIndex, effRadius);
+                auto fillet = std::make_shared<FilletNode>(name, target, m_selectedEdgeIndex, effRadius);
                 if (m_filletChoice == FilletDimensionChoice::Angle) {
                     fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                     fillet->SetAngle(m_newFilletAngle);
@@ -818,6 +823,7 @@ void CADGui::RenderFilletPromptModal(
                 graph.AddNode(fillet);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(fillet->GetId());
+                ClearSubElementSelection();
                 m_showFilletPrompt = false;
                 return;
             }
@@ -861,11 +867,12 @@ void CADGui::RenderFilletPromptModal(
             size_t numEdges = edges.size() / 2;
             std::string btn = "⌒ Apply Fillet to Edge #0 of '" + n->GetName() + "' (" + std::to_string(numEdges) + " edges)";
             if (ImGui::Button(btn.c_str(), ImVec2(-1, 28))) {
+                auto target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
                 std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
                 float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
                     ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
                     : m_newFilletRadius;
-                auto fillet = std::make_shared<FilletNode>(name, n, 0, effRadius);
+                auto fillet = std::make_shared<FilletNode>(name, target, 0, effRadius);
                 if (m_filletChoice == FilletDimensionChoice::Angle) {
                     fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                     fillet->SetAngle(m_newFilletAngle);
@@ -873,6 +880,7 @@ void CADGui::RenderFilletPromptModal(
                 graph.AddNode(fillet);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(fillet->GetId());
+                ClearSubElementSelection();
                 m_showFilletPrompt = false;
                 break;
             }
@@ -902,11 +910,13 @@ void CADGui::RenderChamferPromptModal(
     if (m_selectedEdgeIndex >= 0 && m_selectedNodeId != 0) {
         for (const auto& n : nodes) {
             if (n->GetId() == m_selectedNodeId) {
+                auto target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
                 std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
-                auto chamfer = std::make_shared<ChamferNode>(name, n, m_selectedEdgeIndex, m_newChamferDistance);
+                auto chamfer = std::make_shared<ChamferNode>(name, target, m_selectedEdgeIndex, m_newChamferDistance);
                 graph.AddNode(chamfer);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(chamfer->GetId());
+                ClearSubElementSelection();
                 m_showChamferPrompt = false;
                 return;
             }
@@ -936,11 +946,13 @@ void CADGui::RenderChamferPromptModal(
             size_t numEdges = edges.size() / 2;
             std::string btn = "⟍ Apply Chamfer to Edge #0 of '" + n->GetName() + "' (" + std::to_string(numEdges) + " edges)";
             if (ImGui::Button(btn.c_str(), ImVec2(-1, 28))) {
+                auto target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
                 std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
-                auto chamfer = std::make_shared<ChamferNode>(name, n, 0, m_newChamferDistance);
+                auto chamfer = std::make_shared<ChamferNode>(name, target, 0, m_newChamferDistance);
                 graph.AddNode(chamfer);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(chamfer->GetId());
+                ClearSubElementSelection();
                 m_showChamferPrompt = false;
                 break;
             }
@@ -1449,7 +1461,8 @@ void CADGui::RenderUI(
                 }
 
                 if (ImGui::Button("⌒ Apply Fillet to Corner at Vertex", ImVec2(-1, 24))) {
-                    const auto& edges = selectedNode->GetCachedEdges();
+                    auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
+                    const auto& edges = target->GetCachedEdges();
                     int matchedEdge = -1;
                     uint32_t vIdx = static_cast<uint32_t>(m_selectedVertexIndex);
                     for (size_t e = 0; e + 1 < edges.size(); e += 2) {
@@ -1463,7 +1476,7 @@ void CADGui::RenderUI(
                         float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
                             ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
                             : m_newFilletRadius;
-                        auto fillet = std::make_shared<FilletNode>(name, selectedNode, matchedEdge, effRadius);
+                        auto fillet = std::make_shared<FilletNode>(name, target, matchedEdge, effRadius);
                         if (m_filletChoice == FilletDimensionChoice::Angle) {
                             fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                             fillet->SetAngle(m_newFilletAngle);
@@ -1500,11 +1513,20 @@ void CADGui::RenderUI(
                 if (m_newFilletRadius < 0.01f) m_newFilletRadius = 0.01f;
                 ImGui::SameLine();
                 if (ImGui::Button("⌒ Create Fillet", ImVec2(-1, 24))) {
+                    auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                     std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
-                    auto fillet = std::make_shared<FilletNode>(name, selectedNode, m_selectedEdgeIndex, m_newFilletRadius);
+                    float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
+                        ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
+                        : m_newFilletRadius;
+                    auto fillet = std::make_shared<FilletNode>(name, target, m_selectedEdgeIndex, effRadius);
+                    if (m_filletChoice == FilletDimensionChoice::Angle) {
+                        fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
+                        fillet->SetAngle(m_newFilletAngle);
+                    }
                     graph.AddNode(fillet);
                     graph.EvaluateDirtyNodes(device, exchange);
                     SetSelectedNodeId(fillet->GetId());
+                    ClearSubElementSelection();
                 }
 
                 ImGui::SetNextItemWidth(90.0f);
@@ -1512,11 +1534,13 @@ void CADGui::RenderUI(
                 if (m_newChamferDistance < 0.01f) m_newChamferDistance = 0.01f;
                 ImGui::SameLine();
                 if (ImGui::Button("⟍ Create Chamfer", ImVec2(-1, 24))) {
+                    auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                     std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
-                    auto chamfer = std::make_shared<ChamferNode>(name, selectedNode, m_selectedEdgeIndex, m_newChamferDistance);
+                    auto chamfer = std::make_shared<ChamferNode>(name, target, m_selectedEdgeIndex, m_newChamferDistance);
                     graph.AddNode(chamfer);
                     graph.EvaluateDirtyNodes(device, exchange);
                     SetSelectedNodeId(chamfer->GetId());
+                    ClearSubElementSelection();
                 }
 
                 if (ImGui::Button("✕ Deselect Edge (Select Whole Model)", ImVec2(-1, 22))) {

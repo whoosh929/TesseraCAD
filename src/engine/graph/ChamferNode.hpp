@@ -80,6 +80,22 @@ public:
         DAGNode::OnParentRemoved(parentId);
     }
 
+    [[nodiscard]] const std::vector<std::array<float, 2>>& GetProfile() const noexcept { return m_profile; }
+    [[nodiscard]] float GetHeight() const noexcept { return m_height; }
+    [[nodiscard]] SketchPlane GetPlane() const noexcept { return m_plane; }
+    [[nodiscard]] bool UsesCustomPlane() const noexcept { return m_useCustomPlane; }
+    [[nodiscard]] Geom::Plane GetCustomPlane() const noexcept { return m_customPlane; }
+
+    bool IsExtrusionBased(ExtrusionData& out) const override {
+        out.profile = m_profile;
+        out.height = m_height;
+        out.position = {m_position[0], m_position[1], m_position[2]};
+        out.plane = m_plane;
+        out.useCustomPlane = m_useCustomPlane;
+        out.customPlane = m_customPlane;
+        return !out.profile.empty();
+    }
+
     void Evaluate(RHI::RHIDevice* device, AtomicMeshExchange& exchange) override {
         (void)device;
         (void)exchange;
@@ -141,46 +157,91 @@ public:
         m_edgeP0 = Geom::Point3D(baseVerts[i0].position[0], baseVerts[i0].position[1], baseVerts[i0].position[2]);
         m_edgeP1 = Geom::Point3D(baseVerts[i1].position[0], baseVerts[i1].position[1], baseVerts[i1].position[2]);
 
-        // Method 1: If target is an ExtrudeNode and edge is a vertical corner edge, apply 2D chamfer to profile
-        if (auto extrude = std::dynamic_pointer_cast<ExtrudeNode>(m_targetNode)) {
-            const auto& profile = extrude->GetProfile();
-            float h = extrude->GetHeight();
+        // Method 1: If target or active leaf is an Extrusion, apply 2D chamfer to profile and extrude
+        ExtrusionData data;
+        if (ExtractExtrusionData(m_targetNode, data) && data.profile.size() >= 3) {
+            float h = data.height;
             bool foundCorner = false;
             size_t cornerIdx = 0;
 
-            for (size_t p = 0; p < profile.size(); ++p) {
-                float u = profile[p][0] + extrude->GetPosition()[0];
-                float v = profile[p][1] + extrude->GetPosition()[2];
-                float dx0 = std::abs(static_cast<float>(m_edgeP0.x) - u);
-                float dz0 = std::abs(static_cast<float>(m_edgeP0.z) - v);
-                float dx1 = std::abs(static_cast<float>(m_edgeP1.x) - u);
-                float dz1 = std::abs(static_cast<float>(m_edgeP1.z) - v);
+            for (size_t p = 0; p < data.profile.size(); ++p) {
+                float u = data.profile[p][0];
+                float v = data.profile[p][1];
 
-                if ((dx0 < 0.1f && dz0 < 0.1f) || (dx1 < 0.1f && dz1 < 0.1f)) {
+                Geom::Point3D pBot = MapExtrusionPointToWorld(data, u, v, 0.0f);
+                Geom::Point3D pTop = MapExtrusionPointToWorld(data, u, v, h);
+
+                double dBot0 = m_edgeP0.distance_to(pBot);
+                double dTop1 = m_edgeP1.distance_to(pTop);
+                double dTop0 = m_edgeP0.distance_to(pTop);
+                double dBot1 = m_edgeP1.distance_to(pBot);
+
+                if ((dBot0 < 0.20 && dTop1 < 0.20) || (dTop0 < 0.20 && dBot1 < 0.20)) {
                     cornerIdx = p;
                     foundCorner = true;
                     break;
                 }
+
+                // Check distance of edge midpoint to corner line segment
+                Geom::Point3D mid(
+                    (m_edgeP0.x + m_edgeP1.x) * 0.5,
+                    (m_edgeP0.y + m_edgeP1.y) * 0.5,
+                    (m_edgeP0.z + m_edgeP1.z) * 0.5
+                );
+                Geom::Vector3D axis = pTop - pBot;
+                double lenSq = axis.length_squared();
+                if (lenSq > 1e-4) {
+                    double t = (mid - pBot).dot(axis) / lenSq;
+                    if (t >= -0.15 && t <= 1.15) {
+                        Geom::Point3D proj = pBot + axis * t;
+                        if (mid.distance_to(proj) < 0.20) {
+                            cornerIdx = p;
+                            foundCorner = true;
+                            break;
+                        }
+                    }
+                }
             }
 
-            if (foundCorner && profile.size() >= 3) {
-                auto chamferedProfile = profile;
-                Sketch::ApplyChamfer2D(chamferedProfile, cornerIdx, m_distance, true);
+            if (foundCorner) {
+                auto chamferedProfile = data.profile;
+                bool ok = Sketch::ApplyChamfer2D(chamferedProfile, cornerIdx, m_distance, true);
+                if (ok) {
+                    ExtrudeNode tempNode(m_name + "_Eval", chamferedProfile, h);
+                    tempNode.SetPosition(data.position[0], data.position[1], data.position[2]);
+                    tempNode.SetPlane(data.plane);
+                    if (data.useCustomPlane) {
+                        tempNode.SetCustomPlane(data.customPlane);
+                    }
+                    tempNode.Evaluate(device, exchange);
 
-                ExtrudeNode tempNode(m_name + "_Eval", chamferedProfile, h);
-                tempNode.SetPosition(extrude->GetPosition()[0], extrude->GetPosition()[1], extrude->GetPosition()[2]);
-                tempNode.Evaluate(device, exchange);
+                    m_cachedVertices = tempNode.GetCachedVertices();
+                    m_cachedIndices = tempNode.GetCachedIndices();
+                    m_cachedEdges = tempNode.GetCachedEdges();
+                    m_profile = std::move(chamferedProfile);
+                    m_height = h;
+                    m_position[0] = data.position[0];
+                    m_position[1] = data.position[1];
+                    m_position[2] = data.position[2];
+                    m_plane = data.plane;
+                    m_useCustomPlane = data.useCustomPlane;
+                    m_customPlane = data.customPlane;
 
-                m_cachedVertices = tempNode.GetCachedVertices();
-                m_cachedIndices = tempNode.GetCachedIndices();
-                m_cachedEdges = tempNode.GetCachedEdges();
-                ComputeFaces();
-                ClearDirty();
-                return;
+                    // Ensure target node and its leaf are marked consumed
+                    m_targetNode->SetConsumed(true);
+                    auto leaf = m_targetNode->GetActiveLeafFeature();
+                    if (leaf && leaf.get() != this) {
+                        leaf->SetConsumed(true);
+                    }
+
+                    ComputeFaces();
+                    ClearDirty();
+                    return;
+                }
             }
         }
 
-        // Method 2: General 3D Edge Bevel Generator
+        // Method 2: General 3D Edge Bevel Generator (with sharp corner truncation)
         std::vector<CADVertex> vertices = baseVerts;
         std::vector<uint32_t> indices = baseIndices;
 
@@ -211,6 +272,30 @@ public:
         indices.push_back(baseV + 2);
         indices.push_back(baseV + 3);
 
+        // Remap incident base vertices i0 and i1 to bevel vertices so the sharp corner is truncated
+        uint32_t v0_1 = baseV + 0;
+        uint32_t v0_2 = baseV + 3;
+        uint32_t v1_1 = baseV + 1;
+        uint32_t v1_2 = baseV + 2;
+
+        for (size_t t = 0; t < baseIndices.size(); t += 3) {
+            for (int k = 0; k < 3; ++k) {
+                if (indices[t + k] == i0) {
+                    uint32_t other = indices[t + (k + 1) % 3];
+                    Geom::Point3D otherPt(vertices[other].position[0], vertices[other].position[1], vertices[other].position[2]);
+                    double d1 = otherPt.distance_to(p0_1);
+                    double d2 = otherPt.distance_to(p0_2);
+                    indices[t + k] = (d1 <= d2) ? v0_1 : v0_2;
+                } else if (indices[t + k] == i1) {
+                    uint32_t other = indices[t + (k + 1) % 3];
+                    Geom::Point3D otherPt(vertices[other].position[0], vertices[other].position[1], vertices[other].position[2]);
+                    double d1 = otherPt.distance_to(p1_1);
+                    double d2 = otherPt.distance_to(p1_2);
+                    indices[t + k] = (d1 <= d2) ? v1_1 : v1_2;
+                }
+            }
+        }
+
         m_cachedVertices = std::move(vertices);
         m_cachedIndices = std::move(indices);
         m_cachedEdges = TessellationUtils::ExtractFeatureEdges(m_cachedVertices, m_cachedIndices, 30.0f);
@@ -227,6 +312,13 @@ private:
     Geom::Point3D m_edgeP1{0, 0, 0};
     bool m_hasConflict{false};
     std::string m_conflictMessage;
+
+    // Extrusion profile propagation metadata for chained 3D solid operations
+    std::vector<std::array<float, 2>> m_profile;
+    float m_height{2.0f};
+    SketchPlane m_plane{SketchPlane::XZ_Ground};
+    bool m_useCustomPlane{false};
+    Geom::Plane m_customPlane{Geom::Point3D(0, 0, 0), Geom::Vector3D(0, 1, 0)};
 };
 
 } // namespace Tessera

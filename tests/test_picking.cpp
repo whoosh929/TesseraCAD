@@ -1430,6 +1430,91 @@ bool TestFilletAndChamferFeaturesAndEdgePicking() {
     return true;
 }
 
+bool TestChainedFilletAndChamferFeatures() {
+    std::cout << "[Test] Chained Solid Fillet and Chamfer Features...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create L-bracket extrude block
+    auto sketch = std::make_shared<SketchNode>("Sketch_LBracket", SketchPlane::XZ_Ground);
+    sketch->SetPresetLBracket(4.0f, 4.0f, 1.2f);
+    sketch->SetPosition(-3.0f, 0.0f, 0.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_LBracket", sketch, 3.0f);
+    extrude->SetPosition(-3.0f, 0.0f, 0.0f);
+    extrude->Evaluate(&mockDevice, exchange);
+    graph.AddNode(extrude);
+
+    // Initial extrude has 6 profile vertices
+    TEST_ASSERT(extrude->GetProfile().size() == 6, "L-bracket base profile must have 6 vertices");
+    TEST_ASSERT(!extrude->IsConsumed(), "Extrude must initially be unconsumed");
+
+    // 2. Pick a corner edge and apply Chamfer
+    // Find an edge at corner X=-1.0, Z=-0.8
+    const auto& edges = extrude->GetCachedEdges();
+    const auto& verts = extrude->GetCachedVertices();
+    int cornerEdge = -1;
+    for (size_t e = 0; e < edges.size() / 2; ++e) {
+        uint32_t i0 = edges[e * 2];
+        uint32_t i1 = edges[e * 2 + 1];
+        if (std::abs(verts[i0].position[0] - (-1.0f)) < 0.1f && std::abs(verts[i0].position[2] - (-0.8f)) < 0.1f &&
+            std::abs(verts[i1].position[0] - (-1.0f)) < 0.1f && std::abs(verts[i1].position[2] - (-0.8f)) < 0.1f) {
+            cornerEdge = static_cast<int>(e);
+            break;
+        }
+    }
+    TEST_ASSERT(cornerEdge >= 0, "Must find vertical corner edge at (-1, -0.8)");
+
+    auto chamfer = std::make_shared<ChamferNode>("Chamfer_1", extrude, cornerEdge, 0.25f);
+    graph.AddNode(chamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(extrude->IsConsumed(), "Extrude_LBracket must be consumed by Chamfer_1");
+    TEST_ASSERT(!chamfer->IsConsumed(), "Chamfer_1 must not be consumed");
+    TEST_ASSERT(chamfer->GetProfile().size() == 7, "Chamfered profile must now have 7 vertices");
+
+    // 3. Test PickNode: ray aimed at the model MUST pick Chamfer_1, NOT the consumed Extrude_LBracket!
+    Point3D rayOrig(-3.0, 1.5, 5.0);
+    Vector3D rayDir(0.0, 0.0, -1.0);
+    uint64_t pickedId = graph.PickNode(rayOrig, rayDir);
+    TEST_ASSERT(pickedId == chamfer->GetId(), "PickNode MUST pick active Chamfer_1, never consumed Extrude_LBracket");
+
+    // 4. Chain a FilletNode on top of Chamfer_1!
+    // Pick another corner edge on Chamfer_1 (e.g. corner at X=-5.0, Z=-2.0)
+    const auto& chEdges = chamfer->GetCachedEdges();
+    const auto& chVerts = chamfer->GetCachedVertices();
+    int secondCornerEdge = -1;
+    for (size_t e = 0; e < chEdges.size() / 2; ++e) {
+        uint32_t i0 = chEdges[e * 2];
+        uint32_t i1 = chEdges[e * 2 + 1];
+        if (std::abs(chVerts[i0].position[0] - (-5.0f)) < 0.1f && std::abs(chVerts[i0].position[2] - (-2.0f)) < 0.1f &&
+            std::abs(chVerts[i1].position[0] - (-5.0f)) < 0.1f && std::abs(chVerts[i1].position[2] - (-2.0f)) < 0.1f) {
+            secondCornerEdge = static_cast<int>(e);
+            break;
+        }
+    }
+    TEST_ASSERT(secondCornerEdge >= 0, "Must find corner edge on Chamfer_1 at (-5, -2)");
+
+    auto fillet = std::make_shared<FilletNode>("Fillet_2", chamfer, secondCornerEdge, 0.3f);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(chamfer->IsConsumed(), "Chamfer_1 must be consumed by Fillet_2");
+    TEST_ASSERT(!fillet->IsConsumed(), "Fillet_2 must be the active leaf feature");
+    TEST_ASSERT(fillet->GetProfile().size() == 13, "Fillet_2 profile must contain both Chamfer_1 and the new Fillet");
+
+    // 5. Publish combined scene mesh: verify ONLY Fillet_2 is rendered (extrude and chamfer consumed)
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, fillet->GetId());
+    auto mesh = exchange.AcquireLatest();
+    TEST_ASSERT(mesh != nullptr, "Published mesh must not be null");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1455,6 +1540,7 @@ int main() {
     pass &= TestNegativeExtrudeGraphAndCustomPlane();
     pass &= TestDirectionalExtrusion();
     pass &= TestFilletAndChamferFeaturesAndEdgePicking();
+    pass &= TestChainedFilletAndChamferFeatures();
     pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {
