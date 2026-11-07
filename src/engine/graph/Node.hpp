@@ -109,8 +109,35 @@ public:
     /// Connects this node to depend on an upstream parent
     void AddInput(std::shared_ptr<DAGNode> parent) {
         if (!parent) return;
-        m_inputs.push_back(parent);
-        parent->m_dependents.push_back(weak_from_this());
+        bool alreadyInput = false;
+        for (const auto& existing : m_inputs) {
+            if (existing == parent) {
+                alreadyInput = true;
+                break;
+            }
+        }
+        if (!alreadyInput) {
+            m_inputs.push_back(parent);
+        }
+
+        auto selfWeak = weak_from_this();
+        if (!selfWeak.expired()) {
+            auto selfPtr = selfWeak.lock();
+            bool alreadyDependent = false;
+            for (auto it = parent->m_dependents.begin(); it != parent->m_dependents.end();) {
+                if (auto dep = it->lock()) {
+                    if (dep == selfPtr) {
+                        alreadyDependent = true;
+                    }
+                    ++it;
+                } else {
+                    it = parent->m_dependents.erase(it);
+                }
+            }
+            if (!alreadyDependent) {
+                parent->m_dependents.push_back(selfWeak);
+            }
+        }
     }
 
     /// Notifies all downstream dependent nodes that this node is being removed from the graph

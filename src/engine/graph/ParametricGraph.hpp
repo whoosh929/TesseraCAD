@@ -91,6 +91,10 @@ public:
                 if (auto feat = axis->GetReferencedFeature()) {
                     axis->AddInput(feat);
                 }
+            } else if (auto sketch = std::dynamic_pointer_cast<SketchNode>(node)) {
+                if (auto datumPlane = sketch->GetDatumPlaneReference()) {
+                    sketch->AddInput(datumPlane);
+                }
             }
             if (auto child = node->GetChildSketch()) {
                 if (auto sketch = std::dynamic_pointer_cast<SketchNode>(child)) {
@@ -105,19 +109,34 @@ public:
 
     /// Evaluates any dirty nodes asynchronously via the ThreadPool
     void EvaluateDirtyNodes(RHI::RHIDevice* device, AtomicMeshExchange& exchange) {
+        std::vector<std::shared_ptr<DAGNode>> dirtyMetadataNodes;
         std::vector<std::shared_ptr<DAGNode>> dirtyList;
         {
             std::lock_guard<std::mutex> lock(m_graphMutex);
             for (const auto& node : m_nodes) {
                 if (node->IsDirty()) {
-                    dirtyList.push_back(node);
+                    if (std::dynamic_pointer_cast<DatumPlaneNode>(node) ||
+                        std::dynamic_pointer_cast<DatumAxisNode>(node)) {
+                        dirtyMetadataNodes.push_back(node);
+                    } else {
+                        dirtyList.push_back(node);
+                    }
                 }
             }
         }
 
+        // Evaluate lightweight datum planes/axes synchronously first so dependent sketches and features read updated planes
+        for (auto& metaNode : dirtyMetadataNodes) {
+            metaNode->Evaluate(device, exchange);
+        }
+
         for (auto& node : dirtyList) {
-            if (m_threadPool) {
-                // Submit to background thread pool
+            if (std::dynamic_pointer_cast<SketchNode>(node)) {
+                // Evaluate 2D sketches synchronously first so downstream 3D features and the viewport immediately have the updated 3D sketch plane/mesh
+                node->Evaluate(device, exchange);
+                PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
+            } else if (m_threadPool) {
+                // Submit heavy 3D tessellations to background thread pool
                 m_threadPool->Enqueue([this, node, device, &exchange]() {
                     node->Evaluate(device, exchange);
                     PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);

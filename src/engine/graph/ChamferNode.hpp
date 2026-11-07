@@ -3,6 +3,7 @@
 #include "Node.hpp"
 #include "ExtrudeNode.hpp"
 #include "Tessellation.hpp"
+#include "EdgeBlend.hpp"
 #include "engine/sketch/SketchFilletChamfer.hpp"
 #include <memory>
 #include <string>
@@ -252,240 +253,17 @@ public:
             }
         }
 
-        // Method 2: General 3D Edge Bevel Generator (with clean manifold boundary updates)
-        std::vector<CADVertex> vertices = baseVerts;
-        std::vector<uint32_t> indices = baseIndices;
-
-        double edgeLen = m_edgeP0.distance_to(m_edgeP1);
-        if (edgeLen < 1e-4) {
+        // Method 2: General 3D edge bevel (tangent chaining, mitered junctions, trimmed end caps)
+        std::vector<CADVertex> vertices;
+        std::vector<uint32_t> indices;
+        if (!BuildEdgeBlend(baseVerts, baseIndices, baseEdges, m_edgeIndex, m_edgeP0, m_edgeP1,
+                            m_distance, EdgeBlendKind::Bevel, vertices, indices)) {
             m_cachedVertices = baseVerts;
             m_cachedIndices = baseIndices;
             m_cachedEdges = baseEdges;
             ComputeFaces();
             ClearDirty();
             return;
-        }
-
-        Geom::Vector3D edgeVec = (m_edgeP1 - m_edgeP0) / edgeLen;
-
-        // 1. Find all triangles incident to the edge (by geometric proximity <= 0.05)
-        // and identify the two distinct face normals normalA and normalB meeting at the edge.
-        Geom::Vector3D normalA(0, 0, 0);
-        Geom::Vector3D normalB(0, 0, 0);
-        Geom::Point3D thirdPtA, thirdPtB;
-        bool hasNormalA = false;
-        bool hasNormalB = false;
-
-        const size_t numTriangles = baseIndices.size() / 3;
-        for (size_t t = 0; t < numTriangles; ++t) {
-            uint32_t a = baseIndices[t * 3 + 0];
-            uint32_t b = baseIndices[t * 3 + 1];
-            uint32_t c = baseIndices[t * 3 + 2];
-
-            Geom::Point3D pa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
-            Geom::Point3D pb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
-            Geom::Point3D pc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
-
-            bool hasP0 = (pa.distance_to(m_edgeP0) < 0.05 || pb.distance_to(m_edgeP0) < 0.05 || pc.distance_to(m_edgeP0) < 0.05);
-            bool hasP1 = (pa.distance_to(m_edgeP1) < 0.05 || pb.distance_to(m_edgeP1) < 0.05 || pc.distance_to(m_edgeP1) < 0.05);
-
-            if (hasP0 && hasP1) {
-                Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
-                if (triNorm.length() < 0.5) continue;
-
-                // Find the third vertex not on the edge
-                Geom::Point3D pThird = pc;
-                if (pa.distance_to(m_edgeP0) >= 0.05 && pa.distance_to(m_edgeP1) >= 0.05) pThird = pa;
-                else if (pb.distance_to(m_edgeP0) >= 0.05 && pb.distance_to(m_edgeP1) >= 0.05) pThird = pb;
-
-                if (!hasNormalA) {
-                    normalA = triNorm;
-                    thirdPtA = pThird;
-                    hasNormalA = true;
-                } else if (!hasNormalB && normalA.dot(triNorm) < 0.95) {
-                    normalB = triNorm;
-                    thirdPtB = pThird;
-                    hasNormalB = true;
-                }
-            }
-        }
-
-        if (!hasNormalA || !hasNormalB) {
-            // Cannot form two-face bevel (e.g. boundary or coplanar edge); retain base geometry safely
-            m_cachedVertices = baseVerts;
-            m_cachedIndices = baseIndices;
-            m_cachedEdges = baseEdges;
-            ComputeFaces();
-            ClearDirty();
-            return;
-        }
-
-        // 2. Compute in-plane directions uA and uB pointing into Face A and Face B away from the edge
-        Geom::Vector3D vIntoA = (thirdPtA - m_edgeP0) - edgeVec * ((thirdPtA - m_edgeP0).dot(edgeVec));
-        Geom::Vector3D uA = (vIntoA.length_squared() > 1e-6) ? vIntoA.normalized() : edgeVec.cross(normalA).normalized();
-
-        Geom::Vector3D vIntoB = (thirdPtB - m_edgeP0) - edgeVec * ((thirdPtB - m_edgeP0).dot(edgeVec));
-        Geom::Vector3D uB = (vIntoB.length_squared() > 1e-6) ? vIntoB.normalized() : normalB.cross(edgeVec).normalized();
-
-        uA = (uA - normalA * uA.dot(normalA) - edgeVec * uA.dot(edgeVec)).normalized();
-        uB = (uB - normalB * uB.dot(normalB) - edgeVec * uB.dot(edgeVec)).normalized();
-
-        // Prevent self-intersection by limiting setback to at most 45% of edge length or face extent
-        float maxSetback = static_cast<float>(edgeLen) * 0.45f;
-        if (vIntoA.length() > 1e-4) maxSetback = std::min(maxSetback, static_cast<float>(vIntoA.length()) * 0.45f);
-        if (vIntoB.length() > 1e-4) maxSetback = std::min(maxSetback, static_cast<float>(vIntoB.length()) * 0.45f);
-        float dEff = std::clamp(m_distance, 0.005f, std::max(0.005f, maxSetback));
-
-        // 3. Setback points on Face A and Face B
-        Geom::Point3D s0A = m_edgeP0 + uA * dEff;
-        Geom::Point3D s0B = m_edgeP0 + uB * dEff;
-        Geom::Point3D s1A = m_edgeP1 + uA * dEff;
-        Geom::Point3D s1B = m_edgeP1 + uB * dEff;
-
-        // Create setback anchor vertices on Face A and Face B
-        uint32_t v_s0A = static_cast<uint32_t>(vertices.size());
-        vertices.push_back({
-            {static_cast<float>(s0A.x), static_cast<float>(s0A.y), static_cast<float>(s0A.z)},
-            {static_cast<float>(normalA.x), static_cast<float>(normalA.y), static_cast<float>(normalA.z)}
-        });
-
-        uint32_t v_s1A = static_cast<uint32_t>(vertices.size());
-        vertices.push_back({
-            {static_cast<float>(s1A.x), static_cast<float>(s1A.y), static_cast<float>(s1A.z)},
-            {static_cast<float>(normalA.x), static_cast<float>(normalA.y), static_cast<float>(normalA.z)}
-        });
-
-        uint32_t v_s0B = static_cast<uint32_t>(vertices.size());
-        vertices.push_back({
-            {static_cast<float>(s0B.x), static_cast<float>(s0B.y), static_cast<float>(s0B.z)},
-            {static_cast<float>(normalB.x), static_cast<float>(normalB.y), static_cast<float>(normalB.z)}
-        });
-
-        uint32_t v_s1B = static_cast<uint32_t>(vertices.size());
-        vertices.push_back({
-            {static_cast<float>(s1B.x), static_cast<float>(s1B.y), static_cast<float>(s1B.z)},
-            {static_cast<float>(normalB.x), static_cast<float>(normalB.y), static_cast<float>(normalB.z)}
-        });
-
-        // 4. Update incident triangles belonging to Face A or Face B by cleanly sliding edge vertices to setback anchors
-        for (size_t t = 0; t < numTriangles; ++t) {
-            uint32_t a = baseIndices[t * 3 + 0];
-            uint32_t b = baseIndices[t * 3 + 1];
-            uint32_t c = baseIndices[t * 3 + 2];
-
-            Geom::Point3D pa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
-            Geom::Point3D pb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
-            Geom::Point3D pc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
-
-            Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
-            if (triNorm.length() < 0.5) continue;
-
-            double dotA = triNorm.dot(normalA);
-            double dotB = triNorm.dot(normalB);
-
-            if (dotA > 0.85) {
-                for (int k = 0; k < 3; ++k) {
-                    uint32_t origIdx = baseIndices[t * 3 + k];
-                    Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
-                    if (p.distance_to(m_edgeP0) < 0.05) {
-                        indices[t * 3 + k] = v_s0A;
-                    } else if (p.distance_to(m_edgeP1) < 0.05) {
-                        indices[t * 3 + k] = v_s1A;
-                    }
-                }
-            } else if (dotB > 0.85) {
-                for (int k = 0; k < 3; ++k) {
-                    uint32_t origIdx = baseIndices[t * 3 + k];
-                    Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
-                    if (p.distance_to(m_edgeP0) < 0.05) {
-                        indices[t * 3 + k] = v_s0B;
-                    } else if (p.distance_to(m_edgeP1) < 0.05) {
-                        indices[t * 3 + k] = v_s1B;
-                    }
-                }
-            }
-        }
-
-        // 5. Connect chamfer bevel quad between Face A and Face B
-        Geom::Point3D pa(vertices[v_s0A].position[0], vertices[v_s0A].position[1], vertices[v_s0A].position[2]);
-        Geom::Point3D pb(vertices[v_s1A].position[0], vertices[v_s1A].position[1], vertices[v_s1A].position[2]);
-        Geom::Point3D pc(vertices[v_s0B].position[0], vertices[v_s0B].position[1], vertices[v_s0B].position[2]);
-        Geom::Vector3D n = (pb - pa).cross(pc - pa);
-        Geom::Vector3D expectedNorm = (normalA + normalB).normalized();
-
-        if (n.dot(expectedNorm) >= 0.0) {
-            indices.push_back(v_s0A); indices.push_back(v_s1A); indices.push_back(v_s1B);
-            indices.push_back(v_s0A); indices.push_back(v_s1B); indices.push_back(v_s0B);
-        } else {
-            indices.push_back(v_s0A); indices.push_back(v_s1B); indices.push_back(v_s1A);
-            indices.push_back(v_s0A); indices.push_back(v_s0B); indices.push_back(v_s1B);
-        }
-
-        // 6. Add end caps at p0 and p1 only if actual capping faces meet at the ends of the edge
-        bool hasEnd0Face = false;
-        bool hasEnd1Face = false;
-        for (size_t t = 0; t < numTriangles; ++t) {
-            uint32_t a = baseIndices[t * 3 + 0];
-            uint32_t b = baseIndices[t * 3 + 1];
-            uint32_t c = baseIndices[t * 3 + 2];
-            Geom::Point3D tpa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
-            Geom::Point3D tpb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
-            Geom::Point3D tpc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
-            Geom::Vector3D triNorm = (tpb - tpa).cross(tpc - tpa).normalized();
-            if (triNorm.dot(normalA) <= 0.85 && triNorm.dot(normalB) <= 0.85) {
-                if (triNorm.dot(-edgeVec) > 0.5) {
-                    if (tpa.distance_to(m_edgeP0) < 0.05 || tpb.distance_to(m_edgeP0) < 0.05 || tpc.distance_to(m_edgeP0) < 0.05) {
-                        hasEnd0Face = true;
-                    }
-                }
-                if (triNorm.dot(edgeVec) > 0.5) {
-                    if (tpa.distance_to(m_edgeP1) < 0.05 || tpb.distance_to(m_edgeP1) < 0.05 || tpc.distance_to(m_edgeP1) < 0.05) {
-                        hasEnd1Face = true;
-                    }
-                }
-            }
-        }
-
-        if (hasEnd0Face) {
-            for (size_t t = 0; t < numTriangles; ++t) {
-                uint32_t a = baseIndices[t * 3 + 0];
-                uint32_t b = baseIndices[t * 3 + 1];
-                uint32_t c = baseIndices[t * 3 + 2];
-                Geom::Point3D tpa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
-                Geom::Point3D tpb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
-                Geom::Point3D tpc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
-                Geom::Vector3D triNorm = (tpb - tpa).cross(tpc - tpa).normalized();
-                if (triNorm.dot(-edgeVec) > 0.4) {
-                    for (int k = 0; k < 3; ++k) {
-                        uint32_t origIdx = baseIndices[t * 3 + k];
-                        Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
-                        if (p.distance_to(m_edgeP0) < 0.05) {
-                            indices[t * 3 + k] = v_s0A;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (hasEnd1Face) {
-            for (size_t t = 0; t < numTriangles; ++t) {
-                uint32_t a = baseIndices[t * 3 + 0];
-                uint32_t b = baseIndices[t * 3 + 1];
-                uint32_t c = baseIndices[t * 3 + 2];
-                Geom::Point3D tpa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
-                Geom::Point3D tpb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
-                Geom::Point3D tpc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
-                Geom::Vector3D triNorm = (tpb - tpa).cross(tpc - tpa).normalized();
-                if (triNorm.dot(edgeVec) > 0.4) {
-                    for (int k = 0; k < 3; ++k) {
-                        uint32_t origIdx = baseIndices[t * 3 + k];
-                        Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
-                        if (p.distance_to(m_edgeP1) < 0.05) {
-                            indices[t * 3 + k] = v_s1A;
-                        }
-                    }
-                }
-            }
         }
 
         m_cachedVertices = std::move(vertices);

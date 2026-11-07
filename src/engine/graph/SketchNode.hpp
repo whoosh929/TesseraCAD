@@ -316,7 +316,7 @@ public:
                 CADVertex vert{};
 
                 if (m_useCustomPlane) {
-                    Geom::Point3D pt3D = m_customPlane.to_world(Geom::Point2D(u, v));
+                    Geom::Point3D pt3D = m_customPlane.to_world(Geom::Point2D(u, v)) + m_customPlane.normal * 0.005;
                     vert.position[0] = static_cast<float>(pt3D.x);
                     vert.position[1] = static_cast<float>(pt3D.y);
                     vert.position[2] = static_cast<float>(pt3D.z);

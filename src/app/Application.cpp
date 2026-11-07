@@ -167,19 +167,22 @@ void Application::SetupCallbacks() {
                         if (prevSelectedId != 0) {
                             auto subResult = app->m_graph->PickSubElement(ray.origin, ray.direction, prevSelectedId);
                             if (subResult.vertexIndex >= 0) {
+                                app->m_gui->SetSelectedNodeId(subResult.nodeId);
                                 app->m_gui->SetSelectedVertex(subResult.vertexIndex, subResult.vertexPos);
-                                app->m_graph->SetSubElementSelection(prevSelectedId, -1, subResult.vertexIndex, -1);
-                                app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, prevSelectedId, -1, subResult.vertexIndex, -1);
+                                app->m_graph->SetSubElementSelection(subResult.nodeId, -1, subResult.vertexIndex, -1);
+                                app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, subResult.nodeId, -1, subResult.vertexIndex, -1);
                                 handled = true;
                             } else if (subResult.edgeIndex >= 0) {
+                                app->m_gui->SetSelectedNodeId(subResult.nodeId);
                                 app->m_gui->SetSelectedEdge(subResult.edgeIndex, subResult.edgeP0, subResult.edgeP1);
-                                app->m_graph->SetSubElementSelection(prevSelectedId, -1, -1, subResult.edgeIndex);
-                                app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, prevSelectedId, -1, -1, subResult.edgeIndex);
+                                app->m_graph->SetSubElementSelection(subResult.nodeId, -1, -1, subResult.edgeIndex);
+                                app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, subResult.nodeId, -1, -1, subResult.edgeIndex);
                                 handled = true;
-                            } else if (hitNodeId == prevSelectedId && subResult.faceIndex >= 0) {
+                            } else if ((hitNodeId == prevSelectedId || hitNodeId == subResult.nodeId) && subResult.faceIndex >= 0) {
+                                app->m_gui->SetSelectedNodeId(subResult.nodeId);
                                 app->m_gui->SetSelectedFace(subResult.faceIndex, subResult.facePlane);
-                                app->m_graph->SetSubElementSelection(prevSelectedId, subResult.faceIndex, -1, -1);
-                                app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, prevSelectedId, subResult.faceIndex, -1, -1);
+                                app->m_graph->SetSubElementSelection(subResult.nodeId, subResult.faceIndex, -1, -1);
+                                app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, subResult.nodeId, subResult.faceIndex, -1, -1);
                                 handled = true;
                             }
                         }
@@ -189,15 +192,20 @@ void Application::SetupCallbacks() {
                             if (hitNodeId != 0) {
                                 auto subResult = app->m_graph->PickSubElement(ray.origin, ray.direction, hitNodeId);
                                 if (subResult.vertexIndex >= 0) {
-                                    app->m_gui->SetSelectedNodeId(hitNodeId);
+                                    app->m_gui->SetSelectedNodeId(subResult.nodeId);
                                     app->m_gui->SetSelectedVertex(subResult.vertexIndex, subResult.vertexPos);
-                                    app->m_graph->SetSubElementSelection(hitNodeId, -1, subResult.vertexIndex, -1);
-                                    app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, hitNodeId, -1, subResult.vertexIndex, -1);
+                                    app->m_graph->SetSubElementSelection(subResult.nodeId, -1, subResult.vertexIndex, -1);
+                                    app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, subResult.nodeId, -1, subResult.vertexIndex, -1);
                                 } else if (subResult.edgeIndex >= 0) {
-                                    app->m_gui->SetSelectedNodeId(hitNodeId);
+                                    app->m_gui->SetSelectedNodeId(subResult.nodeId);
                                     app->m_gui->SetSelectedEdge(subResult.edgeIndex, subResult.edgeP0, subResult.edgeP1);
-                                    app->m_graph->SetSubElementSelection(hitNodeId, -1, -1, subResult.edgeIndex);
-                                    app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, hitNodeId, -1, -1, subResult.edgeIndex);
+                                    app->m_graph->SetSubElementSelection(subResult.nodeId, -1, -1, subResult.edgeIndex);
+                                    app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, subResult.nodeId, -1, -1, subResult.edgeIndex);
+                                } else if (subResult.faceIndex >= 0) {
+                                    app->m_gui->SetSelectedNodeId(subResult.nodeId);
+                                    app->m_gui->SetSelectedFace(subResult.faceIndex, subResult.facePlane);
+                                    app->m_graph->SetSubElementSelection(subResult.nodeId, subResult.faceIndex, -1, -1);
+                                    app->m_graph->PublishCombinedSceneMesh(app->m_rhiDevice.get(), app->m_meshExchange, subResult.nodeId, subResult.faceIndex, -1, -1);
                                 } else {
                                     // Select whole new model
                                     app->m_gui->SetSelectedNodeId(hitNodeId);

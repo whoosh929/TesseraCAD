@@ -10,6 +10,8 @@ Default Mouse Wheel Controls
 
 - [x] feature: add fillets and chambers as features. The fillet or chamber. It needs to reference a model corner edge and inputs some distance value. fillets/cahbmers can also be done in 2d sketch.
 - []feature: when sketching on a face and a reference geometry is shown, make it much more subtle.
+- [] bug: when in a 2d sketch, pressing esc automatically shifts back to move/select.
+- [] bug: allow dragging an entire geometry in2d sketch mode. This can be done by selecting a geometry and dragging it.
 - []feature: add a measure tool
 - [x] bug: when a vertex on a model is selected, it's not obvious on the model. Highlight the vertex on the 3d model view.
 - [] feature: allow all dimensions in a 2d sketch to be input using the keyboard.
@@ -20,5 +22,7 @@ Default Mouse Wheel Controls
 - [] feature: add a sublte x/y/z axes reference.
 - [] feature: add a control that recenters view on top, side, and isometric origin.
 - [x] bug: when applying a fillet, sometimes the round is inverted, creating a concave shape at a corner instead of a convex.
-- [] bug: propogate fillet corner behavior to chamfers.
-- []bug: cant fillet/chamfer revolves
+- [x] bug: propogate fillet corner behavior to chamfers.
+- [x] feature: allow creating reference planes and axis from the offset of a selected face of corner face.
+- [x] feature: when selecting an edge corner or face, you don't need to give the option to create features on the left side. The shortcut here doens't help that much
+- [x] bug: when entering a 2d sketch, the topbar is overloaded with content and it gets cuttoff. Most important is the cancel/confirm sketch button, which should always be on display.

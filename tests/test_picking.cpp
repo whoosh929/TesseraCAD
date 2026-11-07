@@ -10,6 +10,7 @@
 #include <iostream>
 #include <memory>
 #include <cmath>
+#include <map>
 
 using namespace Tessera;
 using namespace Tessera::Geom;
@@ -1924,6 +1925,716 @@ bool TestFilletDoesNotWrapOntoAdjoiningEdges() {
     return true;
 }
 
+bool TestFilletEndCapIsTrimmedToProfile() {
+    std::cout << "[Test] Fillet End Caps Are Trimmed To The Blend Profile (no flat untrimmed corner)...\n";
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    // 4 x 3 footprint (X x Z), height 2 (Y)
+    std::vector<std::array<float, 2>> rectProfile = {{0.0f, 0.0f}, {4.0f, 0.0f}, {4.0f, 3.0f}, {0.0f, 3.0f}};
+    auto extrude = std::make_shared<ExtrudeNode>("Cap_Block", rectProfile, 2.0f);
+    extrude->SetPlane(SketchPlane::XZ_Ground);
+    graph.AddNode(extrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    // Top edge running along X at Z = 0, Y = 2
+    const auto& edges = extrude->GetCachedEdges();
+    const auto& verts = extrude->GetCachedVertices();
+    int edgeIdx = -1;
+    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+        Geom::Point3D p0(verts[edges[e]].position[0], verts[edges[e]].position[1], verts[edges[e]].position[2]);
+        Geom::Point3D p1(verts[edges[e + 1]].position[0], verts[edges[e + 1]].position[1], verts[edges[e + 1]].position[2]);
+        if (std::abs(p0.y - 2.0) < 0.05 && std::abs(p1.y - 2.0) < 0.05 &&
+            std::abs(p0.z) < 0.05 && std::abs(p1.z) < 0.05 && p0.distance_to(p1) > 3.5) {
+            edgeIdx = static_cast<int>(e / 2);
+            break;
+        }
+    }
+    TEST_ASSERT(edgeIdx >= 0, "Must find the top X-aligned edge at Z=0");
+
+    const float R = 0.35f;
+    auto fillet = std::make_shared<FilletNode>("Cap_Fillet", extrude, edgeIdx, R);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!fillet->HasConflict(), "Fillet must not conflict");
+
+    const auto& fv = fillet->GetCachedVertices();
+    const auto& fi = fillet->GetCachedIndices();
+    auto P = [&](uint32_t i) { return Geom::Point3D(fv[i].position[0], fv[i].position[1], fv[i].position[2]); };
+
+    // Area of each end cap (X = 0 and X = 4) must equal the full 3 x 2 face minus the rounded-off corner
+    const double quarterArcArea = 6.0 * 0.5 * R * R * std::sin(3.14159265358979 / 12.0); // 6-band polygonal arc
+    const double expectedCap = 3.0 * 2.0 - (R * R - quarterArcArea);
+    for (double capX : {0.0, 4.0}) {
+        double area = 0.0;
+        for (size_t t = 0; t + 2 < fi.size(); t += 3) {
+            Geom::Point3D a = P(fi[t]), b = P(fi[t + 1]), c = P(fi[t + 2]);
+            if (std::abs(a.x - capX) < 1e-3 && std::abs(b.x - capX) < 1e-3 && std::abs(c.x - capX) < 1e-3) {
+                area += (b - a).cross(c - a).length() * 0.5;
+                // No cap triangle may reach into the rounded-off corner region beyond the arc
+                for (const auto& p : {a, b, c}) {
+                    double dy = p.y - (2.0 - R), dz = p.z - R;
+                    if (dy > 0.0 && dz < 0.0) {
+                        TEST_ASSERT(std::sqrt(dy * dy + dz * dz) <= R + 1e-3, "End cap must not keep the sharp corner");
+                    }
+                }
+            }
+        }
+        std::cout << "  cap X=" << capX << " area=" << area << " expected=" << expectedCap << "\n";
+        TEST_ASSERT(std::abs(area - expectedCap) < 2e-3, "End cap area must match the trimmed profile");
+    }
+
+    // Watertight: every geometric edge is shared by exactly two triangles
+    std::map<std::array<long long, 6>, int> edgeUse;
+    auto key = [](const Geom::Point3D& p, const Geom::Point3D& q) {
+        auto q3 = [](const Geom::Point3D& x) {
+            return std::array<long long, 3>{std::llround(x.x * 1e4), std::llround(x.y * 1e4), std::llround(x.z * 1e4)};
+        };
+        auto A = q3(p), B = q3(q);
+        if (B < A) std::swap(A, B);
+        return std::array<long long, 6>{A[0], A[1], A[2], B[0], B[1], B[2]};
+    };
+    for (size_t t = 0; t + 2 < fi.size(); t += 3) {
+        Geom::Point3D a = P(fi[t]), b = P(fi[t + 1]), c = P(fi[t + 2]);
+        edgeUse[key(a, b)]++; edgeUse[key(b, c)]++; edgeUse[key(c, a)]++;
+    }
+    int bad = 0;
+    for (const auto& kv : edgeUse) if (kv.second != 2) bad++;
+    std::cout << "  non-manifold/open edges: " << bad << "\n";
+    TEST_ASSERT(bad == 0, "Filleted block must be watertight");
+
+    // Slanted end faces (trapezoid footprint): the trimmed caps must still close the solid
+    std::vector<std::array<float, 2>> trapProfile = {{0.0f, 0.0f}, {4.0f, 0.0f}, {3.4f, 3.0f}, {0.6f, 3.0f}};
+    auto trap = std::make_shared<ExtrudeNode>("Trap_Block", trapProfile, 2.0f);
+    trap->SetPlane(SketchPlane::XZ_Ground);
+    graph.AddNode(trap);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    const auto& tEdges = trap->GetCachedEdges();
+    const auto& tVerts = trap->GetCachedVertices();
+    int trapEdge = -1;
+    for (size_t e = 0; e + 1 < tEdges.size(); e += 2) {
+        Geom::Point3D p0(tVerts[tEdges[e]].position[0], tVerts[tEdges[e]].position[1], tVerts[tEdges[e]].position[2]);
+        Geom::Point3D p1(tVerts[tEdges[e + 1]].position[0], tVerts[tEdges[e + 1]].position[1], tVerts[tEdges[e + 1]].position[2]);
+        if (std::abs(p0.y - 2.0) < 0.05 && std::abs(p1.y - 2.0) < 0.05 &&
+            std::abs(p0.z) < 0.05 && std::abs(p1.z) < 0.05 && p0.distance_to(p1) > 3.5) {
+            trapEdge = static_cast<int>(e / 2);
+            break;
+        }
+    }
+    TEST_ASSERT(trapEdge >= 0, "Must find the trapezoid's top long edge");
+    auto trapFillet = std::make_shared<FilletNode>("Trap_Fillet", trap, trapEdge, R);
+    graph.AddNode(trapFillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    const auto& tv = trapFillet->GetCachedVertices();
+    const auto& ti = trapFillet->GetCachedIndices();
+    edgeUse.clear();
+    for (size_t t = 0; t + 2 < ti.size(); t += 3) {
+        Geom::Point3D a(tv[ti[t]].position[0], tv[ti[t]].position[1], tv[ti[t]].position[2]);
+        Geom::Point3D b(tv[ti[t + 1]].position[0], tv[ti[t + 1]].position[1], tv[ti[t + 1]].position[2]);
+        Geom::Point3D c(tv[ti[t + 2]].position[0], tv[ti[t + 2]].position[1], tv[ti[t + 2]].position[2]);
+        edgeUse[key(a, b)]++; edgeUse[key(b, c)]++; edgeUse[key(c, a)]++;
+    }
+    bad = 0;
+    for (const auto& kv : edgeUse) if (kv.second != 2) bad++;
+    std::cout << "  slanted caps non-manifold/open edges: " << bad << "\n";
+    TEST_ASSERT(bad == 0, "Filleted trapezoid block must be watertight");
+    for (uint32_t idx : ti) {
+        const auto& v = tv[idx];
+        TEST_ASSERT(!(std::abs(v.position[1] - 2.0f) < 1e-3f && std::abs(v.position[2]) < 1e-3f),
+                    "Sharp filleted edge (incl. its end corners) must be fully removed");
+    }
+    return true;
+}
+
+// Number of geometric edges not shared by exactly two triangles (0 == watertight)
+static int CountOpenEdges(const std::vector<CADVertex>& v, const std::vector<uint32_t>& idx) {
+    auto q = [&](uint32_t i) {
+        return std::array<long long, 3>{std::llround(v[i].position[0] * 1e4), std::llround(v[i].position[1] * 1e4),
+                                        std::llround(v[i].position[2] * 1e4)};
+    };
+    std::map<std::pair<std::array<long long, 3>, std::array<long long, 3>>, int> use;
+    auto add = [&](uint32_t a, uint32_t b) {
+        auto A = q(a), B = q(b);
+        if (B < A) std::swap(A, B);
+        use[{A, B}]++;
+    };
+    for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+        add(idx[t], idx[t + 1]); add(idx[t + 1], idx[t + 2]); add(idx[t + 2], idx[t]);
+    }
+    int bad = 0;
+    for (const auto& kv : use) if (kv.second != 2) bad++;
+    return bad;
+}
+
+static int FindTopEdgeAtZ0(const DAGNode& node, double topY, double minLen) {
+    const auto& edges = node.GetCachedEdges();
+    const auto& verts = node.GetCachedVertices();
+    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+        Geom::Point3D p0(verts[edges[e]].position[0], verts[edges[e]].position[1], verts[edges[e]].position[2]);
+        Geom::Point3D p1(verts[edges[e + 1]].position[0], verts[edges[e + 1]].position[1], verts[edges[e + 1]].position[2]);
+        if (std::abs(p0.y - topY) < 0.05 && std::abs(p1.y - topY) < 0.05 &&
+            std::abs(p0.z) < 0.05 && std::abs(p1.z) < 0.05 && p0.distance_to(p1) > minLen) {
+            return static_cast<int>(e / 2);
+        }
+    }
+    return -1;
+}
+
+bool TestChamferUsesFilletCornerAndEndCapBehavior() {
+    std::cout << "[Test] Chamfer Shares Fillet Corner, Chaining & End-Cap Trimming Behavior...\n";
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+    const float D = 0.4f;
+
+    // 1. Box: chamfer a top edge whose ends run into the end faces
+    std::vector<std::array<float, 2>> rectProfile = {{0.0f, 0.0f}, {4.0f, 0.0f}, {4.0f, 3.0f}, {0.0f, 3.0f}};
+    auto box = std::make_shared<ExtrudeNode>("Chamf_Box", rectProfile, 2.0f);
+    box->SetPlane(SketchPlane::XZ_Ground);
+    graph.AddNode(box);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    int edgeIdx = FindTopEdgeAtZ0(*box, 2.0, 3.5);
+    TEST_ASSERT(edgeIdx >= 0, "Must find the box's top edge at Z=0");
+
+    auto chamfer = std::make_shared<ChamferNode>("Box_Chamfer", box, edgeIdx, D);
+    graph.AddNode(chamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!chamfer->HasConflict(), "Chamfer must not conflict");
+    const auto& cv = chamfer->GetCachedVertices();
+    const auto& ci = chamfer->GetCachedIndices();
+
+    const double expectedCap = 3.0 * 2.0 - 0.5 * D * D;
+    for (double capX : {0.0, 4.0}) {
+        double area = 0.0;
+        for (size_t t = 0; t + 2 < ci.size(); t += 3) {
+            Geom::Point3D p[3];
+            bool onCap = true;
+            for (int k = 0; k < 3; ++k) {
+                const auto& v = cv[ci[t + k]];
+                p[k] = Geom::Point3D(v.position[0], v.position[1], v.position[2]);
+                onCap &= std::abs(p[k].x - capX) < 1e-3;
+            }
+            if (!onCap) continue;
+            area += (p[1] - p[0]).cross(p[2] - p[0]).length() * 0.5;
+            for (const auto& q : p) {
+                TEST_ASSERT((2.0 - q.y) + q.z >= D - 1e-3, "Chamfer end cap must not keep the sharp corner");
+            }
+        }
+        std::cout << "  chamfer cap X=" << capX << " area=" << area << " expected=" << expectedCap << "\n";
+        TEST_ASSERT(std::abs(area - expectedCap) < 1e-3, "Chamfer end cap area must match the trimmed profile");
+    }
+    int open = CountOpenEdges(cv, ci);
+    std::cout << "  chamfered box open edges: " << open << "\n";
+    TEST_ASSERT(open == 0, "Chamfered box must be watertight");
+
+    // Bevel face must be flat-shaded: every triangle on the 45-degree plane carries one normal
+    for (size_t t = 0; t + 2 < ci.size(); t += 3) {
+        Geom::Point3D p[3];
+        for (int k = 0; k < 3; ++k) {
+            const auto& v = cv[ci[t + k]];
+            p[k] = Geom::Point3D(v.position[0], v.position[1], v.position[2]);
+        }
+        bool onBevel = true;
+        for (const auto& q : p) onBevel &= std::abs((2.0 - q.y) + q.z - D) < 1e-3 && q.z < D + 1e-3;
+        Geom::Vector3D gn = (p[1] - p[0]).cross(p[2] - p[0]);
+        if (!onBevel || gn.length() < 1e-9 || std::abs(gn.normalized().x) > 0.1) continue;
+        for (int k = 0; k < 3; ++k) {
+            const auto& n = cv[ci[t + k]].normal;
+            TEST_ASSERT(std::abs(n[0]) < 1e-3 && std::abs(std::abs(n[1]) - std::abs(n[2])) < 1e-3,
+                        "Bevel vertices must carry the flat 45-degree face normal");
+        }
+    }
+
+    // 2. Slanted end faces
+    std::vector<std::array<float, 2>> trapProfile = {{0.0f, 0.0f}, {4.0f, 0.0f}, {3.4f, 3.0f}, {0.6f, 3.0f}};
+    auto trap = std::make_shared<ExtrudeNode>("Chamf_Trap", trapProfile, 2.0f);
+    trap->SetPlane(SketchPlane::XZ_Ground);
+    graph.AddNode(trap);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    int trapEdge = FindTopEdgeAtZ0(*trap, 2.0, 3.5);
+    TEST_ASSERT(trapEdge >= 0, "Must find the trapezoid's top long edge");
+    auto trapChamfer = std::make_shared<ChamferNode>("Trap_Chamfer", trap, trapEdge, D);
+    graph.AddNode(trapChamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    open = CountOpenEdges(trapChamfer->GetCachedVertices(), trapChamfer->GetCachedIndices());
+    std::cout << "  chamfered trapezoid open edges: " << open << "\n";
+    TEST_ASSERT(open == 0, "Chamfered trapezoid must be watertight");
+
+    // 3. Tangent chaining with mitered junctions: chamfer the top rim of an L-bracket whose
+    //    vertical corner was filleted; the chamfer must follow the round like the fillet does.
+    auto sketch = std::make_shared<SketchNode>("Chamf_LSketch", SketchPlane::XZ_Ground);
+    sketch->SetPresetLBracket(4.0f, 4.0f, 1.2f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+    auto lb = std::make_shared<ExtrudeNode>("Chamf_LBracket", sketch, 3.0f);
+    lb->Evaluate(&mockDevice, exchange);
+    graph.AddNode(lb);
+    int vertEdge = -1;
+    {
+        const auto& e = lb->GetCachedEdges();
+        const auto& v = lb->GetCachedVertices();
+        for (size_t k = 0; k + 1 < e.size(); k += 2) {
+            const auto& a = v[e[k]].position;
+            const auto& b = v[e[k + 1]].position;
+            if (std::abs(a[0] - b[0]) < 0.05f && std::abs(a[2] - b[2]) < 0.05f && std::abs(a[1] - b[1]) > 2.0f) {
+                vertEdge = static_cast<int>(k / 2);
+                break;
+            }
+        }
+    }
+    TEST_ASSERT(vertEdge >= 0, "Must find a vertical L-bracket corner edge");
+    auto vertFillet = std::make_shared<FilletNode>("Chamf_VertFillet", lb, vertEdge, 0.35f);
+    graph.AddNode(vertFillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    int rimEdge = -1;
+    {
+        const auto& e = vertFillet->GetCachedEdges();
+        const auto& v = vertFillet->GetCachedVertices();
+        for (size_t k = 0; k + 1 < e.size(); k += 2) {
+            const auto& a = v[e[k]].position;
+            const auto& b = v[e[k + 1]].position;
+            float dx = a[0] - b[0], dz = a[2] - b[2];
+            if (std::abs(a[1] - 3.0f) < 0.05f && std::abs(b[1] - 3.0f) < 0.05f && std::sqrt(dx * dx + dz * dz) > 0.5f) {
+                rimEdge = static_cast<int>(k / 2);
+                break;
+            }
+        }
+    }
+    TEST_ASSERT(rimEdge >= 0, "Must find a top rim edge on the filleted L-bracket");
+
+    auto rimFillet = std::make_shared<FilletNode>("Chamf_RimFillet", vertFillet, rimEdge, 0.25f);
+    auto rimChamfer = std::make_shared<ChamferNode>("Chamf_RimChamfer", vertFillet, rimEdge, 0.25f);
+    rimFillet->Evaluate(&mockDevice, exchange);
+    rimChamfer->Evaluate(&mockDevice, exchange);
+    TEST_ASSERT(!rimChamfer->HasConflict(), "Rim chamfer must not conflict");
+
+    // Both blends chain the same edges: their footprint on the top face (setback line) must match
+    auto topFootprint = [](const std::vector<CADVertex>& vs, const std::vector<uint32_t>& is) {
+        std::array<float, 4> box{1e9f, -1e9f, 1e9f, -1e9f};
+        for (uint32_t i : is) {
+            const auto& p = vs[i].position;
+            if (p[1] < 2.99f && p[1] > 2.5f) {
+                box[0] = std::min(box[0], p[0]); box[1] = std::max(box[1], p[0]);
+                box[2] = std::min(box[2], p[2]); box[3] = std::max(box[3], p[2]);
+            }
+        }
+        return box;
+    };
+    auto fb = topFootprint(rimFillet->GetCachedVertices(), rimFillet->GetCachedIndices());
+    auto cb = topFootprint(rimChamfer->GetCachedVertices(), rimChamfer->GetCachedIndices());
+    std::cout << "  rim fillet span x[" << fb[0] << "," << fb[1] << "] z[" << fb[2] << "," << fb[3] << "]"
+              << "  chamfer span x[" << cb[0] << "," << cb[1] << "] z[" << cb[2] << "," << cb[3] << "]\n";
+    for (int k = 0; k < 4; ++k) {
+        TEST_ASSERT(std::abs(fb[k] - cb[k]) < 0.3f, "Rim chamfer must chain the same edges as the rim fillet");
+    }
+    int fOpen = CountOpenEdges(rimFillet->GetCachedVertices(), rimFillet->GetCachedIndices());
+    int cOpen = CountOpenEdges(rimChamfer->GetCachedVertices(), rimChamfer->GetCachedIndices());
+    std::cout << "  rim fillet open edges: " << fOpen << "  rim chamfer open edges: " << cOpen << "\n";
+    TEST_ASSERT(fOpen == 0 && cOpen == 0, "Chained rim fillet and chamfer must both be watertight");
+    bool fullSetback = false;
+    for (uint32_t i : rimChamfer->GetCachedIndices()) {
+        fullSetback |= std::abs(rimChamfer->GetCachedVertices()[i].position[1] - 2.75f) < 1e-3f;
+    }
+    TEST_ASSERT(fullSetback, "Rim chamfer must use its full 0.25 setback (not collapse on sliver cap triangles)");
+    return true;
+}
+
+// Edges shared by two triangles whose normals point in opposite directions (folded or mis-wound skin)
+static int CountFoldedEdges(const std::vector<CADVertex>& v, const std::vector<uint32_t>& idx) {
+    auto q = [&](uint32_t i) {
+        return std::array<long long, 3>{std::llround(v[i].position[0] * 1e4), std::llround(v[i].position[1] * 1e4),
+                                        std::llround(v[i].position[2] * 1e4)};
+    };
+    std::map<std::pair<std::array<long long, 3>, std::array<long long, 3>>, std::vector<Geom::Vector3D>> adj;
+    for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+        Geom::Point3D p[3];
+        for (int k = 0; k < 3; ++k) p[k] = Geom::Point3D(v[idx[t + k]].position[0], v[idx[t + k]].position[1], v[idx[t + k]].position[2]);
+        Geom::Vector3D n = (p[1] - p[0]).cross(p[2] - p[0]);
+        if (n.length() > 1e-12) n = n.normalized();
+        for (int k = 0; k < 3; ++k) {
+            auto A = q(idx[t + k]), B = q(idx[t + (k + 1) % 3]);
+            if (B < A) std::swap(A, B);
+            adj[{A, B}].push_back(n);
+        }
+    }
+    int folds = 0;
+    for (const auto& kv : adj) {
+        if (kv.second.size() == 2 && kv.second[0].dot(kv.second[1]) < -0.5) folds++;
+    }
+    return folds;
+}
+
+bool TestVertexFilletRoundsAllThreeCornerEdges() {
+    std::cout << "[Test] Vertex Fillet Rounds All Three Edges Meeting At The Corner...\n";
+    MockTestDevice dev;
+    AtomicMeshExchange ex;
+    ParametricGraph graph(nullptr);
+
+    auto sk = std::make_shared<SketchNode>("VF_Sketch", SketchPlane::XZ_Ground);
+    sk->SetPresetLBracket(4.0f, 4.0f, 1.2f);
+    sk->SetPosition(-3.0f, 0.0f, 0.0f);
+    sk->Evaluate(&dev, ex);
+    graph.AddNode(sk);
+    auto ext = std::make_shared<ExtrudeNode>("VF_LBracket", sk, 3.0f);
+    ext->SetPosition(-3.0f, 0.0f, 0.0f);
+    ext->Evaluate(&dev, ex);
+    graph.AddNode(ext);
+
+    // Same selection logic as the GUI's "Apply Fillet to Corner at Vertex"
+    const Geom::Point3D corner(-1.0, 3.0, -2.0);
+    VertexCornerEdges edges = CollectVertexCornerEdges(ext->GetCachedVertices(), ext->GetCachedEdges(), corner,
+                                                       Geom::Vector3D(0, 1, 0));
+    TEST_ASSERT(edges.primaryEdge >= 0, "Corner vertex must have a primary edge");
+    TEST_ASSERT(edges.otherEdges.size() == 2, "Box corner must contribute exactly two more distinct edges");
+
+    const float R = 0.2f;
+    auto fillet = std::make_shared<FilletNode>("VF_Fillet", ext, edges.primaryEdge, R);
+    fillet->SetAdditionalEdges(edges.otherEdges);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&dev, ex);
+    TEST_ASSERT(!fillet->HasConflict(), "Vertex fillet must not conflict");
+
+    const auto& v = fillet->GetCachedVertices();
+    const auto& idx = fillet->GetCachedIndices();
+    // No referenced vertex may remain on any of the three sharp edges
+    bool onVertical = false, onTopFront = false, onTopRight = false;
+    for (uint32_t i : idx) {
+        const auto& p = v[i].position;
+        onVertical |= std::abs(p[0] + 1.0f) < 1e-3f && std::abs(p[2] + 2.0f) < 1e-3f;
+        onTopFront |= std::abs(p[1] - 3.0f) < 1e-3f && std::abs(p[2] + 2.0f) < 1e-3f;
+        onTopRight |= std::abs(p[0] + 1.0f) < 1e-3f && std::abs(p[1] - 3.0f) < 1e-3f;
+    }
+    TEST_ASSERT(!onVertical, "Vertical corner edge must be rounded");
+    TEST_ASSERT(!onTopFront, "Top front edge must be rounded");
+    TEST_ASSERT(!onTopRight, "Top right edge must be rounded");
+
+    int open = CountOpenEdges(v, idx);
+    int folds = CountFoldedEdges(v, idx);
+    std::cout << "  vertex fillet: tris=" << idx.size() / 3 << " open=" << open << " folds=" << folds << "\n";
+    TEST_ASSERT(open == 0, "Vertex fillet must be watertight");
+    TEST_ASSERT(folds == 0, "Vertex fillet must not fold");
+
+    // Equal radii meet in a spherical corner: every corner-region vertex sits R from the ball centre
+    const Geom::Point3D ballCentre(-1.0 - R, 3.0 - R, -2.0 + R);
+    for (uint32_t i : idx) {
+        Geom::Point3D p(v[i].position[0], v[i].position[1], v[i].position[2]);
+        if (p.x > ballCentre.x && p.y > ballCentre.y && p.z < ballCentre.z) {
+            TEST_ASSERT(std::abs(p.distance_to(ballCentre) - R) < 0.02, "Corner must be a spherical blend");
+        }
+    }
+
+    // The result is no longer a plain profile extrusion: downstream features must not rebuild from it
+    ExtrusionData data;
+    TEST_ASSERT(!fillet->IsExtrusionBased(data), "Vertex fillet must not advertise a profile that drops its extra rounds");
+
+    // Every corner of the L-bracket (convex and the inner concave ones)
+    const float xs[] = {-5.0f, -1.0f, -3.8f};
+    const float zs[] = {-2.0f, 2.0f, -0.8f};
+    for (float y : {0.0f, 3.0f}) {
+        for (float x : xs) {
+            for (float z : zs) {
+                Geom::Point3D c(x, y, z);
+                bool isCorner = false;
+                for (const auto& vv : ext->GetCachedVertices()) {
+                    isCorner |= Geom::Point3D(vv.position[0], vv.position[1], vv.position[2]).distance_to(c) < 1e-3;
+                }
+                if (!isCorner) continue;
+                VertexCornerEdges ce = CollectVertexCornerEdges(ext->GetCachedVertices(), ext->GetCachedEdges(), c, Geom::Vector3D(0, 1, 0));
+                auto f = std::make_shared<FilletNode>("VF_Any", ext, ce.primaryEdge, R);
+                f->SetAdditionalEdges(ce.otherEdges);
+                f->Evaluate(&dev, ex);
+                int o = CountOpenEdges(f->GetCachedVertices(), f->GetCachedIndices());
+                int fo = CountFoldedEdges(f->GetCachedVertices(), f->GetCachedIndices());
+                std::cout << "  corner (" << x << "," << y << "," << z << "): edges=" << 1 + ce.otherEdges.size()
+                          << " open=" << o << " folds=" << fo << "\n";
+                TEST_ASSERT(ce.otherEdges.size() == 2, "Every L-bracket corner joins exactly three edges");
+                TEST_ASSERT(o == 0, "Vertex fillet must be watertight at every corner");
+                TEST_ASSERT(fo == 0, "Vertex fillet must not fold at any corner");
+                // At the inside corner the vertical round adds material, so the old corner point ends up
+                // inside the solid with the rim blends passing close to it; only check convex corners.
+                const bool insideCorner = std::abs(x + 3.8f) < 1e-3f && std::abs(z + 0.8f) < 1e-3f;
+                for (uint32_t i : f->GetCachedIndices()) {
+                    if (insideCorner) break;
+                    const auto& p = f->GetCachedVertices()[i].position;
+                    TEST_ASSERT(Geom::Point3D(p[0], p[1], p[2]).distance_to(c) > 0.05, "The sharp corner point must be blended away");
+                }
+            }
+        }
+    }
+    return true;
+}
+
+bool TestFilletRunningIntoEarlierRoundWrapsCleanly() {
+    std::cout << "[Test] Fillet Running Into An Earlier Round Wraps Around It Cleanly (no misaligned fan)...\n";
+    MockTestDevice dev;
+    AtomicMeshExchange ex;
+
+    // Default scene L-bracket: x in [-5,-1], z in [-2,2], y in [0,3]
+    auto sk = std::make_shared<SketchNode>("Wrap_Sketch", SketchPlane::XZ_Ground);
+    sk->SetPresetLBracket(4.0f, 4.0f, 1.2f);
+    sk->SetPosition(-3.0f, 0.0f, 0.0f);
+    sk->Evaluate(&dev, ex);
+    auto ext = std::make_shared<ExtrudeNode>("Wrap_LBracket", sk, 3.0f);
+    ext->SetPosition(-3.0f, 0.0f, 0.0f);
+    ext->Evaluate(&dev, ex);
+
+    auto findEdge = [](const DAGNode& n, Geom::Point3D a, Geom::Point3D b) {
+        const auto& e = n.GetCachedEdges();
+        const auto& v = n.GetCachedVertices();
+        for (size_t k = 0; k + 1 < e.size(); k += 2) {
+            Geom::Point3D p(v[e[k]].position[0], v[e[k]].position[1], v[e[k]].position[2]);
+            Geom::Point3D q(v[e[k + 1]].position[0], v[e[k + 1]].position[1], v[e[k + 1]].position[2]);
+            if ((p.distance_to(a) < 0.06 && q.distance_to(b) < 0.06) || (p.distance_to(b) < 0.06 && q.distance_to(a) < 0.06)) {
+                return static_cast<int>(k / 2);
+            }
+        }
+        return -1;
+    };
+    auto maxOutside = [](const DAGNode& n) {
+        double o = 0.0;
+        for (uint32_t i : n.GetCachedIndices()) {
+            const auto& p = n.GetCachedVertices()[i].position;
+            o = std::max({o, -5.0 - p[0], p[0] + 1.0, -static_cast<double>(p[1]), p[1] - 3.0, -2.0 - p[2], p[2] - 2.0});
+        }
+        return o;
+    };
+
+    for (float r2 : {0.2f, 0.1f, 0.3f}) {
+        // Fillet_1: top edge along Z at x = -5
+        auto f1 = std::make_shared<FilletNode>("Wrap_F1", ext, findEdge(*ext, {-5, 3, 2}, {-5, 3, -2}), 0.2f);
+        f1->Evaluate(&dev, ex);
+        // Fillet_2: top front edge, which runs into Fillet_1's round at x = -4.8
+        int e2 = findEdge(*f1, {-1, 3, -2}, {-4.8, 3, -2});
+        TEST_ASSERT(e2 >= 0, "Must find the top front edge ending at the earlier round");
+        auto f2 = std::make_shared<FilletNode>("Wrap_F2", f1, e2, r2);
+        f2->Evaluate(&dev, ex);
+        // Fillet_3: bottom front edge, which runs into Fillet_2's round
+        int e3 = findEdge(*f2, {-5 + r2, 0, -2}, {-1, 0, -2});
+        TEST_ASSERT(e3 >= 0, "Must find the bottom front edge");
+        auto f3 = std::make_shared<FilletNode>("Wrap_F3", f2, e3, 0.2f);
+        f3->Evaluate(&dev, ex);
+
+        for (const DAGNode* n : {static_cast<const DAGNode*>(f2.get()), static_cast<const DAGNode*>(f3.get())}) {
+            int open = CountOpenEdges(n->GetCachedVertices(), n->GetCachedIndices());
+            int folds = CountFoldedEdges(n->GetCachedVertices(), n->GetCachedIndices());
+            double out = maxOutside(*n);
+            std::cout << "  r2=" << r2 << " " << n->GetName() << ": open=" << open << " folds=" << folds << " outside=" << out << "\n";
+            TEST_ASSERT(open == 0, "Wrapped fillet must be watertight");
+            TEST_ASSERT(folds == 0, "Wrapped fillet must not fold or flip triangles");
+            // Equal radii give an exact spherical corner; a larger blend wrapping a smaller round is
+            // approximated at the cusp and may bulge slightly.
+            TEST_ASSERT(out < (r2 == 0.2f ? 1e-3 : 0.05), "Wrapped fillet must stay within the original solid");
+        }
+    }
+    return true;
+}
+
+bool TestOffsetReferencePlanesAndAxesFromFaceAndCorners() {
+    std::cout << "[Test] Offset Reference Planes & Axes from Selected Face, Corner Edge, and Corner Vertex...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    auto sketch = std::make_shared<SketchNode>("Box_Sketch", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(4.0f, 2.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Box_Extrude", sketch, 3.0f);
+    extrude->Evaluate(&mockDevice, exchange);
+    graph.AddNode(extrude);
+
+    // 1. Find Top Face (Y = 3.0, normal = (0, 1, 0))
+    const auto& faces = extrude->GetFaces();
+    int faceIdx = -1;
+    Geom::Plane facePlane;
+    for (size_t i = 0; i < faces.size(); ++i) {
+        if (faces[i].normal.y > 0.9) {
+            faceIdx = static_cast<int>(i);
+            facePlane = faces[i].plane;
+            break;
+        }
+    }
+    TEST_ASSERT(faceIdx >= 0, "Should find top face of Box_Extrude");
+    TEST_ASSERT(std::abs(facePlane.origin.y - 3.0) < 1e-3, "Top face origin Y should be 3.0");
+    TEST_ASSERT(std::abs(facePlane.normal.y - 1.0) < 1e-3, "Top face normal should be +Y");
+
+    // Create offset DatumPlaneNode from selected face (offset = +1.5m along face normal)
+    auto faceOffsetPlane = std::make_shared<DatumPlaneNode>("Plane_Face_Offset", extrude, faceIdx, facePlane, 1.5);
+    graph.AddNode(faceOffsetPlane);
+    faceOffsetPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(faceOffsetPlane->IsFaceAssociative(), "Plane should be FaceAssociative");
+    TEST_ASSERT(!faceOffsetPlane->HasConflict(), "Face offset plane should not have conflict");
+    Geom::Plane evalFacePlane = faceOffsetPlane->GetPlane();
+    TEST_ASSERT(std::abs(evalFacePlane.origin.y - 4.5) < 1e-3, "Face offset plane origin Y should be 3.0 + 1.5 = 4.5");
+
+    // Create offset DatumAxisNode from selected face (offset = +2.0m along face normal)
+    auto faceOffsetAxis = DatumAxisNode::CreateFromFace("Axis_Face_Offset", extrude, faceIdx, facePlane.normal, 2.0);
+    graph.AddNode(faceOffsetAxis);
+    faceOffsetAxis->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(faceOffsetAxis->IsFaceAssociative(), "Axis should be FaceAssociative");
+    TEST_ASSERT(!faceOffsetAxis->HasConflict(), "Face offset axis should not have conflict");
+    Geom::Axis3D evalFaceAxis = faceOffsetAxis->GetAxis();
+    TEST_ASSERT(std::abs(evalFaceAxis.origin.y - 5.0) < 1e-3, "Face offset axis origin Y should be 3.0 + 2.0 = 5.0");
+
+    // 2. Pick a Corner Edge on Box_Extrude
+    const auto& edges = extrude->GetCachedEdges();
+    const auto& verts = extrude->GetCachedVertices();
+    TEST_ASSERT(edges.size() >= 2, "Extrude should have cached sharp edges");
+    int edgeIdx = 0;
+    Geom::Point3D eP0(verts[edges[0]].position[0], verts[edges[0]].position[1], verts[edges[0]].position[2]);
+    Geom::Point3D eP1(verts[edges[1]].position[0], verts[edges[1]].position[1], verts[edges[1]].position[2]);
+    Geom::Point3D edgeMid((eP0.x + eP1.x) * 0.5, (eP0.y + eP1.y) * 0.5, (eP0.z + eP1.z) * 0.5);
+
+    Geom::Plane initEdgePlane;
+    bool edgePlaneOk = DatumPlaneNode::ComputeCornerEdgePlane(extrude, edgeIdx, initEdgePlane);
+    TEST_ASSERT(edgePlaneOk, "ComputeCornerEdgePlane must succeed on corner edge");
+
+    // Create offset DatumPlaneNode from corner edge (offset = 1.25m)
+    auto edgeOffsetPlane = DatumPlaneNode::CreateFromEdge("Plane_Edge_Offset", extrude, edgeIdx, initEdgePlane, 1.25);
+    graph.AddNode(edgeOffsetPlane);
+    edgeOffsetPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(edgeOffsetPlane->IsEdgeAssociative(), "Plane should be EdgeAssociative");
+    TEST_ASSERT(!edgeOffsetPlane->HasConflict(), "Edge offset plane should not have conflict");
+    Geom::Plane evalEdgePlane = edgeOffsetPlane->GetPlane();
+    double planeDistFromMid = evalEdgePlane.origin.distance_to(edgeMid);
+    TEST_ASSERT(std::abs(planeDistFromMid - 1.25) < 1e-3, "Edge offset plane origin must be offset by 1.25m from edge midpoint");
+
+    // Create offset DatumAxisNode from corner edge (offset = 0.8m)
+    auto edgeOffsetAxis = DatumAxisNode::CreateFromEdge("Axis_Edge_Offset", extrude, edgeIdx, 0.8, true);
+    graph.AddNode(edgeOffsetAxis);
+    edgeOffsetAxis->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(edgeOffsetAxis->IsEdgeAssociative(), "Axis should be EdgeAssociative");
+    TEST_ASSERT(!edgeOffsetAxis->HasConflict(), "Edge offset axis should not have conflict");
+    Geom::Axis3D evalEdgeAxis = edgeOffsetAxis->GetAxis();
+    double axisDistFromMid = evalEdgeAxis.origin.distance_to(edgeMid);
+    TEST_ASSERT(std::abs(axisDistFromMid - 0.8) < 1e-3, "Edge offset axis origin must be offset by 0.8m from edge midpoint");
+
+    // 3. Pick a Corner Vertex on Box_Extrude
+    int vertIdx = static_cast<int>(edges[0]);
+    Geom::Point3D vertPos = eP0;
+    Geom::Plane cornerVertBasePlane;
+    bool vertPlaneOk = DatumPlaneNode::ComputeCornerVertexPlane(extrude, vertIdx, cornerVertBasePlane);
+    TEST_ASSERT(vertPlaneOk, "ComputeCornerVertexPlane must succeed on corner vertex");
+
+    auto vertOffsetPlane = std::make_shared<DatumPlaneNode>("Plane_Vertex_Offset", extrude, vertIdx, cornerVertBasePlane, true, 1.0);
+    graph.AddNode(vertOffsetPlane);
+    vertOffsetPlane->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(vertOffsetPlane->IsVertexAssociative(), "Plane should be VertexAssociative");
+    TEST_ASSERT(!vertOffsetPlane->HasConflict(), "Vertex offset plane should not have conflict");
+    TEST_ASSERT(std::abs(vertOffsetPlane->GetPlane().origin.distance_to(vertPos) - 1.0) < 1e-3,
+                "Vertex offset plane origin must be offset by 1.0m from corner vertex");
+
+    auto vertOffsetAxis = std::make_shared<DatumAxisNode>(
+        "Axis_Vertex_Offset", extrude, vertIdx, cornerVertBasePlane.normal, 0.75);
+    graph.AddNode(vertOffsetAxis);
+    vertOffsetAxis->Evaluate(&mockDevice, exchange);
+
+    TEST_ASSERT(vertOffsetAxis->IsVertexAssociative(), "Axis should be VertexAssociative");
+    TEST_ASSERT(!vertOffsetAxis->HasConflict(), "Vertex offset axis should not have conflict");
+    TEST_ASSERT(std::abs(vertOffsetAxis->GetAxis().origin.distance_to(vertPos) - 0.75) < 1e-3,
+                "Vertex offset axis origin must be offset by 0.75m from corner vertex");
+
+    // 4. Parametric update propagation: change extrude height from 3.0 to 5.0
+    extrude->SetHeight(5.0f);
+    extrude->Evaluate(&mockDevice, exchange);
+    faceOffsetPlane->Evaluate(&mockDevice, exchange);
+    faceOffsetAxis->Evaluate(&mockDevice, exchange);
+    TEST_ASSERT(std::abs(faceOffsetPlane->GetPlane().origin.y - 6.5) < 1e-3,
+                "After extrude height=5.0, face offset plane Y should update to 5.0 + 1.5 = 6.5");
+    TEST_ASSERT(std::abs(faceOffsetAxis->GetAxis().origin.y - 7.0) < 1e-3,
+                "After extrude height=5.0, face offset axis Y should update to 5.0 + 2.0 = 7.0");
+
+    return true;
+}
+
+bool TestSketchCreatedOnFaceSurfacePlane() {
+    std::cout << "[Test] 2D Sketch Created from a Face is Drawn on the Surface Plane of That Face (Not at Origin)...\n";
+
+    ParametricGraph graph(nullptr);
+    AtomicMeshExchange exchange;
+    MockTestDevice mockDevice;
+
+    auto baseSketch = std::make_shared<SketchNode>("Base_Sketch", SketchPlane::XZ_Ground);
+    baseSketch->SetPresetRectangle(4.0f, 4.0f);
+    graph.AddNode(baseSketch);
+
+    auto baseExtrude = std::make_shared<ExtrudeNode>("Base_Extrude", baseSketch, 3.0f);
+    graph.AddNode(baseExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    // 1. Pick top face (Y = 3.0) and create a 2D sketch on that face with 0.0 offset
+    Geom::Point3D rayOrigTop(0.0, 10.0, 0.0);
+    Geom::Vector3D rayDirTop(0.0, -1.0, 0.0);
+    uint64_t hitId = graph.PickNode(rayOrigTop, rayDirTop);
+    TEST_ASSERT(hitId == baseExtrude->GetId(), "PickNode should hit Base_Extrude");
+
+    auto topFacePick = graph.PickSubElement(rayOrigTop, rayDirTop, hitId);
+    TEST_ASSERT(topFacePick.faceIndex >= 0, "PickSubElement must identify the clicked top face on first click");
+    TEST_ASSERT(std::abs(topFacePick.facePlane.origin.y - 3.0) < 1e-3, "Top face plane origin Y must be at 3.0m");
+
+    auto topPlaneNode = std::make_shared<DatumPlaneNode>("Plane_TopFace", baseExtrude, topFacePick.faceIndex, topFacePick.facePlane, 0.0);
+    graph.AddNode(topPlaneNode);
+    auto topSketch = std::make_shared<SketchNode>("Sketch_OnTopFace", topPlaneNode);
+    topSketch->SetPresetRectangle(1.5f, 1.5f);
+    graph.AddNode(topSketch);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(topSketch->HasCustomPlane(), "Sketch created from face must use custom plane");
+    TEST_ASSERT(std::abs(topSketch->GetCustomPlane().origin.y - 3.0) < 1e-3, "Sketch custom plane Y must be at 3.0m (not 0.0)");
+    TEST_ASSERT(std::abs(topSketch->GetPosition()[1] - 3.0f) < 1e-3f, "Sketch position Y must be at 3.0m (not 0.0)");
+
+    const auto& topSketchVerts = topSketch->GetCachedVertices();
+    TEST_ASSERT(!topSketchVerts.empty(), "Top face sketch must have evaluated 3D vertices");
+    for (const auto& v : topSketchVerts) {
+        TEST_ASSERT(std::abs(v.position[1] - 3.005f) < 1e-2f,
+                    "Every vertex of the sketch on the top face must lie on the Y=3.0 face surface (never at Y=0 origin)");
+    }
+
+    // 2. Pick front vertical face (Z = 2.0, normal = +Z) and create a 2D sketch on that face
+    Geom::Point3D rayOrigFront(0.0, 1.5, 10.0);
+    Geom::Vector3D rayDirFront(0.0, 0.0, -1.0);
+    auto frontFacePick = graph.PickSubElement(rayOrigFront, rayDirFront, hitId);
+    TEST_ASSERT(frontFacePick.faceIndex >= 0, "PickSubElement must identify the front face");
+    TEST_ASSERT(std::abs(frontFacePick.facePlane.origin.z - 2.0) < 1e-3, "Front face plane origin Z must be at 2.0m");
+    TEST_ASSERT(frontFacePick.facePlane.normal.z > 0.99, "Front face normal must point along +Z");
+
+    auto frontPlaneNode = std::make_shared<DatumPlaneNode>("Plane_FrontFace", baseExtrude, frontFacePick.faceIndex, frontFacePick.facePlane, 0.0);
+    graph.AddNode(frontPlaneNode);
+    auto frontSketch = std::make_shared<SketchNode>("Sketch_OnFrontFace", frontPlaneNode);
+    frontSketch->SetPresetRectangle(1.0f, 1.0f);
+    graph.AddNode(frontSketch);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    const auto& frontSketchVerts = frontSketch->GetCachedVertices();
+    TEST_ASSERT(!frontSketchVerts.empty(), "Front face sketch must have evaluated 3D vertices");
+    for (const auto& v : frontSketchVerts) {
+        TEST_ASSERT(std::abs(v.position[2] - 2.005f) < 1e-2f,
+                    "Every vertex of the sketch on the front face must lie on the Z=2.0 face surface (never at Z=0 origin)");
+    }
+
+    // 3. Verify Parametric Update: if Base_Extrude height changes from 3.0 to 4.5, topSketch automatically moves to Y=4.5
+    baseExtrude->SetHeight(4.5f);
+    baseExtrude->Evaluate(&mockDevice, exchange);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(std::abs(topSketch->GetCustomPlane().origin.y - 4.5) < 1e-3,
+                "When parent feature height updates to 4.5m, sketch plane on top face must move to Y=4.5m");
+    for (const auto& v : topSketch->GetCachedVertices()) {
+        TEST_ASSERT(std::abs(v.position[1] - 4.505f) < 1e-2f,
+                    "Updated sketch vertices must lie on the new Y=4.5m face surface");
+    }
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1955,6 +2666,12 @@ int main() {
     pass &= TestLBracketTopRimFilletWithTangentChainAndVerticalCornerFillets();
     pass &= TestFilletChamferChildRelationshipAndSafeFeatureDeletion();
     pass &= TestFilletDoesNotWrapOntoAdjoiningEdges();
+    pass &= TestFilletEndCapIsTrimmedToProfile();
+    pass &= TestChamferUsesFilletCornerAndEndCapBehavior();
+    pass &= TestFilletRunningIntoEarlierRoundWrapsCleanly();
+    pass &= TestVertexFilletRoundsAllThreeCornerEdges();
+    pass &= TestOffsetReferencePlanesAndAxesFromFaceAndCorners();
+    pass &= TestSketchCreatedOnFaceSurfacePlane();
     pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {

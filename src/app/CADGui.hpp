@@ -63,6 +63,7 @@ public:
     void SetShowReferenceFeature(bool show) noexcept { m_showReferenceFeature = show; }
 
     [[nodiscard]] bool IsSketchModeActive() const noexcept { return m_sketchModeActive; }
+    [[nodiscard]] bool IsSketchPlanePromptActive() const noexcept { return m_showSketchPlanePrompt; }
     void EnterSketchMode(uint64_t sketchId) noexcept { 
         m_sketchModeActive = true; 
         m_activeSketchId = sketchId;
@@ -214,7 +215,10 @@ private:
     std::vector<std::array<float, 2>> m_inProgressPoints;
     std::vector<std::array<float, 2>> m_inProgressSplineControls;
     int m_draggedShapeIdx{-1};
-    int m_draggedVertexIdx{-1};
+    int m_draggedVertexIdx{-1}; // -1 while m_draggedShapeIdx >= 0 means the whole shape is being dragged
+    std::vector<std::array<float, 2>> m_dragShapeOrigPoints; // shape outline when a whole-shape drag began
+    float m_dragShapeStartU{0.0f};
+    float m_dragShapeStartV{0.0f};
     int m_hoveredShapeIdx{-1};
     int m_hoveredVertexIdx{-1};
     int m_selectedShapeIdx{-1};
@@ -266,6 +270,10 @@ private:
     int m_lastPublishedSelectedEdgeIndex{-1};
     bool m_selectionScrollPending{false};
     uint32_t m_shapeCounter{1};
+
+    // Reference Plane & Axis creation parameters
+    float m_newRefPlaneOffset{0.0f};
+    float m_newRefAxisOffset{0.0f};
 
     // Fillet & Chamfer feature parameters
     enum class FilletDimensionChoice { Distance, Angle };
