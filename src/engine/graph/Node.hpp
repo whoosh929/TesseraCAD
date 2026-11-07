@@ -343,11 +343,11 @@ private:
 
 inline bool ExtractExtrusionData(const std::shared_ptr<DAGNode>& node, ExtrusionData& out) {
     if (!node) return false;
-    if (node->IsExtrusionBased(out)) return true;
     auto leaf = node->GetActiveLeafFeature();
     if (leaf && leaf != node && leaf->IsExtrusionBased(out)) {
         return true;
     }
+    if (node->IsExtrusionBased(out)) return true;
     return false;
 }
 

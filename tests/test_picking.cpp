@@ -1612,6 +1612,96 @@ bool TestThreeCornerVertexFillet() {
     return true;
 }
 
+bool TestHorizontalAndGeneral3DEdgeFilletAndChamfer() {
+    std::cout << "\n[TEST] 3D Horizontal Edge Fillet and Chamfer (Method 2 Non-Warping Mesh Integrity)...\n";
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    // 1. Create a rectangular block extruded in Y (height 2.0)
+    std::vector<std::array<float, 2>> rectProfile = {
+        {0.0f, 0.0f},
+        {4.0f, 0.0f},
+        {4.0f, 3.0f},
+        {0.0f, 3.0f}
+    };
+    auto extrude = std::make_shared<ExtrudeNode>("Block_Extrude", rectProfile, 2.0f);
+    extrude->SetPlane(SketchPlane::XZ_Ground);
+    graph.AddNode(extrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    const auto& edges = extrude->GetCachedEdges();
+    const auto& verts = extrude->GetCachedVertices();
+
+    // 2. Locate a horizontal top cap edge (where Y = 2.0 for both p0 and p1)
+    int horizEdgeIdx = -1;
+    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+        uint32_t i0 = edges[e];
+        uint32_t i1 = edges[e + 1];
+        Geom::Point3D p0(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]);
+        Geom::Point3D p1(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2]);
+        if (std::abs(p0.y - 2.0) < 0.05 && std::abs(p1.y - 2.0) < 0.05 && p0.distance_to(p1) > 1.0) {
+            horizEdgeIdx = static_cast<int>(e / 2);
+            break;
+        }
+    }
+    TEST_ASSERT(horizEdgeIdx >= 0, "Must find horizontal top edge on block");
+
+    // 3. Create FilletNode on this horizontal edge
+    auto fillet = std::make_shared<FilletNode>("Horiz_Fillet", extrude, horizEdgeIdx, 0.35f);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!fillet->HasConflict(), "Horizontal edge fillet must not conflict");
+    const auto& fVerts = fillet->GetCachedVertices();
+    const auto& fIndices = fillet->GetCachedIndices();
+    TEST_ASSERT(!fVerts.empty() && !fIndices.empty(), "Fillet must have valid vertices and indices");
+
+    // Verify all vertices are strictly finite (no NaNs!)
+    for (const auto& v : fVerts) {
+        TEST_ASSERT(std::isfinite(v.position[0]) && std::isfinite(v.position[1]) && std::isfinite(v.position[2]),
+                    "All fillet vertex coordinates must be finite (no NaNs)");
+        TEST_ASSERT(std::isfinite(v.normal[0]) && std::isfinite(v.normal[1]) && std::isfinite(v.normal[2]),
+                    "All fillet vertex normals must be finite (no NaNs)");
+    }
+
+    // Verify that top cap vertices remain strictly at y = 2.0 (no warped diagonal ramps!)
+    for (size_t t = 0; t + 2 < fIndices.size(); t += 3) {
+        uint32_t a = fIndices[t];
+        uint32_t b = fIndices[t + 1];
+        uint32_t c = fIndices[t + 2];
+        Geom::Point3D pa(fVerts[a].position[0], fVerts[a].position[1], fVerts[a].position[2]);
+        Geom::Point3D pb(fVerts[b].position[0], fVerts[b].position[1], fVerts[b].position[2]);
+        Geom::Point3D pc(fVerts[c].position[0], fVerts[c].position[1], fVerts[c].position[2]);
+        Geom::Vector3D triNorm = (pb - pa).cross(pc - pa);
+        double area = triNorm.length() * 0.5;
+        TEST_ASSERT(area > 1e-6, "Triangle must not be degenerate");
+
+        // If all 3 vertices are near the top (y >= 1.95), the triangle must be strictly horizontal (normal ~ (0, 1, 0))
+        if (pa.y > 1.95 && pb.y > 1.95 && pc.y > 1.95) {
+            Geom::Vector3D unitN = triNorm.normalized();
+            TEST_ASSERT(std::abs(unitN.y) > 0.95, "Top cap triangles must remain completely flat horizontal planes");
+        }
+    }
+
+    // 4. Test horizontal edge chamfer as well
+    auto chamfer = std::make_shared<ChamferNode>("Horiz_Chamfer", extrude, horizEdgeIdx, 0.30f);
+    graph.AddNode(chamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!chamfer->HasConflict(), "Horizontal edge chamfer must not conflict");
+    const auto& cVerts = chamfer->GetCachedVertices();
+    const auto& cIndices = chamfer->GetCachedIndices();
+    TEST_ASSERT(!cVerts.empty() && !cIndices.empty(), "Chamfer must have valid vertices and indices");
+
+    for (const auto& v : cVerts) {
+        TEST_ASSERT(std::isfinite(v.position[0]) && std::isfinite(v.position[1]) && std::isfinite(v.position[2]),
+                    "All chamfer vertex coordinates must be finite");
+    }
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1639,6 +1729,7 @@ int main() {
     pass &= TestFilletAndChamferFeaturesAndEdgePicking();
     pass &= TestChainedFilletAndChamferFeatures();
     pass &= TestThreeCornerVertexFillet();
+    pass &= TestHorizontalAndGeneral3DEdgeFilletAndChamfer();
     pass &= TestSolidWorksMouseNavigation();
 
     if (pass) {

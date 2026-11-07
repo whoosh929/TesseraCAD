@@ -176,7 +176,8 @@ public:
                 double dTop0 = m_edgeP0.distance_to(pTop);
                 double dBot1 = m_edgeP1.distance_to(pBot);
 
-                if ((dBot0 < 0.20 && dTop1 < 0.20) || (dTop0 < 0.20 && dBot1 < 0.20)) {
+                double tol = std::max(0.35, static_cast<double>(m_distance) + 0.15);
+                if ((dBot0 < tol && dTop1 < tol) || (dTop0 < tol && dBot1 < tol)) {
                     cornerIdx = p;
                     foundCorner = true;
                     break;
@@ -194,7 +195,7 @@ public:
                     double t = (mid - pBot).dot(axis) / lenSq;
                     if (t >= -0.15 && t <= 1.15) {
                         Geom::Point3D proj = pBot + axis * t;
-                        if (mid.distance_to(proj) < 0.20) {
+                        if (mid.distance_to(proj) < tol) {
                             cornerIdx = p;
                             foundCorner = true;
                             break;
@@ -241,63 +242,229 @@ public:
             }
         }
 
-        // Method 2: General 3D Edge Bevel Generator (with sharp corner truncation)
+        // Method 2: General 3D Edge Bevel Generator (with clean manifold boundary updates)
         std::vector<CADVertex> vertices = baseVerts;
         std::vector<uint32_t> indices = baseIndices;
 
-        Geom::Vector3D edgeVec = (m_edgeP1 - m_edgeP0).normalized();
-        Geom::Vector3D n0(baseVerts[i0].normal[0], baseVerts[i0].normal[1], baseVerts[i0].normal[2]);
-        Geom::Vector3D n1(baseVerts[i1].normal[0], baseVerts[i1].normal[1], baseVerts[i1].normal[2]);
+        double edgeLen = m_edgeP0.distance_to(m_edgeP1);
+        if (edgeLen < 1e-4) {
+            m_cachedVertices = baseVerts;
+            m_cachedIndices = baseIndices;
+            m_cachedEdges = baseEdges;
+            ComputeFaces();
+            ClearDirty();
+            return;
+        }
 
-        Geom::Vector3D u1 = edgeVec.cross(n0).normalized();
-        Geom::Vector3D u2 = n1.cross(edgeVec).normalized();
-        Geom::Vector3D chamferNorm = (n0 + n1).normalized();
+        Geom::Vector3D edgeVec = (m_edgeP1 - m_edgeP0) / edgeLen;
 
-        Geom::Point3D p0_1 = m_edgeP0 + u1 * m_distance;
-        Geom::Point3D p0_2 = m_edgeP0 + u2 * m_distance;
-        Geom::Point3D p1_1 = m_edgeP1 + u1 * m_distance;
-        Geom::Point3D p1_2 = m_edgeP1 + u2 * m_distance;
+        // 1. Find all triangles incident to the edge (by geometric proximity <= 0.05)
+        // and identify the two distinct face normals normalA and normalB meeting at the edge.
+        Geom::Vector3D normalA(0, 0, 0);
+        Geom::Vector3D normalB(0, 0, 0);
+        Geom::Point3D thirdPtA, thirdPtB;
+        bool hasNormalA = false;
+        bool hasNormalB = false;
 
-        uint32_t baseV = static_cast<uint32_t>(vertices.size());
-        vertices.push_back({ {static_cast<float>(p0_1.x), static_cast<float>(p0_1.y), static_cast<float>(p0_1.z)}, {static_cast<float>(chamferNorm.x), static_cast<float>(chamferNorm.y), static_cast<float>(chamferNorm.z)} });
-        vertices.push_back({ {static_cast<float>(p1_1.x), static_cast<float>(p1_1.y), static_cast<float>(p1_1.z)}, {static_cast<float>(chamferNorm.x), static_cast<float>(chamferNorm.y), static_cast<float>(chamferNorm.z)} });
-        vertices.push_back({ {static_cast<float>(p1_2.x), static_cast<float>(p1_2.y), static_cast<float>(p1_2.z)}, {static_cast<float>(chamferNorm.x), static_cast<float>(chamferNorm.y), static_cast<float>(chamferNorm.z)} });
-        vertices.push_back({ {static_cast<float>(p0_2.x), static_cast<float>(p0_2.y), static_cast<float>(p0_2.z)}, {static_cast<float>(chamferNorm.x), static_cast<float>(chamferNorm.y), static_cast<float>(chamferNorm.z)} });
+        const size_t numTriangles = baseIndices.size() / 3;
+        for (size_t t = 0; t < numTriangles; ++t) {
+            uint32_t a = baseIndices[t * 3 + 0];
+            uint32_t b = baseIndices[t * 3 + 1];
+            uint32_t c = baseIndices[t * 3 + 2];
 
-        indices.push_back(baseV + 0);
-        indices.push_back(baseV + 1);
-        indices.push_back(baseV + 2);
-
-        indices.push_back(baseV + 0);
-        indices.push_back(baseV + 2);
-        indices.push_back(baseV + 3);
-
-        // Remap incident base vertices i0 and i1 to bevel vertices so the sharp corner is truncated
-        uint32_t v0_1 = baseV + 0;
-        uint32_t v0_2 = baseV + 3;
-        uint32_t v1_1 = baseV + 1;
-        uint32_t v1_2 = baseV + 2;
-
-        for (size_t t = 0; t < baseIndices.size(); t += 3) {
-            uint32_t a = baseIndices[t + 0];
-            uint32_t b = baseIndices[t + 1];
-            uint32_t c = baseIndices[t + 2];
             Geom::Point3D pa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
             Geom::Point3D pb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
             Geom::Point3D pc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
-            Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
-            double align0 = std::abs(triNorm.dot(n0));
-            double align1 = std::abs(triNorm.dot(n1));
-            if (align0 < 0.5 && align1 < 0.5) {
-                continue; // Preserve cap triangles from pulling outward
-            }
 
-            for (int k = 0; k < 3; ++k) {
-                if (indices[t + k] == i0) {
-                    indices[t + k] = (align0 >= align1) ? v0_1 : v0_2;
-                } else if (indices[t + k] == i1) {
-                    indices[t + k] = (align0 >= align1) ? v1_1 : v1_2;
+            bool hasP0 = (pa.distance_to(m_edgeP0) < 0.05 || pb.distance_to(m_edgeP0) < 0.05 || pc.distance_to(m_edgeP0) < 0.05);
+            bool hasP1 = (pa.distance_to(m_edgeP1) < 0.05 || pb.distance_to(m_edgeP1) < 0.05 || pc.distance_to(m_edgeP1) < 0.05);
+
+            if (hasP0 && hasP1) {
+                Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
+                if (triNorm.length() < 0.5) continue;
+
+                // Find the third vertex not on the edge
+                Geom::Point3D pThird = pc;
+                if (pa.distance_to(m_edgeP0) >= 0.05 && pa.distance_to(m_edgeP1) >= 0.05) pThird = pa;
+                else if (pb.distance_to(m_edgeP0) >= 0.05 && pb.distance_to(m_edgeP1) >= 0.05) pThird = pb;
+
+                if (!hasNormalA) {
+                    normalA = triNorm;
+                    thirdPtA = pThird;
+                    hasNormalA = true;
+                } else if (!hasNormalB && normalA.dot(triNorm) < 0.95) {
+                    normalB = triNorm;
+                    thirdPtB = pThird;
+                    hasNormalB = true;
                 }
+            }
+        }
+
+        if (!hasNormalA || !hasNormalB) {
+            // Cannot form two-face bevel (e.g. boundary or coplanar edge); retain base geometry safely
+            m_cachedVertices = baseVerts;
+            m_cachedIndices = baseIndices;
+            m_cachedEdges = baseEdges;
+            ComputeFaces();
+            ClearDirty();
+            return;
+        }
+
+        // 2. Compute in-plane directions uA and uB pointing into Face A and Face B away from the edge
+        Geom::Vector3D vIntoA = (thirdPtA - m_edgeP0) - edgeVec * ((thirdPtA - m_edgeP0).dot(edgeVec));
+        Geom::Vector3D uA = (vIntoA.length_squared() > 1e-6) ? vIntoA.normalized() : edgeVec.cross(normalA).normalized();
+
+        Geom::Vector3D vIntoB = (thirdPtB - m_edgeP0) - edgeVec * ((thirdPtB - m_edgeP0).dot(edgeVec));
+        Geom::Vector3D uB = (vIntoB.length_squared() > 1e-6) ? vIntoB.normalized() : normalB.cross(edgeVec).normalized();
+
+        uA = (uA - normalA * uA.dot(normalA) - edgeVec * uA.dot(edgeVec)).normalized();
+        uB = (uB - normalB * uB.dot(normalB) - edgeVec * uB.dot(edgeVec)).normalized();
+
+        // Prevent self-intersection by limiting setback to at most 45% of edge length or face extent
+        float maxSetback = static_cast<float>(edgeLen) * 0.45f;
+        if (vIntoA.length() > 1e-4) maxSetback = std::min(maxSetback, static_cast<float>(vIntoA.length()) * 0.45f);
+        if (vIntoB.length() > 1e-4) maxSetback = std::min(maxSetback, static_cast<float>(vIntoB.length()) * 0.45f);
+        float dEff = std::clamp(m_distance, 0.005f, std::max(0.005f, maxSetback));
+
+        // 3. Setback points on Face A and Face B
+        Geom::Point3D s0A = m_edgeP0 + uA * dEff;
+        Geom::Point3D s0B = m_edgeP0 + uB * dEff;
+        Geom::Point3D s1A = m_edgeP1 + uA * dEff;
+        Geom::Point3D s1B = m_edgeP1 + uB * dEff;
+
+        // Create setback anchor vertices on Face A and Face B
+        uint32_t v_s0A = static_cast<uint32_t>(vertices.size());
+        vertices.push_back({
+            {static_cast<float>(s0A.x), static_cast<float>(s0A.y), static_cast<float>(s0A.z)},
+            {static_cast<float>(normalA.x), static_cast<float>(normalA.y), static_cast<float>(normalA.z)}
+        });
+
+        uint32_t v_s1A = static_cast<uint32_t>(vertices.size());
+        vertices.push_back({
+            {static_cast<float>(s1A.x), static_cast<float>(s1A.y), static_cast<float>(s1A.z)},
+            {static_cast<float>(normalA.x), static_cast<float>(normalA.y), static_cast<float>(normalA.z)}
+        });
+
+        uint32_t v_s0B = static_cast<uint32_t>(vertices.size());
+        vertices.push_back({
+            {static_cast<float>(s0B.x), static_cast<float>(s0B.y), static_cast<float>(s0B.z)},
+            {static_cast<float>(normalB.x), static_cast<float>(normalB.y), static_cast<float>(normalB.z)}
+        });
+
+        uint32_t v_s1B = static_cast<uint32_t>(vertices.size());
+        vertices.push_back({
+            {static_cast<float>(s1B.x), static_cast<float>(s1B.y), static_cast<float>(s1B.z)},
+            {static_cast<float>(normalB.x), static_cast<float>(normalB.y), static_cast<float>(normalB.z)}
+        });
+
+        // 4. Update incident triangles belonging to Face A or Face B by cleanly sliding edge vertices to setback anchors
+        for (size_t t = 0; t < numTriangles; ++t) {
+            uint32_t a = baseIndices[t * 3 + 0];
+            uint32_t b = baseIndices[t * 3 + 1];
+            uint32_t c = baseIndices[t * 3 + 2];
+
+            Geom::Point3D pa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
+            Geom::Point3D pb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
+            Geom::Point3D pc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
+
+            Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
+            if (triNorm.length() < 0.5) continue;
+
+            double dotA = triNorm.dot(normalA);
+            double dotB = triNorm.dot(normalB);
+
+            if (dotA > 0.85) {
+                for (int k = 0; k < 3; ++k) {
+                    uint32_t origIdx = baseIndices[t * 3 + k];
+                    Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
+                    if (p.distance_to(m_edgeP0) < 0.05) {
+                        indices[t * 3 + k] = v_s0A;
+                    } else if (p.distance_to(m_edgeP1) < 0.05) {
+                        indices[t * 3 + k] = v_s1A;
+                    }
+                }
+            } else if (dotB > 0.85) {
+                for (int k = 0; k < 3; ++k) {
+                    uint32_t origIdx = baseIndices[t * 3 + k];
+                    Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
+                    if (p.distance_to(m_edgeP0) < 0.05) {
+                        indices[t * 3 + k] = v_s0B;
+                    } else if (p.distance_to(m_edgeP1) < 0.05) {
+                        indices[t * 3 + k] = v_s1B;
+                    }
+                }
+            }
+        }
+
+        // 5. Connect chamfer bevel quad between Face A and Face B
+        Geom::Point3D pa(vertices[v_s0A].position[0], vertices[v_s0A].position[1], vertices[v_s0A].position[2]);
+        Geom::Point3D pb(vertices[v_s1A].position[0], vertices[v_s1A].position[1], vertices[v_s1A].position[2]);
+        Geom::Point3D pc(vertices[v_s0B].position[0], vertices[v_s0B].position[1], vertices[v_s0B].position[2]);
+        Geom::Vector3D n = (pb - pa).cross(pc - pa);
+        Geom::Vector3D expectedNorm = (normalA + normalB).normalized();
+
+        if (n.dot(expectedNorm) >= 0.0) {
+            indices.push_back(v_s0A); indices.push_back(v_s1A); indices.push_back(v_s1B);
+            indices.push_back(v_s0A); indices.push_back(v_s1B); indices.push_back(v_s0B);
+        } else {
+            indices.push_back(v_s0A); indices.push_back(v_s1B); indices.push_back(v_s1A);
+            indices.push_back(v_s0A); indices.push_back(v_s0B); indices.push_back(v_s1B);
+        }
+
+        // 6. Add end caps at p0 and p1 if side faces met at the ends of the edge
+        bool hasEnd0Face = false;
+        bool hasEnd1Face = false;
+        for (size_t t = 0; t < numTriangles; ++t) {
+            uint32_t a = baseIndices[t * 3 + 0];
+            uint32_t b = baseIndices[t * 3 + 1];
+            uint32_t c = baseIndices[t * 3 + 2];
+            Geom::Point3D tpa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
+            Geom::Point3D tpb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
+            Geom::Point3D tpc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
+            Geom::Vector3D triNorm = (tpb - tpa).cross(tpc - tpa).normalized();
+            if (triNorm.dot(normalA) <= 0.85 && triNorm.dot(normalB) <= 0.85) {
+                if (tpa.distance_to(m_edgeP0) < 0.05 || tpb.distance_to(m_edgeP0) < 0.05 || tpc.distance_to(m_edgeP0) < 0.05) {
+                    hasEnd0Face = true;
+                }
+                if (tpa.distance_to(m_edgeP1) < 0.05 || tpb.distance_to(m_edgeP1) < 0.05 || tpc.distance_to(m_edgeP1) < 0.05) {
+                    hasEnd1Face = true;
+                }
+            }
+        }
+
+        if (hasEnd0Face) {
+            uint32_t v_p0 = static_cast<uint32_t>(vertices.size());
+            Geom::Vector3D endNorm0 = (-edgeVec);
+            vertices.push_back({
+                {static_cast<float>(m_edgeP0.x), static_cast<float>(m_edgeP0.y), static_cast<float>(m_edgeP0.z)},
+                {static_cast<float>(endNorm0.x), static_cast<float>(endNorm0.y), static_cast<float>(endNorm0.z)}
+            });
+            Geom::Point3D ea(vertices[v_p0].position[0], vertices[v_p0].position[1], vertices[v_p0].position[2]);
+            Geom::Point3D eb(vertices[v_s0A].position[0], vertices[v_s0A].position[1], vertices[v_s0A].position[2]);
+            Geom::Point3D ec(vertices[v_s0B].position[0], vertices[v_s0B].position[1], vertices[v_s0B].position[2]);
+            Geom::Vector3D tn = (eb - ea).cross(ec - ea);
+            if (tn.dot(endNorm0) >= 0.0) {
+                indices.push_back(v_p0); indices.push_back(v_s0A); indices.push_back(v_s0B);
+            } else {
+                indices.push_back(v_p0); indices.push_back(v_s0B); indices.push_back(v_s0A);
+            }
+        }
+
+        if (hasEnd1Face) {
+            uint32_t v_p1 = static_cast<uint32_t>(vertices.size());
+            Geom::Vector3D endNorm1 = edgeVec;
+            vertices.push_back({
+                {static_cast<float>(m_edgeP1.x), static_cast<float>(m_edgeP1.y), static_cast<float>(m_edgeP1.z)},
+                {static_cast<float>(endNorm1.x), static_cast<float>(endNorm1.y), static_cast<float>(endNorm1.z)}
+            });
+            Geom::Point3D ea(vertices[v_p1].position[0], vertices[v_p1].position[1], vertices[v_p1].position[2]);
+            Geom::Point3D eb(vertices[v_s1A].position[0], vertices[v_s1A].position[1], vertices[v_s1A].position[2]);
+            Geom::Point3D ec(vertices[v_s1B].position[0], vertices[v_s1B].position[1], vertices[v_s1B].position[2]);
+            Geom::Vector3D tn = (eb - ea).cross(ec - ea);
+            if (tn.dot(endNorm1) >= 0.0) {
+                indices.push_back(v_p1); indices.push_back(v_s1A); indices.push_back(v_s1B);
+            } else {
+                indices.push_back(v_p1); indices.push_back(v_s1B); indices.push_back(v_s1A);
             }
         }
 
