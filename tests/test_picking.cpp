@@ -1677,12 +1677,35 @@ bool TestHorizontalAndGeneral3DEdgeFilletAndChamfer() {
         double area = triNorm.length() * 0.5;
         TEST_ASSERT(area > 1e-6, "Triangle must not be degenerate");
 
-        // If all 3 vertices are near the top (y >= 1.95), the triangle must be strictly horizontal (normal ~ (0, 1, 0))
-        if (pa.y > 1.95 && pb.y > 1.95 && pc.y > 1.95) {
+        // If all 3 vertices are strictly on the top cap plane (y == 2.0), the triangle must be horizontal (normal ~ (0, 1, 0))
+        if (std::abs(pa.y - 2.0) < 1e-3 && std::abs(pb.y - 2.0) < 1e-3 && std::abs(pc.y - 2.0) < 1e-3) {
             Geom::Vector3D unitN = triNorm.normalized();
             TEST_ASSERT(std::abs(unitN.y) > 0.95, "Top cap triangles must remain completely flat horizontal planes");
         }
     }
+
+    // Verify convexity of fillet surface: at least one fillet vertex must curve outward toward the picked edge
+    // with distance to the sharp edge chord < 0.20 (for R=0.35, true convex arc midpoint is at distance R*(sqrt(2)-1) ~ 0.145m,
+    // whereas an inverted concave groove is at distance 0.35m deep into the solid).
+    uint32_t ei0 = edges[horizEdgeIdx * 2];
+    uint32_t ei1 = edges[horizEdgeIdx * 2 + 1];
+    Geom::Point3D ep0(verts[ei0].position[0], verts[ei0].position[1], verts[ei0].position[2]);
+    Geom::Point3D ep1(verts[ei1].position[0], verts[ei1].position[1], verts[ei1].position[2]);
+    Geom::Vector3D eAxis = (ep1 - ep0).normalized();
+
+    bool foundConvexVertex = false;
+    for (const auto& v : fVerts) {
+        Geom::Point3D pt(v.position[0], v.position[1], v.position[2]);
+        // For vertices at the start of the fillet (near z=0), check distance to sharp corner ep0 (0, 2, 0)
+        if (std::abs(pt.z - ep0.z) < 1e-3) {
+            double d = std::hypot(pt.x - ep0.x, pt.y - ep0.y);
+            if (d > 0.10 && d < 0.22) {
+                foundConvexVertex = true;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT(foundConvexVertex, "Fillet surface must bulge outward convexly toward the sharp edge (not inverted concave)");
 
     // 4. Test horizontal edge chamfer as well
     auto chamfer = std::make_shared<ChamferNode>("Horiz_Chamfer", extrude, horizEdgeIdx, 0.30f);

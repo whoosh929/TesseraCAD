@@ -585,6 +585,15 @@ public:
         const size_t chainCount = chain.size();
         bool isLoop = (chainCount >= 3 && chain.front().p0.distance_to(chain.back().p1) < 0.05);
 
+        // Compute setback distance d = R * tan(alpha/2) for each chain segment
+        std::vector<double> setbackD(chainCount);
+        for (size_t i = 0; i < chainCount; ++i) {
+            double cosAlpha = std::clamp(normalA.dot(chain[i].normalB), -0.999, 0.999);
+            double sinAlpha = (normalA.cross(chain[i].normalB)).length();
+            double tanHalf = (1.0 + cosAlpha > 1e-5) ? (sinAlpha / (1.0 + cosAlpha)) : 1.0;
+            setbackD[i] = seedRadius * tanHalf;
+        }
+
         // Compute continuous mitered setback points on Face A for every junction in the chain
         std::vector<Geom::Point3D> sA_pts(chainCount + 1);
         std::vector<uint32_t> v_sA(chainCount + 1);
@@ -592,18 +601,22 @@ public:
         for (size_t i = 0; i <= chainCount; ++i) {
             Geom::Point3D junctionPt;
             Geom::Vector3D uA_avg;
+            double dEff = seedRadius;
             if (i == 0) {
                 junctionPt = chain.front().p0;
                 uA_avg = isLoop ? (chain.back().uA + chain.front().uA).normalized() : chain.front().uA;
+                dEff = setbackD.front();
             } else if (i == chainCount) {
                 junctionPt = chain.back().p1;
                 uA_avg = isLoop ? (chain.back().uA + chain.front().uA).normalized() : chain.back().uA;
+                dEff = setbackD.back();
             } else {
                 junctionPt = chain[i].p0;
                 uA_avg = (chain[i - 1].uA + chain[i].uA).normalized();
+                dEff = (setbackD[i - 1] + setbackD[i]) * 0.5;
             }
 
-            sA_pts[i] = junctionPt + uA_avg * seedRadius;
+            sA_pts[i] = junctionPt + uA_avg * dEff;
             v_sA[i] = static_cast<uint32_t>(vertices.size());
             vertices.push_back({
                 {static_cast<float>(sA_pts[i].x), static_cast<float>(sA_pts[i].y), static_cast<float>(sA_pts[i].z)},
@@ -618,8 +631,8 @@ public:
         std::vector<Geom::Point3D> sB1_pts(chainCount);
 
         for (size_t i = 0; i < chainCount; ++i) {
-            sB0_pts[i] = chain[i].p0 + chain[i].uB * seedRadius;
-            sB1_pts[i] = chain[i].p1 + chain[i].uB * seedRadius;
+            sB0_pts[i] = chain[i].p0 + chain[i].uB * setbackD[i];
+            sB1_pts[i] = chain[i].p1 + chain[i].uB * setbackD[i];
 
             v_sB0[i] = static_cast<uint32_t>(vertices.size());
             vertices.push_back({
@@ -681,6 +694,9 @@ public:
 
         // Generate smooth fillet surface bands connecting Face A to Face B for each segment in the chain
         const int numBands = 6;
+        std::vector<std::vector<uint32_t>> allBand0(chainCount);
+        std::vector<std::vector<uint32_t>> allBand1(chainCount);
+
         for (size_t i = 0; i < chainCount; ++i) {
             std::vector<uint32_t> band0(numBands + 1);
             std::vector<uint32_t> band1(numBands + 1);
@@ -690,13 +706,27 @@ public:
             band0[numBands] = v_sB0[i];
             band1[numBands] = v_sB1[i];
 
+            // Convexity check: uA points into Face A, normalB points outward from Face B
+            bool isConvex = (chain[i].uA.dot(chain[i].normalB) < 0.0);
+
+            // Rolling-ball center inside the solid for convex edge, outside for concave edge
+            Geom::Point3D center0 = isConvex
+                ? (chain[i].p0 + chain[i].uA * setbackD[i] - normalA * seedRadius)
+                : (chain[i].p0 + chain[i].uA * setbackD[i] + normalA * seedRadius);
+            Geom::Point3D center1 = isConvex
+                ? (chain[i].p1 + chain[i].uA * setbackD[i] - normalA * seedRadius)
+                : (chain[i].p1 + chain[i].uA * setbackD[i] + normalA * seedRadius);
+
             for (int b = 1; b < numBands; ++b) {
                 float t = static_cast<float>(b) / static_cast<float>(numBands);
-                Geom::Vector3D blendedDir = (chain[i].uA * (1.0f - t) + chain[i].uB * t).normalized();
                 Geom::Vector3D filletNorm = (normalA * (1.0f - t) + chain[i].normalB * t).normalized();
 
-                Geom::Point3D pt0 = chain[i].p0 + blendedDir * seedRadius;
-                Geom::Point3D pt1 = chain[i].p1 + blendedDir * seedRadius;
+                Geom::Point3D pt0 = isConvex
+                    ? (center0 + filletNorm * seedRadius)
+                    : (center0 - filletNorm * seedRadius);
+                Geom::Point3D pt1 = isConvex
+                    ? (center1 + filletNorm * seedRadius)
+                    : (center1 - filletNorm * seedRadius);
 
                 band0[b] = static_cast<uint32_t>(vertices.size());
                 vertices.push_back({
@@ -710,6 +740,9 @@ public:
                     {static_cast<float>(filletNorm.x), static_cast<float>(filletNorm.y), static_cast<float>(filletNorm.z)}
                 });
             }
+
+            allBand0[i] = band0;
+            allBand1[i] = band1;
 
             // Stitch fillet skin quads
             for (int b = 0; b < numBands; ++b) {
@@ -739,18 +772,32 @@ public:
                 uint32_t v_nextB0 = v_sB0[i + 1];
                 if (v_currB1 != v_nextB0 && sB1_pts[i].distance_to(sB0_pts[i + 1]) > 1e-4) {
                     uint32_t v_midA = v_sA[i + 1];
-                    indices.push_back(v_midA);
-                    indices.push_back(v_currB1);
-                    indices.push_back(v_nextB0);
+                    Geom::Point3D pA(vertices[v_midA].position[0], vertices[v_midA].position[1], vertices[v_midA].position[2]);
+                    Geom::Point3D pB1(vertices[v_currB1].position[0], vertices[v_currB1].position[1], vertices[v_currB1].position[2]);
+                    Geom::Point3D pB0(vertices[v_nextB0].position[0], vertices[v_nextB0].position[1], vertices[v_nextB0].position[2]);
+                    Geom::Vector3D tn = (pB1 - pA).cross(pB0 - pA);
+                    Geom::Vector3D expN = (chain[i].normalB + chain[i + 1].normalB).normalized();
+                    if (tn.dot(expN) >= 0.0) {
+                        indices.push_back(v_midA); indices.push_back(v_currB1); indices.push_back(v_nextB0);
+                    } else {
+                        indices.push_back(v_midA); indices.push_back(v_nextB0); indices.push_back(v_currB1);
+                    }
                 }
             } else if (isLoop) {
                 uint32_t v_currB1 = v_sB1.back();
                 uint32_t v_nextB0 = v_sB0.front();
                 if (v_currB1 != v_nextB0 && sB1_pts.back().distance_to(sB0_pts.front()) > 1e-4) {
                     uint32_t v_midA = v_sA.front();
-                    indices.push_back(v_midA);
-                    indices.push_back(v_currB1);
-                    indices.push_back(v_nextB0);
+                    Geom::Point3D pA(vertices[v_midA].position[0], vertices[v_midA].position[1], vertices[v_midA].position[2]);
+                    Geom::Point3D pB1(vertices[v_currB1].position[0], vertices[v_currB1].position[1], vertices[v_currB1].position[2]);
+                    Geom::Point3D pB0(vertices[v_nextB0].position[0], vertices[v_nextB0].position[1], vertices[v_nextB0].position[2]);
+                    Geom::Vector3D tn = (pB1 - pA).cross(pB0 - pA);
+                    Geom::Vector3D expN = (chain.back().normalB + chain.front().normalB).normalized();
+                    if (tn.dot(expN) >= 0.0) {
+                        indices.push_back(v_midA); indices.push_back(v_currB1); indices.push_back(v_nextB0);
+                    } else {
+                        indices.push_back(v_midA); indices.push_back(v_nextB0); indices.push_back(v_currB1);
+                    }
                 }
             }
         }
@@ -774,14 +821,14 @@ public:
                 Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
 
                 if (triNorm.dot(normalA) <= 0.85 && triNorm.dot(chain.front().normalB) <= 0.85) {
-                    if (triNorm.dot(-dir0) > 0.5) {
+                    if (triNorm.dot(-dir0) > 0.4) {
                         if (pa.distance_to(chainP0) < 0.05 || pb.distance_to(chainP0) < 0.05 || pc.distance_to(chainP0) < 0.05) {
                             hasEnd0Face = true;
                         }
                     }
                 }
                 if (triNorm.dot(normalA) <= 0.85 && triNorm.dot(chain.back().normalB) <= 0.85) {
-                    if (triNorm.dot(dir1) > 0.5) {
+                    if (triNorm.dot(dir1) > 0.4) {
                         if (pa.distance_to(chainP1) < 0.05 || pb.distance_to(chainP1) < 0.05 || pc.distance_to(chainP1) < 0.05) {
                             hasEnd1Face = true;
                         }
@@ -790,42 +837,84 @@ public:
             }
 
             if (hasEnd0Face) {
-                uint32_t v_p0 = static_cast<uint32_t>(vertices.size());
-                Geom::Vector3D endNorm0 = (-dir0);
-                vertices.push_back({
-                    {static_cast<float>(chainP0.x), static_cast<float>(chainP0.y), static_cast<float>(chainP0.z)},
-                    {static_cast<float>(endNorm0.x), static_cast<float>(endNorm0.y), static_cast<float>(endNorm0.z)}
-                });
-                uint32_t v_a = v_sA.front();
-                uint32_t v_b = v_sB0.front();
-                Geom::Point3D pa(vertices[v_p0].position[0], vertices[v_p0].position[1], vertices[v_p0].position[2]);
-                Geom::Point3D pb(vertices[v_a].position[0], vertices[v_a].position[1], vertices[v_a].position[2]);
-                Geom::Point3D pc(vertices[v_b].position[0], vertices[v_b].position[1], vertices[v_b].position[2]);
-                Geom::Vector3D tn = (pb - pa).cross(pc - pa);
-                if (tn.dot(endNorm0) >= 0.0) {
-                    indices.push_back(v_p0); indices.push_back(v_a); indices.push_back(v_b);
-                } else {
-                    indices.push_back(v_p0); indices.push_back(v_b); indices.push_back(v_a);
+                Geom::Vector3D endNorm0 = (-dir0).normalized();
+                uint32_t v_startA = v_sA.front();
+
+                // 1. In existing base mesh triangles on the end face, update vertices near chainP0 to v_startA
+                for (size_t t = 0; t < numTriangles; ++t) {
+                    uint32_t a = baseIndices[t * 3 + 0];
+                    uint32_t b = baseIndices[t * 3 + 1];
+                    uint32_t c = baseIndices[t * 3 + 2];
+                    Geom::Point3D pa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
+                    Geom::Point3D pb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
+                    Geom::Point3D pc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
+                    Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
+
+                    if (triNorm.dot(endNorm0) > 0.4) {
+                        for (int k = 0; k < 3; ++k) {
+                            uint32_t origIdx = baseIndices[t * 3 + k];
+                            Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
+                            if (p.distance_to(chainP0) < 0.05) {
+                                indices[t * 3 + k] = v_startA;
+                            }
+                        }
+                    }
+                }
+
+                // 2. Add planar fan covering the circular segment between chord (band0[0], band0[numBands]) and the arc
+                for (int b = 1; b < numBands; ++b) {
+                    uint32_t va = allBand0[0][b];
+                    uint32_t vb = allBand0[0][b + 1];
+                    Geom::Point3D pa(vertices[v_startA].position[0], vertices[v_startA].position[1], vertices[v_startA].position[2]);
+                    Geom::Point3D pb(vertices[va].position[0], vertices[va].position[1], vertices[va].position[2]);
+                    Geom::Point3D pc(vertices[vb].position[0], vertices[vb].position[1], vertices[vb].position[2]);
+                    Geom::Vector3D tn = (pb - pa).cross(pc - pa);
+                    if (tn.dot(endNorm0) >= 0.0) {
+                        indices.push_back(v_startA); indices.push_back(va); indices.push_back(vb);
+                    } else {
+                        indices.push_back(v_startA); indices.push_back(vb); indices.push_back(va);
+                    }
                 }
             }
 
             if (hasEnd1Face) {
-                uint32_t v_p1 = static_cast<uint32_t>(vertices.size());
-                Geom::Vector3D endNorm1 = dir1;
-                vertices.push_back({
-                    {static_cast<float>(chainP1.x), static_cast<float>(chainP1.y), static_cast<float>(chainP1.z)},
-                    {static_cast<float>(endNorm1.x), static_cast<float>(endNorm1.y), static_cast<float>(endNorm1.z)}
-                });
-                uint32_t v_a = v_sA.back();
-                uint32_t v_b = v_sB1.back();
-                Geom::Point3D pa(vertices[v_p1].position[0], vertices[v_p1].position[1], vertices[v_p1].position[2]);
-                Geom::Point3D pb(vertices[v_a].position[0], vertices[v_a].position[1], vertices[v_a].position[2]);
-                Geom::Point3D pc(vertices[v_b].position[0], vertices[v_b].position[1], vertices[v_b].position[2]);
-                Geom::Vector3D tn = (pb - pa).cross(pc - pa);
-                if (tn.dot(endNorm1) >= 0.0) {
-                    indices.push_back(v_p1); indices.push_back(v_a); indices.push_back(v_b);
-                } else {
-                    indices.push_back(v_p1); indices.push_back(v_b); indices.push_back(v_a);
+                Geom::Vector3D endNorm1 = dir1.normalized();
+                uint32_t v_endA = v_sA.back();
+
+                // 1. In existing base mesh triangles on the end face, update vertices near chainP1 to v_endA
+                for (size_t t = 0; t < numTriangles; ++t) {
+                    uint32_t a = baseIndices[t * 3 + 0];
+                    uint32_t b = baseIndices[t * 3 + 1];
+                    uint32_t c = baseIndices[t * 3 + 2];
+                    Geom::Point3D pa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
+                    Geom::Point3D pb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
+                    Geom::Point3D pc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
+                    Geom::Vector3D triNorm = (pb - pa).cross(pc - pa).normalized();
+
+                    if (triNorm.dot(endNorm1) > 0.4) {
+                        for (int k = 0; k < 3; ++k) {
+                            uint32_t origIdx = baseIndices[t * 3 + k];
+                            Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
+                            if (p.distance_to(chainP1) < 0.05) {
+                                indices[t * 3 + k] = v_endA;
+                            }
+                        }
+                    }
+                }
+
+                // 2. Add planar fan covering the circular segment between chord (band1[0], band1[numBands]) and the arc
+                for (int b = 1; b < numBands; ++b) {
+                    uint32_t va = allBand1[chainCount - 1][b];
+                    uint32_t vb = allBand1[chainCount - 1][b + 1];
+                    Geom::Point3D pa(vertices[v_endA].position[0], vertices[v_endA].position[1], vertices[v_endA].position[2]);
+                    Geom::Point3D pb(vertices[va].position[0], vertices[va].position[1], vertices[va].position[2]);
+                    Geom::Point3D pc(vertices[vb].position[0], vertices[vb].position[1], vertices[vb].position[2]);
+                    Geom::Vector3D tn = (pb - pa).cross(pc - pa);
+                    if (tn.dot(endNorm1) >= 0.0) {
+                        indices.push_back(v_endA); indices.push_back(va); indices.push_back(vb);
+                    } else {
+                        indices.push_back(v_endA); indices.push_back(vb); indices.push_back(va);
+                    }
                 }
             }
         }

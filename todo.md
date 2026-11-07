@@ -19,4 +19,4 @@ Default Mouse Wheel Controls
 - [x] bug: fillet and chamfer features should be childs of the assocaited model.
 - [] feature: add a sublte x/y/z axes reference.
 - [] feature: add a control that recenters view on top, side, and isometric origin.
-- [] bug: when applying a fillet, sometimes the round is inverted, creating a concave shape at a corner instead of a convex.
+- [x] bug: when applying a fillet, sometimes the round is inverted, creating a concave shape at a corner instead of a convex.

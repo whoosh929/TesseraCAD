@@ -447,38 +447,44 @@ public:
         }
 
         if (hasEnd0Face) {
-            uint32_t v_p0 = static_cast<uint32_t>(vertices.size());
-            Geom::Vector3D endNorm0 = (-edgeVec);
-            vertices.push_back({
-                {static_cast<float>(m_edgeP0.x), static_cast<float>(m_edgeP0.y), static_cast<float>(m_edgeP0.z)},
-                {static_cast<float>(endNorm0.x), static_cast<float>(endNorm0.y), static_cast<float>(endNorm0.z)}
-            });
-            Geom::Point3D ea(vertices[v_p0].position[0], vertices[v_p0].position[1], vertices[v_p0].position[2]);
-            Geom::Point3D eb(vertices[v_s0A].position[0], vertices[v_s0A].position[1], vertices[v_s0A].position[2]);
-            Geom::Point3D ec(vertices[v_s0B].position[0], vertices[v_s0B].position[1], vertices[v_s0B].position[2]);
-            Geom::Vector3D tn = (eb - ea).cross(ec - ea);
-            if (tn.dot(endNorm0) >= 0.0) {
-                indices.push_back(v_p0); indices.push_back(v_s0A); indices.push_back(v_s0B);
-            } else {
-                indices.push_back(v_p0); indices.push_back(v_s0B); indices.push_back(v_s0A);
+            for (size_t t = 0; t < numTriangles; ++t) {
+                uint32_t a = baseIndices[t * 3 + 0];
+                uint32_t b = baseIndices[t * 3 + 1];
+                uint32_t c = baseIndices[t * 3 + 2];
+                Geom::Point3D tpa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
+                Geom::Point3D tpb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
+                Geom::Point3D tpc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
+                Geom::Vector3D triNorm = (tpb - tpa).cross(tpc - tpa).normalized();
+                if (triNorm.dot(-edgeVec) > 0.4) {
+                    for (int k = 0; k < 3; ++k) {
+                        uint32_t origIdx = baseIndices[t * 3 + k];
+                        Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
+                        if (p.distance_to(m_edgeP0) < 0.05) {
+                            indices[t * 3 + k] = v_s0A;
+                        }
+                    }
+                }
             }
         }
 
         if (hasEnd1Face) {
-            uint32_t v_p1 = static_cast<uint32_t>(vertices.size());
-            Geom::Vector3D endNorm1 = edgeVec;
-            vertices.push_back({
-                {static_cast<float>(m_edgeP1.x), static_cast<float>(m_edgeP1.y), static_cast<float>(m_edgeP1.z)},
-                {static_cast<float>(endNorm1.x), static_cast<float>(endNorm1.y), static_cast<float>(endNorm1.z)}
-            });
-            Geom::Point3D ea(vertices[v_p1].position[0], vertices[v_p1].position[1], vertices[v_p1].position[2]);
-            Geom::Point3D eb(vertices[v_s1A].position[0], vertices[v_s1A].position[1], vertices[v_s1A].position[2]);
-            Geom::Point3D ec(vertices[v_s1B].position[0], vertices[v_s1B].position[1], vertices[v_s1B].position[2]);
-            Geom::Vector3D tn = (eb - ea).cross(ec - ea);
-            if (tn.dot(endNorm1) >= 0.0) {
-                indices.push_back(v_p1); indices.push_back(v_s1A); indices.push_back(v_s1B);
-            } else {
-                indices.push_back(v_p1); indices.push_back(v_s1B); indices.push_back(v_s1A);
+            for (size_t t = 0; t < numTriangles; ++t) {
+                uint32_t a = baseIndices[t * 3 + 0];
+                uint32_t b = baseIndices[t * 3 + 1];
+                uint32_t c = baseIndices[t * 3 + 2];
+                Geom::Point3D tpa(baseVerts[a].position[0], baseVerts[a].position[1], baseVerts[a].position[2]);
+                Geom::Point3D tpb(baseVerts[b].position[0], baseVerts[b].position[1], baseVerts[b].position[2]);
+                Geom::Point3D tpc(baseVerts[c].position[0], baseVerts[c].position[1], baseVerts[c].position[2]);
+                Geom::Vector3D triNorm = (tpb - tpa).cross(tpc - tpa).normalized();
+                if (triNorm.dot(edgeVec) > 0.4) {
+                    for (int k = 0; k < 3; ++k) {
+                        uint32_t origIdx = baseIndices[t * 3 + k];
+                        Geom::Point3D p(baseVerts[origIdx].position[0], baseVerts[origIdx].position[1], baseVerts[origIdx].position[2]);
+                        if (p.distance_to(m_edgeP1) < 0.05) {
+                            indices[t * 3 + k] = v_s1A;
+                        }
+                    }
+                }
             }
         }
 
