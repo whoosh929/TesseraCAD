@@ -262,6 +262,17 @@ bool TestSketch2DFilletAndChamfer() {
         TEST_ASSERT(std::abs(dToCenter - 0.4f) < 1e-3f, "Fillet arc points must have radial distance = 0.4m from arc center");
     }
 
+    // 3. Apply Fillet with Angle mode to corner #1 (2, -2) with angle 60 deg and refDist 0.5m
+    std::vector<std::array<float, 2>> rectAngle = {
+        {-2.0f, -2.0f},
+        { 2.0f, -2.0f},
+        { 2.0f,  2.0f},
+        {-2.0f,  2.0f}
+    };
+    bool filletAngleOk = ApplyFillet2D(rectAngle, 1, 60.0f, true, 6, true, 0.5f);
+    TEST_ASSERT(filletAngleOk, "ApplyFillet2D with angle mode should succeed");
+    TEST_ASSERT(rectAngle.size() == 4 + 6, "Filleted rectangle in angle mode should add arc segments");
+
     return true;
 }
 

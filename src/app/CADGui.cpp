@@ -373,7 +373,14 @@ void CADGui::RenderTopBar(
         if (ImGui::Button("⌒ Fillet", ImVec2(80, 32))) {
             if (m_selectedEdgeIndex >= 0 && selectedNode) {
                 std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
-                auto fillet = std::make_shared<FilletNode>(name, selectedNode, m_selectedEdgeIndex, m_newFilletRadius);
+                float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
+                    ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
+                    : m_newFilletRadius;
+                auto fillet = std::make_shared<FilletNode>(name, selectedNode, m_selectedEdgeIndex, effRadius);
+                if (m_filletChoice == FilletDimensionChoice::Angle) {
+                    fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
+                    fillet->SetAngle(m_newFilletAngle);
+                }
                 graph.AddNode(fillet);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(fillet->GetId());
@@ -800,7 +807,14 @@ void CADGui::RenderFilletPromptModal(
         for (const auto& n : nodes) {
             if (n->GetId() == m_selectedNodeId) {
                 std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
-                auto fillet = std::make_shared<FilletNode>(name, n, m_selectedEdgeIndex, m_newFilletRadius);
+                float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
+                    ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
+                    : m_newFilletRadius;
+                auto fillet = std::make_shared<FilletNode>(name, n, m_selectedEdgeIndex, effRadius);
+                if (m_filletChoice == FilletDimensionChoice::Angle) {
+                    fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
+                    fillet->SetAngle(m_newFilletAngle);
+                }
                 graph.AddNode(fillet);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(fillet->GetId());
@@ -819,8 +833,22 @@ void CADGui::RenderFilletPromptModal(
         ImGui::TextWrapped("Click any corner edge on a 3D model in the viewport, or select one below.");
         ImGui::Spacing();
 
-        ImGui::InputFloat("Fillet Radius", &m_newFilletRadius, 0.05f, 0.2f, "%.2f m");
-        if (m_newFilletRadius < 0.01f) m_newFilletRadius = 0.01f;
+        // Choice for Distance or Angle
+        if (ImGui::RadioButton("Distance##ModalFilletChoice", m_filletChoice == FilletDimensionChoice::Distance)) {
+            m_filletChoice = FilletDimensionChoice::Distance;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Angle##ModalFilletChoice", m_filletChoice == FilletDimensionChoice::Angle)) {
+            m_filletChoice = FilletDimensionChoice::Angle;
+        }
+
+        if (m_filletChoice == FilletDimensionChoice::Distance) {
+            ImGui::InputFloat("Fillet Radius / Distance", &m_newFilletRadius, 0.05f, 0.2f, "%.2f m");
+            if (m_newFilletRadius < 0.01f) m_newFilletRadius = 0.01f;
+        } else {
+            ImGui::InputFloat("Fillet Angle", &m_newFilletAngle, 1.0f, 5.0f, "%.1f °");
+            m_newFilletAngle = std::clamp(m_newFilletAngle, 5.0f, 175.0f);
+        }
         ImGui::Spacing();
 
         bool hasModels = false;
@@ -834,7 +862,14 @@ void CADGui::RenderFilletPromptModal(
             std::string btn = "⌒ Apply Fillet to Edge #0 of '" + n->GetName() + "' (" + std::to_string(numEdges) + " edges)";
             if (ImGui::Button(btn.c_str(), ImVec2(-1, 28))) {
                 std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
-                auto fillet = std::make_shared<FilletNode>(name, n, 0, m_newFilletRadius);
+                float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
+                    ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
+                    : m_newFilletRadius;
+                auto fillet = std::make_shared<FilletNode>(name, n, 0, effRadius);
+                if (m_filletChoice == FilletDimensionChoice::Angle) {
+                    fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
+                    fillet->SetAngle(m_newFilletAngle);
+                }
                 graph.AddNode(fillet);
                 graph.EvaluateDirtyNodes(device, exchange);
                 SetSelectedNodeId(fillet->GetId());
@@ -1359,7 +1394,7 @@ void CADGui::RenderUI(
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.2f, 0.9f, 0.4f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.20f, 0.12f, 0.9f));
-                ImGui::BeginChild("VertexSubElementCard", ImVec2(0, 175), true);
+                ImGui::BeginChild("VertexSubElementCard", ImVec2(0, 275), true);
                 ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "● Sub-Element Selected: Vertex #%d", m_selectedVertexIndex);
                 ImGui::Text("Position: (%.2f, %.2f, %.2f)", m_selectedVertexPos.x, m_selectedVertexPos.y, m_selectedVertexPos.z);
                 ImGui::Spacing();
@@ -1394,6 +1429,52 @@ void CADGui::RenderUI(
                     graph.EvaluateDirtyNodes(device, exchange);
                     SetSelectedNodeId(axisNode->GetId());
                 }
+
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "⌒ Fillet Corner at Vertex:");
+                if (ImGui::RadioButton("Distance##3DVertFilletChoice", m_filletChoice == FilletDimensionChoice::Distance)) {
+                    m_filletChoice = FilletDimensionChoice::Distance;
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Angle##3DVertFilletChoice", m_filletChoice == FilletDimensionChoice::Angle)) {
+                    m_filletChoice = FilletDimensionChoice::Angle;
+                }
+
+                if (m_filletChoice == FilletDimensionChoice::Distance) {
+                    ImGui::InputFloat("Fillet Distance##3DVert", &m_newFilletRadius, 0.05f, 0.2f, "%.2f m");
+                    if (m_newFilletRadius < 0.01f) m_newFilletRadius = 0.01f;
+                } else {
+                    ImGui::InputFloat("Fillet Angle##3DVert", &m_newFilletAngle, 1.0f, 5.0f, "%.1f °");
+                    m_newFilletAngle = std::clamp(m_newFilletAngle, 5.0f, 175.0f);
+                }
+
+                if (ImGui::Button("⌒ Apply Fillet to Corner at Vertex", ImVec2(-1, 24))) {
+                    const auto& edges = selectedNode->GetCachedEdges();
+                    int matchedEdge = -1;
+                    uint32_t vIdx = static_cast<uint32_t>(m_selectedVertexIndex);
+                    for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+                        if (edges[e] == vIdx || edges[e + 1] == vIdx) {
+                            matchedEdge = static_cast<int>(e / 2);
+                            break;
+                        }
+                    }
+                    if (matchedEdge >= 0) {
+                        std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
+                        float effRadius = (m_filletChoice == FilletDimensionChoice::Angle)
+                            ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
+                            : m_newFilletRadius;
+                        auto fillet = std::make_shared<FilletNode>(name, selectedNode, matchedEdge, effRadius);
+                        if (m_filletChoice == FilletDimensionChoice::Angle) {
+                            fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
+                            fillet->SetAngle(m_newFilletAngle);
+                        }
+                        graph.AddNode(fillet);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                        SetSelectedNodeId(fillet->GetId());
+                        ClearSubElementSelection();
+                    }
+                }
+
                 if (ImGui::Button("✕ Deselect Vertex (Select Whole Model)", ImVec2(-1, 22))) {
                     ClearSubElementSelection();
                     graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
@@ -1831,10 +1912,30 @@ void CADGui::RenderUI(
                     ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[!] CONFLICT: %s", fillet->GetConflictMessage().c_str());
                 }
 
-                float r = fillet->GetRadius();
-                if (ImGui::InputFloat("Fillet Radius", &r, 0.05f, 0.2f, "%.2f m")) {
-                    fillet->SetRadius(r);
+                // Choice between Distance and Angle for FilletNode
+                bool isDist = (fillet->GetDimensionChoice() == FilletNode::DimensionChoice::Distance);
+                if (ImGui::RadioButton("Distance##FilletNodeChoice", isDist)) {
+                    fillet->SetDimensionChoice(FilletNode::DimensionChoice::Distance);
                     graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Angle##FilletNodeChoice", !isDist)) {
+                    fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                if (fillet->GetDimensionChoice() == FilletNode::DimensionChoice::Distance) {
+                    float r = fillet->GetRadius();
+                    if (ImGui::InputFloat("Fillet Distance / Radius", &r, 0.05f, 0.2f, "%.2f m")) {
+                        fillet->SetRadius(r);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                    }
+                } else {
+                    float a = fillet->GetAngle();
+                    if (ImGui::InputFloat("Fillet Angle", &a, 1.0f, 5.0f, "%.1f °")) {
+                        fillet->SetAngle(a);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                    }
                 }
 
                 if (m_selectedEdgeIndex >= 0 && m_selectedNodeId != 0 && m_selectedNodeId != fillet->GetId()) {
@@ -2414,16 +2515,42 @@ void CADGui::RenderSketchCanvas(
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete selected vertex handle (Del)");
             ImGui::SameLine();
 
-            ImGui::SetNextItemWidth(70.0f);
-            ImGui::InputFloat("##SkFilletR", &m_sketchFilletRadius, 0.05f, 0.1f, "%.2fm");
-            if (m_sketchFilletRadius < 0.01f) m_sketchFilletRadius = 0.01f;
+            // Choice between Distance or Angle for Fillet
+            if (ImGui::RadioButton("Dist##SkFilletChoice", m_filletChoice == FilletDimensionChoice::Distance)) {
+                m_filletChoice = FilletDimensionChoice::Distance;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Specify Fillet by Distance / Radius");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Angle##SkFilletChoice", m_filletChoice == FilletDimensionChoice::Angle)) {
+                m_filletChoice = FilletDimensionChoice::Angle;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Specify Fillet by Angle in degrees");
+            ImGui::SameLine();
+
+            if (m_filletChoice == FilletDimensionChoice::Distance) {
+                ImGui::SetNextItemWidth(65.0f);
+                ImGui::InputFloat("##SkFilletR", &m_sketchFilletRadius, 0.05f, 0.1f, "%.2fm");
+                if (m_sketchFilletRadius < 0.01f) m_sketchFilletRadius = 0.01f;
+            } else {
+                ImGui::SetNextItemWidth(65.0f);
+                ImGui::InputFloat("##SkFilletAngle", &m_sketchFilletAngle, 1.0f, 5.0f, "%.1f°");
+                m_sketchFilletAngle = std::clamp(m_sketchFilletAngle, 5.0f, 175.0f);
+            }
             ImGui::SameLine();
             if (ImGui::Button("⌒ Fillet", ImVec2(66, 28))) {
-                if (Sketch::ApplyFillet2D(selShape.points, static_cast<size_t>(m_selectedVertexIdx), m_sketchFilletRadius, selShape.isClosed, 6)) {
+                bool isAngle = (m_filletChoice == FilletDimensionChoice::Angle);
+                float val = isAngle ? m_sketchFilletAngle : m_sketchFilletRadius;
+                if (Sketch::ApplyFillet2D(selShape.points, static_cast<size_t>(m_selectedVertexIdx), val, selShape.isClosed, 6, isAngle, m_sketchFilletRadius)) {
                     m_selectedVertexIdx = -1;
                 }
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Apply round fillet arc of radius %.2fm to selected corner vertex", m_sketchFilletRadius);
+            if (ImGui::IsItemHovered()) {
+                if (m_filletChoice == FilletDimensionChoice::Distance) {
+                    ImGui::SetTooltip("Apply round fillet arc with distance/radius %.2fm to selected corner vertex", m_sketchFilletRadius);
+                } else {
+                    ImGui::SetTooltip("Apply round fillet arc with angle %.1f° to selected corner vertex", m_sketchFilletAngle);
+                }
+            }
             ImGui::SameLine();
 
             ImGui::SetNextItemWidth(70.0f);
@@ -2449,14 +2576,22 @@ void CADGui::RenderSketchCanvas(
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete selected shape (Del)");
             ImGui::SameLine();
 
-            ImGui::SetNextItemWidth(70.0f);
-            ImGui::InputFloat("##AllFilletR", &m_sketchFilletRadius, 0.05f, 0.1f, "%.2fm");
-            if (m_sketchFilletRadius < 0.01f) m_sketchFilletRadius = 0.01f;
+            if (m_filletChoice == FilletDimensionChoice::Distance) {
+                ImGui::SetNextItemWidth(65.0f);
+                ImGui::InputFloat("##AllFilletR", &m_sketchFilletRadius, 0.05f, 0.1f, "%.2fm");
+                if (m_sketchFilletRadius < 0.01f) m_sketchFilletRadius = 0.01f;
+            } else {
+                ImGui::SetNextItemWidth(65.0f);
+                ImGui::InputFloat("##AllFilletAngle", &m_sketchFilletAngle, 1.0f, 5.0f, "%.1f°");
+                m_sketchFilletAngle = std::clamp(m_sketchFilletAngle, 5.0f, 175.0f);
+            }
             ImGui::SameLine();
             if (ImGui::Button("⌒ Fillet All", ImVec2(80, 28))) {
+                bool isAngle = (m_filletChoice == FilletDimensionChoice::Angle);
+                float val = isAngle ? m_sketchFilletAngle : m_sketchFilletRadius;
                 size_t origSize = selShape.points.size();
                 for (int c = static_cast<int>(origSize) - 1; c >= 0; --c) {
-                    Sketch::ApplyFillet2D(selShape.points, static_cast<size_t>(c), m_sketchFilletRadius, selShape.isClosed, 6);
+                    Sketch::ApplyFillet2D(selShape.points, static_cast<size_t>(c), val, selShape.isClosed, 6, isAngle, m_sketchFilletRadius);
                 }
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Apply fillet arc to all corners of this shape");

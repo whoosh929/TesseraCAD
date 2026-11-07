@@ -1394,6 +1394,16 @@ bool TestFilletAndChamferFeaturesAndEdgePicking() {
     TEST_ASSERT(!fillet->IsDirty(), "Fillet must be clean after re-evaluation");
     TEST_ASSERT(fillet->GetRadius() == 0.8f, "Fillet radius must update to 0.8m");
 
+    // Test Fillet with Angle dimension choice
+    fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
+    fillet->SetAngle(60.0f);
+    TEST_ASSERT(fillet->GetDimensionChoice() == FilletNode::DimensionChoice::Angle, "Fillet choice should be Angle");
+    TEST_ASSERT(fillet->GetAngle() == 60.0f, "Fillet angle should be 60 degrees");
+    float expectedR = 0.8f * std::tan(60.0f * 3.14159265f / 360.0f);
+    TEST_ASSERT(std::abs(fillet->GetRadius() - expectedR) < 1e-4f, "Fillet radius must be derived from angle");
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!fillet->IsDirty(), "Fillet should be evaluated cleanly after angle change");
+
     // 5. Test ChamferNode on another block:
     auto sketch2 = std::make_shared<SketchNode>("Block2_Sketch", SketchPlane::XZ_Ground);
     sketch2->SetPresetRectangle(4.0f, 4.0f);

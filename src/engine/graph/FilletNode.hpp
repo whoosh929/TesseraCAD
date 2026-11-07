@@ -43,10 +43,41 @@ public:
     [[nodiscard]] Geom::Point3D GetEdgeP0() const noexcept { return m_edgeP0; }
     [[nodiscard]] Geom::Point3D GetEdgeP1() const noexcept { return m_edgeP1; }
 
+    enum class DimensionChoice { Distance, Angle };
+    [[nodiscard]] DimensionChoice GetDimensionChoice() const noexcept { return m_choice; }
+    [[nodiscard]] float GetAngle() const noexcept { return m_angle; }
+
+    void SetDimensionChoice(DimensionChoice choice) {
+        if (m_choice != choice) {
+            m_choice = choice;
+            UpdateRadiusFromChoice();
+            MarkDirty();
+        }
+    }
+
+    void SetAngle(float angleDeg) {
+        float a = std::clamp(angleDeg, 5.0f, 175.0f);
+        if (std::abs(m_angle - a) > 1e-3f) {
+            m_angle = a;
+            if (m_choice == DimensionChoice::Angle) {
+                UpdateRadiusFromChoice();
+            }
+            MarkDirty();
+        }
+    }
+
+    void UpdateRadiusFromChoice() {
+        if (m_choice == DimensionChoice::Angle) {
+            float alpha = m_angle * 3.14159265f / 180.0f;
+            m_radius = std::max(0.01f, m_nominalSetback * std::tan(alpha * 0.5f));
+        }
+    }
+
     void SetRadius(float radius) {
         float r = std::max(0.01f, radius);
         if (std::abs(m_radius - r) > 1e-4f) {
             m_radius = r;
+            m_nominalSetback = r;
             MarkDirty();
         }
     }
@@ -239,6 +270,9 @@ private:
     uint64_t m_targetNodeId{0};
     int m_edgeIndex{0};
     float m_radius{0.2f};
+    DimensionChoice m_choice{DimensionChoice::Distance};
+    float m_angle{45.0f};
+    float m_nominalSetback{0.25f};
     Geom::Point3D m_edgeP0{0, 0, 0};
     Geom::Point3D m_edgeP1{0, 0, 0};
     bool m_hasConflict{false};

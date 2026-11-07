@@ -268,11 +268,15 @@ private:
     uint32_t m_shapeCounter{1};
 
     // Fillet & Chamfer feature parameters
+    enum class FilletDimensionChoice { Distance, Angle };
+    FilletDimensionChoice m_filletChoice{FilletDimensionChoice::Distance};
     float m_newFilletRadius{0.2f};
+    float m_newFilletAngle{45.0f};
     float m_newChamferDistance{0.2f};
     bool m_showFilletPrompt{false};
     bool m_showChamferPrompt{false};
     float m_sketchFilletRadius{0.2f};
+    float m_sketchFilletAngle{45.0f};
     float m_sketchChamferDist{0.2f};
 
     // Conflict Resolution Modal

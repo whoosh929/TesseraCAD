@@ -58,17 +58,20 @@ inline bool ApplyChamfer2D(
 
 /**
  * @brief Applies a circular fillet (tangent arc) to corner vertex at cornerIdx.
- * Replaces the single sharp vertex with a smooth arc of radius 'radius'.
+ * Replaces the single sharp vertex with a smooth arc.
+ * Supports Distance mode (direct radius) and Angle mode (angle in degrees).
  */
 inline bool ApplyFillet2D(
     std::vector<std::array<float, 2>>& points,
     size_t cornerIdx,
-    float radius,
+    float radiusOrAngle,
     bool isClosed = true,
-    int arcSegments = 6
+    int arcSegments = 6,
+    bool isAngleMode = false,
+    float referenceDistance = 0.20f
 ) {
     size_t n = points.size();
-    if (n < 3 || cornerIdx >= n || radius <= 1e-4f) return false;
+    if (n < 3 || cornerIdx >= n || radiusOrAngle <= 1e-4f) return false;
 
     size_t prevIdx = (cornerIdx + n - 1) % n;
     size_t nextIdx = (cornerIdx + 1) % n;
@@ -88,6 +91,14 @@ inline bool ApplyFillet2D(
     float len2 = std::hypot(d2x, d2y);
 
     if (len1 < 1e-4f || len2 < 1e-4f) return false;
+
+    float radius = radiusOrAngle;
+    if (isAngleMode) {
+        float angleDeg = std::clamp(radiusOrAngle, 5.0f, 175.0f);
+        float alpha = angleDeg * 3.14159265f / 180.0f;
+        float refD = (referenceDistance > 0.01f) ? referenceDistance : std::min(len1, len2) * 0.35f;
+        radius = refD * std::tan(alpha * 0.5f);
+    }
 
     float u1x = d1x / len1;
     float u1y = d1y / len1;

@@ -13,3 +13,5 @@ Default Mouse Wheel Controls
 - []feature: add a measure tool
 - [x] bug: when a vertex on a model is selected, it's not obvious on the model. Highlight the vertex on the 3d model view.
 - [] feature: allow all dimensions in a 2d sketch to be input using the keyboard.
+- [x] feature: When applying a fillet to a vertex, give the choice for distance or angle.
+- [] feature: when applying a 3d feature like chamfer or extrude, continue to allow for preview of the model as done now, but don't apply the chain until the user confirms. The user confirmation/cancellation should be like you confirm/cancel a 2d sketch .
