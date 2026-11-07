@@ -484,7 +484,8 @@ public:
             if (bestEdgeIdx >= 0) {
                 visitedEdges.insert(static_cast<size_t>(bestEdgeIdx));
                 chain.push_back({bestP0, bestP1, bestDir, bestNormB, bestUA, bestUB, seedRadius});
-                grewForward = true;
+                // Corner-only propagation: after wrapping a sharp corner, do not keep following the rim
+                grewForward = (bestScore >= 0.7);
             }
         }
 
@@ -578,7 +579,7 @@ public:
             if (bestEdgeIdx >= 0) {
                 visitedEdges.insert(static_cast<size_t>(bestEdgeIdx));
                 chain.insert(chain.begin(), {bestP0, bestP1, bestDir, bestNormB, bestUA, bestUB, seedRadius});
-                grewBackward = true;
+                grewBackward = (bestScore >= 0.7);
             }
         }
 
