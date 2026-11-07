@@ -600,7 +600,7 @@ void CADGui::RenderExtrudePromptModal(
         if (!availableSketches.empty()) {
             ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Available Sketches in Model Tree:");
             ImGui::InputFloat("Extrude Depth", &m_newExtrudeHeight, 0.1f, 1.0f, "%.2f m");
-            if (m_newExtrudeHeight < 0.01f) m_newExtrudeHeight = 0.01f;
+            if (std::abs(m_newExtrudeHeight) < 0.001f) m_newExtrudeHeight = (m_newExtrudeHeight < 0.0f ? -0.01f : 0.01f);
             ImGui::Spacing();
 
             for (const auto& s : availableSketches) {
@@ -1378,7 +1378,7 @@ void CADGui::RenderUI(
 
                 float h = extrude->GetHeight();
                 if (ImGui::InputFloat("Extrude Depth", &h, 0.1f, 1.0f, "%.2f m")) {
-                    h = std::max(0.01f, h);
+                    if (std::abs(h) < 0.001f) h = (h < 0.0f ? -0.01f : 0.01f);
                     extrude->SetHeight(h);
                     graph.EvaluateDirtyNodes(device, exchange);
                 }

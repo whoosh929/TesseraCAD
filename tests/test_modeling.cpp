@@ -61,6 +61,52 @@ bool TestSolidExtrude() {
     return true;
 }
 
+bool TestNegativeExtrude() {
+    std::cout << "[Test] Negative Depth Linear Extrude (Reversed Direction)...\n";
+
+    Sketch2D sketch(Plane::XY());
+    sketch.add_rectangle(4.0, 2.0); // 4x2 rectangle
+
+    auto profiles = sketch.extract_profiles();
+    TEST_ASSERT(profiles.size() == 1, "Expected 1 profile");
+
+    ExtrudeOp::Params params;
+    params.start_depth = 0.0;
+    params.end_depth = -4.0;
+    params.direction = Vector3D(0.0, 0.0, 1.0);
+    params.is_solid = true;
+
+    auto body = ExtrudeOp::Execute(profiles[0], sketch.plane, params);
+    TEST_ASSERT(body != nullptr, "Body is null");
+    TEST_ASSERT(body->is_solid(), "Body must be solid");
+    TEST_ASSERT(body->shell_count() == 1, "Expected 1 shell");
+
+    auto shell = body->shells[0];
+    TEST_ASSERT(shell->is_closed, "Shell must be closed");
+    TEST_ASSERT(shell->face_count() == 6, "Expected 6 faces for negative extruded solid");
+
+    CADMesh mesh = Tessellator::Tessellate(*body);
+    TEST_ASSERT(!mesh.vertices.empty(), "Mesh vertices empty");
+    TEST_ASSERT(!mesh.indices.empty(), "Mesh indices empty");
+    TEST_ASSERT(mesh.indices.size() == 36, "Negative extrude index count != 36");
+
+    // Verify outward normals at Z = 0.0 (+Z outward) and Z = -4.0 (-Z outward)
+    bool foundCapAtZero = false;
+    bool foundCapAtMinusFour = false;
+    for (const auto& v : mesh.vertices) {
+        if (std::abs(v.position[2] - 0.0f) < 0.05f && v.normal[2] > 0.9f) {
+            foundCapAtZero = true;
+        }
+        if (std::abs(v.position[2] - (-4.0f)) < 0.05f && v.normal[2] < -0.9f) {
+            foundCapAtMinusFour = true;
+        }
+    }
+    TEST_ASSERT(foundCapAtZero, "Cap at Z=0.0 must have outward normal pointing +Z (+dir)");
+    TEST_ASSERT(foundCapAtMinusFour, "Cap at Z=-4.0 must have outward normal pointing -Z (-dir)");
+
+    return true;
+}
+
 bool TestSurfaceExtrude() {
     std::cout << "[Test] Surface/Sheet Extrude of Open Wire...\n";
 
@@ -278,6 +324,7 @@ int main() {
 
     bool passed = true;
     passed &= TestSolidExtrude();
+    passed &= TestNegativeExtrude();
     passed &= TestSurfaceExtrude();
     passed &= TestHollowExtrude();
     passed &= TestFullRevolve();

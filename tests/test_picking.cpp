@@ -989,7 +989,7 @@ bool TestFaceAndVertexDatumPlaneCenteringIn3DSpace() {
         }
     }
 
-    TEST_ASSERT(std::abs(topFace.center.y - 1.5) < 0.1, "Top face Y should be at +1.5m");
+    TEST_ASSERT(std::abs(topFace.center.y - 3.0) < 0.1, "Top face Y should be at +3.0m");
 
     // 2. Tie a DatumPlaneNode to this top face
     auto faceDatumPlane = std::make_shared<DatumPlaneNode>("Plane_TopFace", baseBox, topFaceIdx, topFace.plane);
@@ -1032,8 +1032,8 @@ bool TestFaceAndVertexDatumPlaneCenteringIn3DSpace() {
         minY = std::min(minY, v.position[1]);
         maxY = std::max(maxY, v.position[1]);
     }
-    TEST_ASSERT(std::abs(minY - 1.5f) < 0.1f, "Boss bottom cap must sit directly on the face at Y = 1.5m");
-    TEST_ASSERT(std::abs(maxY - 3.5f) < 0.1f, "Boss top cap must be extruded outward to Y = 3.5m");
+    TEST_ASSERT(std::abs(minY - 3.0f) < 0.1f, "Boss bottom cap must sit directly on the face at Y = 3.0m");
+    TEST_ASSERT(std::abs(maxY - 5.0f) < 0.1f, "Boss top cap must be extruded outward to Y = 5.0m");
 
     // 5. Test DatumPlaneNode tied to a Vertex
     const auto& baseVerts = baseBox->GetCachedVertices();
@@ -1079,8 +1079,8 @@ bool TestReferenceFeatureProjectionAndToggle() {
     TEST_ASSERT(!verts.empty(), "Box feature vertices cannot be empty");
     TEST_ASSERT(!edges.empty(), "Box feature edges cannot be empty");
 
-    // 2. Create sketch plane on top face (Y = +1.5m)
-    Plane topPlane = Plane::XZ(Point3D(0.0, 1.5, 0.0));
+    // 2. Create sketch plane on top face (Y = +3.0m)
+    Plane topPlane = Plane::XZ(Point3D(0.0, 3.0, 0.0));
 
     // 3. Project each 3D edge into the 2D sketch plane UV space
     std::vector<std::pair<Point2D, Point2D>> projectedEdges;
@@ -1113,6 +1113,162 @@ bool TestReferenceFeatureProjectionAndToggle() {
     return true;
 }
 
+bool TestNegativeExtrudeGraphAndCustomPlane() {
+    std::cout << "[Test] Negative Extrude on Standard Plane and Custom Face Datum Plane...\n";
+
+    // 1. Standard Ground Plane (XZ) with Negative Extrusion (h = -3.0f)
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    auto sketchGround = std::make_shared<SketchNode>("Sketch_Ground", SketchPlane::XZ_Ground);
+    sketchGround->SetPresetRectangle(2.0f, 2.0f);
+    graph.AddNode(sketchGround);
+
+    auto extrudeNeg = std::make_shared<ExtrudeNode>("Extrude_Neg", sketchGround, -3.0f);
+    graph.AddNode(extrudeNeg);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    const auto& verts = extrudeNeg->GetCachedVertices();
+    const auto& indices = extrudeNeg->GetCachedIndices();
+    TEST_ASSERT(!verts.empty(), "Vertices must not be empty for negative extrude");
+    TEST_ASSERT(!indices.empty(), "Indices must not be empty for negative extrude");
+
+    // Standard plane starting at sketch plane Y = 0:
+    // Cap B (base) at w = 0.0f has outward normal +Y (0, 1, 0)
+    // Cap A (extruded) at w = -3.0f has outward normal -Y (0, -1, 0)
+    bool foundTopOutward = false;
+    bool foundBotOutward = false;
+    for (const auto& v : verts) {
+        if (std::abs(v.position[1] - 0.0f) < 0.05f && v.normal[1] > 0.9f) {
+            foundTopOutward = true;
+        }
+        if (std::abs(v.position[1] - (-3.0f)) < 0.05f && v.normal[1] < -0.9f) {
+            foundBotOutward = true;
+        }
+    }
+    TEST_ASSERT(foundTopOutward, "Negative extrude Cap B at 0.0m must have outward normal +Y");
+    TEST_ASSERT(foundBotOutward, "Negative extrude Cap A at -3.0m must have outward normal -Y");
+
+    // 2. Custom Datum Plane on Model Face with Negative Extrusion (h = -0.8m)
+    // Create base block (Y: 0.0m to +2.0m, height 2.0m)
+    auto sketchBase = std::make_shared<SketchNode>("Sketch_Base", SketchPlane::XZ_Ground);
+    sketchBase->SetPresetRectangle(4.0f, 4.0f);
+    graph.AddNode(sketchBase);
+
+    auto baseExtrude = std::make_shared<ExtrudeNode>("BaseBlock", sketchBase, 2.0f);
+    graph.AddNode(baseExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    // Extract top face of base block (Y = +2.0m, normal = +Y)
+    const auto& baseFaces = baseExtrude->GetFaces();
+    int topFaceIdx = -1;
+    FaceInfo topFaceData;
+    for (const auto& f : baseFaces) {
+        if (f.normal.dot(Vector3D(0, 1, 0)) > 0.9) {
+            topFaceIdx = f.faceIndex;
+            topFaceData = f;
+            break;
+        }
+    }
+    TEST_ASSERT(topFaceIdx >= 0, "Base block must have a +Y top face");
+
+    // Create datum plane associative to base block top face
+    auto datumPlane = std::make_shared<DatumPlaneNode>("DatumPlane_TopFace", baseExtrude, topFaceIdx, topFaceData.plane);
+    graph.AddNode(datumPlane);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!datumPlane->HasConflict(), "Datum plane must not have conflict");
+    TEST_ASSERT(std::abs(datumPlane->GetPlane().origin.y - 2.0) < 0.05, "Datum plane origin Y must be ~2.0m");
+
+    // Create a sketch tied to this datum plane
+    auto sketchFace = std::make_shared<SketchNode>("Sketch_Face", datumPlane);
+    sketchFace->SetPresetRectangle(1.0f, 1.0f);
+    graph.AddNode(sketchFace);
+
+    // Extrude inward with negative depth (h = -0.8m)
+    auto cutExtrude = std::make_shared<ExtrudeNode>("InwardExtrude", sketchFace, -0.8f);
+    graph.AddNode(cutExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    const auto& cutVerts = cutExtrude->GetCachedVertices();
+    const auto& cutIndices = cutExtrude->GetCachedIndices();
+    TEST_ASSERT(!cutVerts.empty(), "Inward extrude vertices must not be empty");
+    TEST_ASSERT(!cutIndices.empty(), "Inward extrude indices must not be empty");
+
+    // On custom plane:
+    // Cap B (w = 0) is at dist = 0.0 (Y = 2.0m, on the datum plane) with normal +Y (0, 1, 0)
+    // Cap A (w = h) is at dist = -0.8m (Y = 1.2m, inside the block) with normal -Y (0, -1, 0)
+    bool foundCapAtFace = false;
+    bool foundCapInward = false;
+    for (const auto& v : cutVerts) {
+        if (std::abs(v.position[1] - 2.0f) < 0.05f && v.normal[1] > 0.9f) {
+            foundCapAtFace = true;
+        }
+        if (std::abs(v.position[1] - 1.2f) < 0.05f && v.normal[1] < -0.9f) {
+            foundCapInward = true;
+        }
+    }
+    TEST_ASSERT(foundCapAtFace, "Inward negative extrude Cap B must be at face (Y=2.0m) with outward normal +Y");
+    TEST_ASSERT(foundCapInward, "Inward negative extrude Cap A must be at depth (Y=1.2m) with outward normal -Y");
+
+    return true;
+}
+
+bool TestDirectionalExtrusion() {
+    std::cout << "[Test] Directional Extrusion (One-Way Growth, Fixed Sketch Plane Base)...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create a sketch on the ground plane (Y = 0)
+    auto sketch = std::make_shared<SketchNode>("Sketch_Dir", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(2.0f, 2.0f);
+    graph.AddNode(sketch);
+
+    // 2. Extrude by +2.0m
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_Dir", sketch, 2.0f);
+    graph.AddNode(extrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    float minY = 1e9f, maxY = -1e9f;
+    for (const auto& v : extrude->GetCachedVertices()) {
+        minY = std::min(minY, v.position[1]);
+        maxY = std::max(maxY, v.position[1]);
+    }
+    TEST_ASSERT(std::abs(minY - 0.0f) < 0.01f, "Base of +2.0m extrude must stay at sketch plane Y = 0.0m");
+    TEST_ASSERT(std::abs(maxY - 2.0f) < 0.01f, "Top of +2.0m extrude must reach Y = +2.0m");
+
+    // 3. Increase extrude depth to +5.0m:
+    // It should grow only in the positive direction; the base at Y = 0.0m must NOT move!
+    extrude->SetHeight(5.0f);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    minY = 1e9f; maxY = -1e9f;
+    for (const auto& v : extrude->GetCachedVertices()) {
+        minY = std::min(minY, v.position[1]);
+        maxY = std::max(maxY, v.position[1]);
+    }
+    TEST_ASSERT(std::abs(minY - 0.0f) < 0.01f, "Increasing depth must NOT grow in reverse; base must remain at Y = 0.0m");
+    TEST_ASSERT(std::abs(maxY - 5.0f) < 0.01f, "Increasing depth to +5.0m must grow only in +Y direction to Y = 5.0m");
+
+    // 4. Change extrude depth to negative -4.0m:
+    // It should extrude purely in the negative direction (-Y); the base at Y = 0.0m must NOT move!
+    extrude->SetHeight(-4.0f);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    minY = 1e9f; maxY = -1e9f;
+    for (const auto& v : extrude->GetCachedVertices()) {
+        minY = std::min(minY, v.position[1]);
+        maxY = std::max(maxY, v.position[1]);
+    }
+    TEST_ASSERT(std::abs(maxY - 0.0f) < 0.01f, "Negative extrude base must remain anchored at sketch plane Y = 0.0m");
+    TEST_ASSERT(std::abs(minY - (-4.0f)) < 0.01f, "Negative extrude must extend in negative direction to Y = -4.0m");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1135,6 +1291,8 @@ int main() {
     pass &= TestVertexSubElementPickingAndAssociativeDatumAxis();
     pass &= TestFaceAndVertexDatumPlaneCenteringIn3DSpace();
     pass &= TestReferenceFeatureProjectionAndToggle();
+    pass &= TestNegativeExtrudeGraphAndCustomPlane();
+    pass &= TestDirectionalExtrusion();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

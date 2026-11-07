@@ -55,15 +55,18 @@ public:
             return body;
         }
 
+        bool isReversed = (hEnd < hStart);
+
         // =====================================================================
         // 1. Bottom & Top Cap Faces (Only for closed solid bodies)
         // =====================================================================
         if (generateSolid) {
             auto poly2D = Sketch::ProfileTessellator::Triangulate(profile);
 
-            // A. Bottom Cap Face (Normal = -dir)
+            // A. Bottom Cap Face at startOffset (Normal = -dir if !isReversed, +dir if isReversed)
             auto bottomFace = std::make_shared<Face>(faceIdCounter++, SurfaceGeometryType::Plane);
-            bottomFace->plane_geom = Geom::Plane(sketchPlane.origin + startOffset, -dir, sketchPlane.u_axis, -sketchPlane.v_axis);
+            Geom::Vector3D botNormal = isReversed ? dir : -dir;
+            bottomFace->plane_geom = Geom::Plane(sketchPlane.origin + startOffset, botNormal, sketchPlane.u_axis, isReversed ? sketchPlane.v_axis : -sketchPlane.v_axis);
 
             // Populate mesh
             bottomFace->mesh_vertices.reserve(poly2D.vertices.size());
@@ -71,31 +74,45 @@ public:
                 Geom::Point3D pt3d = sketchPlane.to_world(uv) + startOffset;
                 bottomFace->mesh_vertices.push_back({
                     {static_cast<float>(pt3d.x), static_cast<float>(pt3d.y), static_cast<float>(pt3d.z)},
-                    {static_cast<float>(-dir.x), static_cast<float>(-dir.y), static_cast<float>(-dir.z)}
+                    {static_cast<float>(botNormal.x), static_cast<float>(botNormal.y), static_cast<float>(botNormal.z)}
                 });
             }
-            // Reverse winding for bottom face so normals face outwards
             bottomFace->mesh_indices.reserve(poly2D.indices.size());
-            for (size_t i = 0; i < poly2D.indices.size(); i += 3) {
-                bottomFace->mesh_indices.push_back(poly2D.indices[i]);
-                bottomFace->mesh_indices.push_back(poly2D.indices[i + 2]);
-                bottomFace->mesh_indices.push_back(poly2D.indices[i + 1]);
+            if (!isReversed) {
+                // Reverse winding for bottom face so normals face outwards
+                for (size_t i = 0; i < poly2D.indices.size(); i += 3) {
+                    bottomFace->mesh_indices.push_back(poly2D.indices[i]);
+                    bottomFace->mesh_indices.push_back(poly2D.indices[i + 2]);
+                    bottomFace->mesh_indices.push_back(poly2D.indices[i + 1]);
+                }
+            } else {
+                bottomFace->mesh_indices = poly2D.indices;
             }
             shell->add_face(bottomFace);
 
-            // B. Top Cap Face (Normal = +dir)
+            // B. Top Cap Face at endOffset (Normal = +dir if !isReversed, -dir if isReversed)
             auto topFace = std::make_shared<Face>(faceIdCounter++, SurfaceGeometryType::Plane);
-            topFace->plane_geom = Geom::Plane(sketchPlane.origin + endOffset, dir, sketchPlane.u_axis, sketchPlane.v_axis);
+            Geom::Vector3D topNormal = isReversed ? -dir : dir;
+            topFace->plane_geom = Geom::Plane(sketchPlane.origin + endOffset, topNormal, sketchPlane.u_axis, isReversed ? -sketchPlane.v_axis : sketchPlane.v_axis);
 
             topFace->mesh_vertices.reserve(poly2D.vertices.size());
             for (const auto& uv : poly2D.vertices) {
                 Geom::Point3D pt3d = sketchPlane.to_world(uv) + endOffset;
                 topFace->mesh_vertices.push_back({
                     {static_cast<float>(pt3d.x), static_cast<float>(pt3d.y), static_cast<float>(pt3d.z)},
-                    {static_cast<float>(dir.x), static_cast<float>(dir.y), static_cast<float>(dir.z)}
+                    {static_cast<float>(topNormal.x), static_cast<float>(topNormal.y), static_cast<float>(topNormal.z)}
                 });
             }
-            topFace->mesh_indices = poly2D.indices;
+            if (!isReversed) {
+                topFace->mesh_indices = poly2D.indices;
+            } else {
+                topFace->mesh_indices.reserve(poly2D.indices.size());
+                for (size_t i = 0; i < poly2D.indices.size(); i += 3) {
+                    topFace->mesh_indices.push_back(poly2D.indices[i]);
+                    topFace->mesh_indices.push_back(poly2D.indices[i + 2]);
+                    topFace->mesh_indices.push_back(poly2D.indices[i + 1]);
+                }
+            }
             shell->add_face(topFace);
         }
 
@@ -137,8 +154,12 @@ public:
                      {static_cast<float>(faceNormal.x), static_cast<float>(faceNormal.y), static_cast<float>(faceNormal.z)}}
                 };
 
-                // Two triangles: (0, 1, 2) and (0, 2, 3)
-                sideFace->mesh_indices = {0, 1, 2, 0, 2, 3};
+                // Two triangles: standard winding when not reversed, inverted when reversed
+                if (!isReversed) {
+                    sideFace->mesh_indices = {0, 1, 2, 0, 2, 3};
+                } else {
+                    sideFace->mesh_indices = {0, 2, 1, 0, 3, 2};
+                }
 
                 // Feature edges: bottom segment (0-1), top segment (3-2), vertical seams (0-3, 1-2)
                 sideFace->feature_edge_indices = {0, 1, 3, 2, 0, 3, 1, 2};
