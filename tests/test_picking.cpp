@@ -5,6 +5,8 @@
 #include "engine/graph/RevolveNode.hpp"
 #include "engine/graph/DatumPlaneNode.hpp"
 #include "engine/graph/DatumAxisNode.hpp"
+#include "engine/graph/FilletNode.hpp"
+#include "engine/graph/ChamferNode.hpp"
 #include <iostream>
 #include <memory>
 #include <cmath>
@@ -1269,6 +1271,85 @@ bool TestDirectionalExtrusion() {
     return true;
 }
 
+bool TestFilletAndChamferFeaturesAndEdgePicking() {
+    std::cout << "[Test] 3D Model Edge Picking, Fillet & Chamfer Features...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create a 4x4 Extrude block with height 3.0m on ground
+    auto sketch = std::make_shared<SketchNode>("Block_Sketch", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(4.0f, 4.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto block = std::make_shared<ExtrudeNode>("BaseBlock", sketch, 3.0f);
+    block->Evaluate(&mockDevice, exchange);
+    graph.AddNode(block);
+
+    const auto& edges = block->GetCachedEdges();
+    TEST_ASSERT(!edges.empty(), "BaseBlock must have sharp feature edges");
+
+    // 2. Test Edge Picking via PickSubElement:
+    // One vertical corner edge is along X=2.0, Z=2.0 from Y=0.0 to Y=3.0.
+    // Cast a ray aimed at (2.05, 1.5, 2.05) pointing towards center
+    Point3D rayOrig(5.0, 1.5, 2.0);
+    Vector3D rayDir(-1.0, 0.0, 0.0); // ray intersects along X to hit edge at X=2.0, Y=1.5, Z=2.0
+    auto pickResult = graph.PickSubElement(rayOrig, rayDir, block->GetId());
+    TEST_ASSERT(pickResult.edgeIndex >= 0, "PickSubElement must successfully pick the corner edge");
+
+    int pickedEdge = pickResult.edgeIndex;
+
+    // 3. Create a FilletNode referencing this corner edge with radius = 0.5m
+    auto fillet = std::make_shared<FilletNode>("Corner_Fillet", block, pickedEdge, 0.5f);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(block->IsConsumed(), "BaseBlock must be marked consumed when Fillet is created");
+    TEST_ASSERT(!fillet->HasConflict(), "Fillet feature must not have conflict");
+    TEST_ASSERT(!fillet->GetCachedVertices().empty(), "Fillet feature must have cached vertices");
+    TEST_ASSERT(!fillet->GetCachedIndices().empty(), "Fillet feature must have cached indices");
+    TEST_ASSERT(fillet->GetRadius() == 0.5f, "Fillet radius must match 0.5m");
+
+    // Verify filleted mesh has more vertices than original 4-corner box due to rounded corner
+    size_t baseVertCount = block->GetCachedVertices().size();
+    size_t filletVertCount = fillet->GetCachedVertices().size();
+    TEST_ASSERT(filletVertCount > baseVertCount, "Filleted solid must have more vertices representing the round corner");
+
+    // 4. Test modifying Fillet radius:
+    fillet->SetRadius(0.8f);
+    TEST_ASSERT(fillet->IsDirty(), "Fillet must be marked dirty when radius is updated");
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!fillet->IsDirty(), "Fillet must be clean after re-evaluation");
+    TEST_ASSERT(fillet->GetRadius() == 0.8f, "Fillet radius must update to 0.8m");
+
+    // 5. Test ChamferNode on another block:
+    auto sketch2 = std::make_shared<SketchNode>("Block2_Sketch", SketchPlane::XZ_Ground);
+    sketch2->SetPresetRectangle(4.0f, 4.0f);
+    sketch2->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch2);
+
+    auto block2 = std::make_shared<ExtrudeNode>("BaseBlock2", sketch2, 3.0f);
+    block2->Evaluate(&mockDevice, exchange);
+    graph.AddNode(block2);
+
+    auto chamfer = std::make_shared<ChamferNode>("Corner_Chamfer", block2, pickedEdge, 0.4f);
+    graph.AddNode(chamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(block2->IsConsumed(), "BaseBlock2 must be consumed by Chamfer");
+    TEST_ASSERT(!chamfer->HasConflict(), "Chamfer must not have conflict");
+    TEST_ASSERT(chamfer->GetDistance() == 0.4f, "Chamfer distance must match 0.4m");
+
+    // 6. Test conflict propagation: remove base block
+    block2->NotifyRemoval();
+    TEST_ASSERT(chamfer->HasConflict(), "Chamfer must detect conflict when parent is removed");
+    TEST_ASSERT(!chamfer->GetConflictMessage().empty(), "Chamfer conflict message must not be empty");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -1293,6 +1374,7 @@ int main() {
     pass &= TestReferenceFeatureProjectionAndToggle();
     pass &= TestNegativeExtrudeGraphAndCustomPlane();
     pass &= TestDirectionalExtrusion();
+    pass &= TestFilletAndChamferFeaturesAndEdgePicking();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

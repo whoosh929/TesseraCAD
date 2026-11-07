@@ -269,8 +269,8 @@ public:
         }
     }
 
-    [[nodiscard]] bool IsConsumed() const noexcept { return m_isConsumed; }
-    void SetConsumed(bool consumed) noexcept { m_isConsumed = consumed; }
+    [[nodiscard]] bool IsConsumed() const noexcept override { return m_isConsumed; }
+    void SetConsumed(bool consumed) noexcept override { m_isConsumed = consumed; }
 
     [[nodiscard]] std::shared_ptr<DAGNode> GetParentFeature() const noexcept override {
         return m_parentFeature.lock();
@@ -390,7 +390,6 @@ private:
     SketchPreset m_preset{SketchPreset::Rectangle};
     std::vector<std::array<float, 2>> m_profile;
     std::vector<std::vector<std::array<float, 2>>> m_shapes;
-    bool m_isConsumed{false};
     bool m_visible{true};
     std::weak_ptr<DAGNode> m_parentFeature;
 

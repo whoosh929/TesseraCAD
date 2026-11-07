@@ -18,11 +18,14 @@
 
 namespace Tessera {
 
-/// Pick result for sub-elements (Face or Vertex) on a selected 3D model
+/// Pick result for sub-elements (Face, Vertex, or Edge) on a selected 3D model
 struct SubElementPickResult {
     uint64_t nodeId{0};
     int faceIndex{-1};
     int vertexIndex{-1};
+    int edgeIndex{-1};
+    Geom::Point3D edgeP0{0.0, 0.0, 0.0};
+    Geom::Point3D edgeP1{0.0, 0.0, 0.0};
     Geom::Plane facePlane;
     Geom::Point3D vertexPos{0.0, 0.0, 0.0};
     double distance{std::numeric_limits<double>::infinity()};
@@ -131,6 +134,7 @@ public:
         m_selectedNodeId = id;
         m_selectedFaceIndex = -1;
         m_selectedVertexIndex = -1;
+        m_selectedEdgeIndex = -1;
     }
 
     [[nodiscard]] uint64_t GetSelectedNodeId() const {
@@ -138,11 +142,12 @@ public:
         return m_selectedNodeId;
     }
 
-    void SetSubElementSelection(uint64_t nodeId, int faceIndex, int vertexIndex) {
+    void SetSubElementSelection(uint64_t nodeId, int faceIndex, int vertexIndex, int edgeIndex = -1) {
         std::lock_guard<std::mutex> lock(m_graphMutex);
         m_selectedNodeId = nodeId;
         m_selectedFaceIndex = faceIndex;
         m_selectedVertexIndex = vertexIndex;
+        m_selectedEdgeIndex = edgeIndex;
     }
 
     void GetSubElementSelection(uint64_t& outNodeId, int& outFaceIndex, int& outVertexIndex) const {
@@ -162,12 +167,18 @@ public:
         return m_selectedVertexIndex;
     }
 
+    [[nodiscard]] int GetSelectedEdgeIndex() const {
+        std::lock_guard<std::mutex> lock(m_graphMutex);
+        return m_selectedEdgeIndex;
+    }
+
     void PublishCombinedSceneMesh(
         RHI::RHIDevice* device, 
         AtomicMeshExchange& exchange,
         std::optional<uint64_t> selectedNodeIdOverride = std::nullopt,
         std::optional<int> selectedFaceIndexOverride = std::nullopt,
-        std::optional<int> selectedVertexIndexOverride = std::nullopt
+        std::optional<int> selectedVertexIndexOverride = std::nullopt,
+        std::optional<int> selectedEdgeIndexOverride = std::nullopt
     ) {
         if (!device) return;
         std::lock_guard<std::mutex> lock(m_graphMutex);
@@ -176,6 +187,7 @@ public:
                 m_selectedNodeId = *selectedNodeIdOverride;
                 m_selectedFaceIndex = -1;
                 m_selectedVertexIndex = -1;
+                m_selectedEdgeIndex = -1;
             }
         }
         if (selectedFaceIndexOverride.has_value()) {
@@ -183,6 +195,9 @@ public:
         }
         if (selectedVertexIndexOverride.has_value()) {
             m_selectedVertexIndex = *selectedVertexIndexOverride;
+        }
+        if (selectedEdgeIndexOverride.has_value()) {
+            m_selectedEdgeIndex = *selectedEdgeIndexOverride;
         }
 
         std::vector<CADVertex> combinedVertices;
@@ -224,7 +239,10 @@ public:
                     sketchEdges.push_back(edgeIdx + vOffset);
                 }
             } else {
-                // Solid 3D features (Extrude, Revolve, Cylinder, Sphere, etc.)
+                // Solid 3D features (Extrude, Revolve, Cylinder, Sphere, Fillet, Chamfer, etc.)
+                if (node->IsConsumed()) {
+                    continue; // Consumed features are superseded by their downstream operations
+                }
                 const auto& verts = node->GetCachedVertices();
                 const auto& indices = node->GetCachedIndices();
                 const auto& edges = node->GetCachedEdges();
@@ -232,7 +250,21 @@ public:
 
                 bool isSelected = (node->GetId() == m_selectedNodeId);
 
-                if (isSelected && m_selectedFaceIndex >= 0) {
+                if (isSelected && m_selectedEdgeIndex >= 0) {
+                    // Edge drill-down selection: render whole model + ONLY selected corner edge in highlighted selectedEdges buffer!
+                    uint32_t unselBase = static_cast<uint32_t>(combinedVertices.size());
+                    combinedVertices.insert(combinedVertices.end(), verts.begin(), verts.end());
+                    for (uint32_t idx : indices) combinedIndices.push_back(idx + unselBase);
+                    for (uint32_t edgeIdx : edges) combinedEdges.push_back(edgeIdx + unselBase);
+
+                    size_t e = static_cast<size_t>(m_selectedEdgeIndex * 2);
+                    if (e + 1 < edges.size()) {
+                        uint32_t selBase = static_cast<uint32_t>(selectedVertices.size());
+                        selectedVertices.insert(selectedVertices.end(), verts.begin(), verts.end());
+                        selectedEdges.push_back(edges[e] + selBase);
+                        selectedEdges.push_back(edges[e + 1] + selBase);
+                    }
+                } else if (isSelected && m_selectedFaceIndex >= 0) {
                     // Face drill-down selection: ONLY highlight that face!
                     FaceInfo selFace;
                     if (node->GetFace(m_selectedFaceIndex, selFace) && !selFace.triangleIndices.empty()) {
@@ -597,7 +629,58 @@ public:
             return result;
         }
 
-        // 2. Intersected face check
+        // 2. Proximity check to feature edges (corner edges)
+        const auto& edges = targetNode->GetCachedEdges();
+        double bestEdgeDist = 0.15; // 15cm picking tolerance for corner edges
+        double bestEdgeRayT = std::numeric_limits<double>::infinity();
+        int bestEdgeIdx = -1;
+        Geom::Point3D bestEdgeP0, bestEdgeP1;
+
+        for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+            uint32_t i0 = edges[e];
+            uint32_t i1 = edges[e + 1];
+            if (i0 >= verts.size() || i1 >= verts.size()) continue;
+
+            Geom::Point3D p0(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]);
+            Geom::Point3D p1(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2]);
+
+            Geom::Vector3D u = rayDir;
+            Geom::Vector3D v = p1 - p0;
+            Geom::Vector3D w = rayOrigin - p0;
+
+            double b = u.dot(v);
+            double c = v.dot(v);
+            double d = u.dot(w);
+            double e_dot = v.dot(w);
+
+            double denom = c - b * b;
+            double s = (denom > 1e-6) ? (e_dot - b * d) / denom : 0.5;
+            s = std::clamp(s, 0.0, 1.0);
+
+            double t = b * s - d;
+            if (t > 1e-4) {
+                Geom::Point3D rayPt = rayOrigin + u * t;
+                Geom::Point3D segPt = p0 + v * s;
+                double dist = rayPt.distance_to(segPt);
+                if (dist <= bestEdgeDist && (dist < bestEdgeDist || (std::abs(dist - bestEdgeDist) < 0.02 && t < bestEdgeRayT))) {
+                    bestEdgeDist = dist;
+                    bestEdgeRayT = t;
+                    bestEdgeIdx = static_cast<int>(e / 2);
+                    bestEdgeP0 = p0;
+                    bestEdgeP1 = p1;
+                }
+            }
+        }
+
+        if (bestEdgeIdx >= 0) {
+            result.edgeIndex = bestEdgeIdx;
+            result.edgeP0 = bestEdgeP0;
+            result.edgeP1 = bestEdgeP1;
+            result.distance = bestEdgeRayT;
+            return result;
+        }
+
+        // 3. Intersected face check
         double closestTriT = std::numeric_limits<double>::infinity();
         int hitTriIdx = -1;
 
@@ -650,6 +733,7 @@ private:
     uint64_t m_selectedNodeId{0};
     int m_selectedFaceIndex{-1};
     int m_selectedVertexIndex{-1};
+    int m_selectedEdgeIndex{-1};
     mutable std::mutex m_graphMutex;
     static inline std::atomic<uint64_t> s_sceneGen{1};
 };

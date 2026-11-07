@@ -8,6 +8,9 @@
 #include "engine/graph/RevolveNode.hpp"
 #include "engine/graph/DatumPlaneNode.hpp"
 #include "engine/graph/DatumAxisNode.hpp"
+#include "engine/graph/FilletNode.hpp"
+#include "engine/graph/ChamferNode.hpp"
+#include "engine/sketch/SketchFilletChamfer.hpp"
 #include "engine/hal/RHI.hpp"
 #include "engine/render/Camera.hpp"
 #include "engine/render/ViewportRenderer.hpp"
@@ -73,6 +76,7 @@ public:
             m_selectedNodeId = id;
             m_selectedFaceIndex = -1;
             m_selectedVertexIndex = -1;
+            m_selectedEdgeIndex = -1;
             m_selectionScrollPending = true;
         }
     }
@@ -81,23 +85,37 @@ public:
         m_selectedVertexIndex = vIdx;
         m_selectedVertexPos = pos;
         m_selectedFaceIndex = -1;
+        m_selectedEdgeIndex = -1;
     }
 
     void SetSelectedFace(int fIdx, Geom::Plane plane) noexcept {
         m_selectedFaceIndex = fIdx;
         m_selectedFacePlane = plane;
         m_selectedVertexIndex = -1;
+        m_selectedEdgeIndex = -1;
+    }
+
+    void SetSelectedEdge(int eIdx, Geom::Point3D p0, Geom::Point3D p1) noexcept {
+        m_selectedEdgeIndex = eIdx;
+        m_selectedEdgeP0 = p0;
+        m_selectedEdgeP1 = p1;
+        m_selectedFaceIndex = -1;
+        m_selectedVertexIndex = -1;
     }
 
     void ClearSubElementSelection() noexcept {
         m_selectedFaceIndex = -1;
         m_selectedVertexIndex = -1;
+        m_selectedEdgeIndex = -1;
     }
 
     [[nodiscard]] int GetSelectedFaceIndex() const noexcept { return m_selectedFaceIndex; }
     [[nodiscard]] int GetSelectedVertexIndex() const noexcept { return m_selectedVertexIndex; }
+    [[nodiscard]] int GetSelectedEdgeIndex() const noexcept { return m_selectedEdgeIndex; }
     [[nodiscard]] Geom::Plane GetSelectedFacePlane() const noexcept { return m_selectedFacePlane; }
     [[nodiscard]] Geom::Point3D GetSelectedVertexPos() const noexcept { return m_selectedVertexPos; }
+    [[nodiscard]] Geom::Point3D GetSelectedEdgeP0() const noexcept { return m_selectedEdgeP0; }
+    [[nodiscard]] Geom::Point3D GetSelectedEdgeP1() const noexcept { return m_selectedEdgeP1; }
 
     void OpenConflictPrompt(uint64_t nodeId) noexcept {
         m_conflictedNodeId = nodeId;
@@ -128,6 +146,20 @@ private:
     );
 
     void RenderRevolvePromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
+    );
+
+    void RenderFilletPromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
+    );
+
+    void RenderChamferPromptModal(
         ParametricGraph& graph,
         RHI::RHIDevice* device,
         AtomicMeshExchange& exchange,
@@ -223,13 +255,25 @@ private:
     uint64_t m_selectedNodeId{0};
     int m_selectedFaceIndex{-1};
     int m_selectedVertexIndex{-1};
+    int m_selectedEdgeIndex{-1};
     Geom::Plane m_selectedFacePlane;
     Geom::Point3D m_selectedVertexPos{0.0, 0.0, 0.0};
+    Geom::Point3D m_selectedEdgeP0{0.0, 0.0, 0.0};
+    Geom::Point3D m_selectedEdgeP1{0.0, 0.0, 0.0};
     uint64_t m_lastPublishedSelectedNodeId{std::numeric_limits<uint64_t>::max()};
     int m_lastPublishedSelectedFaceIndex{-1};
     int m_lastPublishedSelectedVertexIndex{-1};
+    int m_lastPublishedSelectedEdgeIndex{-1};
     bool m_selectionScrollPending{false};
     uint32_t m_shapeCounter{1};
+
+    // Fillet & Chamfer feature parameters
+    float m_newFilletRadius{0.2f};
+    float m_newChamferDistance{0.2f};
+    bool m_showFilletPrompt{false};
+    bool m_showChamferPrompt{false};
+    float m_sketchFilletRadius{0.2f};
+    float m_sketchChamferDist{0.2f};
 
     // Conflict Resolution Modal
     bool m_showConflictPrompt{false};

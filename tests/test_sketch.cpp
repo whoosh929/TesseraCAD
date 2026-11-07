@@ -2,6 +2,7 @@
 #include "engine/sketch/Sketch.hpp"
 #include "engine/sketch/SketchProfile.hpp"
 #include "engine/sketch/ProfileTessellator.hpp"
+#include "engine/sketch/SketchFilletChamfer.hpp"
 #include <iostream>
 #include <cmath>
 #include <cassert>
@@ -218,6 +219,52 @@ bool TestProfileTessellation() {
     return true;
 }
 
+bool TestSketch2DFilletAndChamfer() {
+    std::cout << "[Test] 2D Sketch Corner Fillet and Chamfer Operations...\n";
+
+    // 1. Rectangle 4x4: (-2, -2), (2, -2), (2, 2), (-2, 2)
+    std::vector<std::array<float, 2>> rect = {
+        {-2.0f, -2.0f},
+        { 2.0f, -2.0f},
+        { 2.0f,  2.0f},
+        {-2.0f,  2.0f}
+    };
+
+    // Apply Chamfer to corner #2 (2, 2) with distance 0.5
+    bool chamferOk = ApplyChamfer2D(rect, 2, 0.5f, true);
+    TEST_ASSERT(chamferOk, "ApplyChamfer2D should succeed on valid corner");
+    // Corner 2 replaced with 2 vertices: now 5 vertices total
+    TEST_ASSERT(rect.size() == 5, "Chamfered rectangle should have 5 vertices");
+
+    // Check beveled vertices around corner (2, 2):
+    // Incoming from (2, -2): point at (2, 1.5)
+    // Outgoing to (-2, 2): point at (1.5, 2)
+    bool foundV1 = false, foundV2 = false;
+    for (const auto& pt : rect) {
+        if (std::abs(pt[0] - 2.0f) < 1e-4f && std::abs(pt[1] - 1.5f) < 1e-4f) foundV1 = true;
+        if (std::abs(pt[0] - 1.5f) < 1e-4f && std::abs(pt[1] - 2.0f) < 1e-4f) foundV2 = true;
+    }
+    TEST_ASSERT(foundV1 && foundV2, "Chamfer points must be at distance 0.5m along each adjacent edge");
+
+    // 2. Apply Fillet to corner #0 (-2, -2) with radius 0.4
+    size_t prevCount = rect.size();
+    bool filletOk = ApplyFillet2D(rect, 0, 0.4f, true, 6);
+    TEST_ASSERT(filletOk, "ApplyFillet2D should succeed on valid corner");
+    // Corner 0 replaced with 7 vertices (6 segments) -> net +6 vertices
+    TEST_ASSERT(rect.size() == prevCount + 6, "Filleted rectangle should add arc segments");
+
+    // Center of fillet at corner (-2, -2) with 90 deg angle is at (-1.6, -1.6)
+    // Check that all generated arc vertices lie at distance ~0.4 from center
+    for (size_t i = 0; i <= 6; ++i) {
+        float x = rect[i][0];
+        float y = rect[i][1];
+        float dToCenter = std::hypot(x - (-1.6f), y - (-1.6f));
+        TEST_ASSERT(std::abs(dToCenter - 0.4f) < 1e-3f, "Fillet arc points must have radial distance = 0.4m from arc center");
+    }
+
+    return true;
+}
+
 int main() {
     std::cout << "=========================================================\n";
     std::cout << "     TesseraCAD 2D Sketch & Profile Unit Tests          \n";
@@ -231,6 +278,7 @@ int main() {
     passed &= TestOpenWireProfileExtraction();
     passed &= TestMultipleDisjointProfiles();
     passed &= TestProfileTessellation();
+    passed &= TestSketch2DFilletAndChamfer();
 
     std::cout << "=========================================================\n";
     if (passed) {

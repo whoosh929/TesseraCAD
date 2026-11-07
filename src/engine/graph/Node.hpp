@@ -62,6 +62,10 @@ public:
     [[nodiscard]] virtual bool HasConflict() const noexcept { return false; }
     [[nodiscard]] virtual std::string GetConflictMessage() const noexcept { return ""; }
 
+    /// Consumed status for features modified by downstream operations (e.g. Fillet, Chamfer, Extrude)
+    [[nodiscard]] virtual bool IsConsumed() const noexcept { return m_isConsumed; }
+    virtual void SetConsumed(bool consumed) noexcept { m_isConsumed = consumed; }
+
     /// Connects this node to depend on an upstream parent
     void AddInput(std::shared_ptr<DAGNode> parent) {
         if (!parent) return;
@@ -288,6 +292,7 @@ protected:
 
     std::vector<FaceInfo> m_cachedFaces;
     bool m_facesDirty{true};
+    bool m_isConsumed{false};
 
     std::vector<std::shared_ptr<DAGNode>> m_inputs;
     std::vector<std::weak_ptr<DAGNode>> m_dependents;

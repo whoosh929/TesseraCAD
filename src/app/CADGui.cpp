@@ -366,8 +366,51 @@ void CADGui::RenderTopBar(
             ImGui::SetTooltip("4. Create Revolve Feature:\n- Revolve sketch around an axis to create a cylindrical 3D model.\n- Cylindrical wall thickness is directly dictated by 2D sketch drawing.");
         }
 
+        // Fillet & Chamfer features
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.35f, 0.48f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.48f, 0.64f, 1.0f));
+        if (ImGui::Button("⌒ Fillet", ImVec2(80, 32))) {
+            if (m_selectedEdgeIndex >= 0 && selectedNode) {
+                std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
+                auto fillet = std::make_shared<FilletNode>(name, selectedNode, m_selectedEdgeIndex, m_newFilletRadius);
+                graph.AddNode(fillet);
+                graph.EvaluateDirtyNodes(device, exchange);
+                SetSelectedNodeId(fillet->GetId());
+                m_showFilletPrompt = false;
+            } else {
+                m_showFilletPrompt = true;
+                m_showChamferPrompt = false;
+            }
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Create Fillet Feature:\n- Rounds a model corner edge with input radius.\n- Click on any model corner edge in 3D viewport, then apply Fillet.");
+        }
+
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.24f, 0.44f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.48f, 0.32f, 0.58f, 1.0f));
+        if (ImGui::Button("⟍ Chamfer", ImVec2(90, 32))) {
+            if (m_selectedEdgeIndex >= 0 && selectedNode) {
+                std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
+                auto chamfer = std::make_shared<ChamferNode>(name, selectedNode, m_selectedEdgeIndex, m_newChamferDistance);
+                graph.AddNode(chamfer);
+                graph.EvaluateDirtyNodes(device, exchange);
+                SetSelectedNodeId(chamfer->GetId());
+                m_showChamferPrompt = false;
+            } else {
+                m_showChamferPrompt = true;
+                m_showFilletPrompt = false;
+            }
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Create Chamfer Feature:\n- Bevels a model corner edge with input distance.\n- Click on any model corner edge in 3D viewport, then apply Chamfer.");
+        }
+
         // Right side: Selection status and quick deselect
-        float rightContentWidth = 260.0f;
+        float rightContentWidth = 210.0f;
         if (ImGui::GetContentRegionAvail().x > rightContentWidth) {
             ImGui::SameLine(ImGui::GetWindowWidth() - rightContentWidth);
             if (selectedNode) {
@@ -745,6 +788,142 @@ void CADGui::RenderRevolvePromptModal(
     ImGui::PopStyleColor(2);
 }
 
+void CADGui::RenderFilletPromptModal(
+    ParametricGraph& graph,
+    RHI::RHIDevice* device,
+    AtomicMeshExchange& exchange,
+    const std::vector<std::shared_ptr<DAGNode>>& nodes
+) {
+    if (!m_showFilletPrompt) return;
+
+    if (m_selectedEdgeIndex >= 0 && m_selectedNodeId != 0) {
+        for (const auto& n : nodes) {
+            if (n->GetId() == m_selectedNodeId) {
+                std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
+                auto fillet = std::make_shared<FilletNode>(name, n, m_selectedEdgeIndex, m_newFilletRadius);
+                graph.AddNode(fillet);
+                graph.EvaluateDirtyNodes(device, exchange);
+                SetSelectedNodeId(fillet->GetId());
+                m_showFilletPrompt = false;
+                return;
+            }
+        }
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 240.0f, 68.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(480.0f, 0.0f), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.16f, 0.22f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.55f, 0.85f, 1.0f));
+    if (ImGui::Begin("⌒ Create Fillet Feature###FilletPrompt", &m_showFilletPrompt, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Corner Edge Fillet Feature:");
+        ImGui::TextWrapped("Click any corner edge on a 3D model in the viewport, or select one below.");
+        ImGui::Spacing();
+
+        ImGui::InputFloat("Fillet Radius", &m_newFilletRadius, 0.05f, 0.2f, "%.2f m");
+        if (m_newFilletRadius < 0.01f) m_newFilletRadius = 0.01f;
+        ImGui::Spacing();
+
+        bool hasModels = false;
+        for (const auto& n : nodes) {
+            if (!n || n->IsConsumed() || std::dynamic_pointer_cast<SketchNode>(n) || std::dynamic_pointer_cast<DatumPlaneNode>(n) || std::dynamic_pointer_cast<DatumAxisNode>(n)) continue;
+            const auto& edges = n->GetCachedEdges();
+            if (edges.empty()) continue;
+
+            hasModels = true;
+            size_t numEdges = edges.size() / 2;
+            std::string btn = "⌒ Apply Fillet to Edge #0 of '" + n->GetName() + "' (" + std::to_string(numEdges) + " edges)";
+            if (ImGui::Button(btn.c_str(), ImVec2(-1, 28))) {
+                std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
+                auto fillet = std::make_shared<FilletNode>(name, n, 0, m_newFilletRadius);
+                graph.AddNode(fillet);
+                graph.EvaluateDirtyNodes(device, exchange);
+                SetSelectedNodeId(fillet->GetId());
+                m_showFilletPrompt = false;
+                break;
+            }
+        }
+        if (!hasModels) {
+            ImGui::TextDisabled("No 3D solid models exist in the scene. Create an Extrude or Revolve first.");
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        if (ImGui::Button("Cancel", ImVec2(-1, 26))) {
+            m_showFilletPrompt = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+}
+
+void CADGui::RenderChamferPromptModal(
+    ParametricGraph& graph,
+    RHI::RHIDevice* device,
+    AtomicMeshExchange& exchange,
+    const std::vector<std::shared_ptr<DAGNode>>& nodes
+) {
+    if (!m_showChamferPrompt) return;
+
+    if (m_selectedEdgeIndex >= 0 && m_selectedNodeId != 0) {
+        for (const auto& n : nodes) {
+            if (n->GetId() == m_selectedNodeId) {
+                std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
+                auto chamfer = std::make_shared<ChamferNode>(name, n, m_selectedEdgeIndex, m_newChamferDistance);
+                graph.AddNode(chamfer);
+                graph.EvaluateDirtyNodes(device, exchange);
+                SetSelectedNodeId(chamfer->GetId());
+                m_showChamferPrompt = false;
+                return;
+            }
+        }
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 240.0f, 68.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(480.0f, 0.0f), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.18f, 0.14f, 0.22f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.65f, 0.40f, 0.85f, 1.0f));
+    if (ImGui::Begin("⟍ Create Chamfer Feature###ChamferPrompt", &m_showChamferPrompt, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextColored(ImVec4(0.75f, 0.55f, 1.0f, 1.0f), "Corner Edge Chamfer Feature:");
+        ImGui::TextWrapped("Click any corner edge on a 3D model in the viewport, or select one below.");
+        ImGui::Spacing();
+
+        ImGui::InputFloat("Chamfer Distance", &m_newChamferDistance, 0.05f, 0.2f, "%.2f m");
+        if (m_newChamferDistance < 0.01f) m_newChamferDistance = 0.01f;
+        ImGui::Spacing();
+
+        bool hasModels = false;
+        for (const auto& n : nodes) {
+            if (!n || n->IsConsumed() || std::dynamic_pointer_cast<SketchNode>(n) || std::dynamic_pointer_cast<DatumPlaneNode>(n) || std::dynamic_pointer_cast<DatumAxisNode>(n)) continue;
+            const auto& edges = n->GetCachedEdges();
+            if (edges.empty()) continue;
+
+            hasModels = true;
+            size_t numEdges = edges.size() / 2;
+            std::string btn = "⟍ Apply Chamfer to Edge #0 of '" + n->GetName() + "' (" + std::to_string(numEdges) + " edges)";
+            if (ImGui::Button(btn.c_str(), ImVec2(-1, 28))) {
+                std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
+                auto chamfer = std::make_shared<ChamferNode>(name, n, 0, m_newChamferDistance);
+                graph.AddNode(chamfer);
+                graph.EvaluateDirtyNodes(device, exchange);
+                SetSelectedNodeId(chamfer->GetId());
+                m_showChamferPrompt = false;
+                break;
+            }
+        }
+        if (!hasModels) {
+            ImGui::TextDisabled("No 3D solid models exist in the scene. Create an Extrude or Revolve first.");
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        if (ImGui::Button("Cancel", ImVec2(-1, 26))) {
+            m_showChamferPrompt = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+}
+
 void CADGui::RenderConflictPromptModal(
     ParametricGraph& graph,
     RHI::RHIDevice* device,
@@ -946,11 +1125,13 @@ void CADGui::RenderUI(
 
     if (m_selectedNodeId != m_lastPublishedSelectedNodeId ||
         m_selectedFaceIndex != m_lastPublishedSelectedFaceIndex ||
-        m_selectedVertexIndex != m_lastPublishedSelectedVertexIndex) {
+        m_selectedVertexIndex != m_lastPublishedSelectedVertexIndex ||
+        m_selectedEdgeIndex != m_lastPublishedSelectedEdgeIndex) {
         m_lastPublishedSelectedNodeId = m_selectedNodeId;
         m_lastPublishedSelectedFaceIndex = m_selectedFaceIndex;
         m_lastPublishedSelectedVertexIndex = m_selectedVertexIndex;
-        graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, m_selectedFaceIndex, m_selectedVertexIndex);
+        m_lastPublishedSelectedEdgeIndex = m_selectedEdgeIndex;
+        graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, m_selectedFaceIndex, m_selectedVertexIndex, m_selectedEdgeIndex);
     }
 
     auto nodes = graph.GetNodes();
@@ -1003,6 +1184,8 @@ void CADGui::RenderUI(
     RenderSketchPlanePromptModal(graph, device, exchange, nodes);
     RenderExtrudePromptModal(graph, device, exchange, nodes);
     RenderRevolvePromptModal(graph, device, exchange, nodes);
+    RenderFilletPromptModal(graph, device, exchange, nodes);
+    RenderChamferPromptModal(graph, device, exchange, nodes);
     RenderConflictPromptModal(graph, device, exchange, nodes);
     RenderEmptySketchPromptModal(graph, device, exchange);
 
@@ -1046,6 +1229,10 @@ void CADGui::RenderUI(
                 prefix = p->IsFaceAssociative() ? "[DatumPlane (Face Tied)] " : (p->IsVertexAssociative() ? "[DatumPlane (Vertex Tied)] " : "[DatumPlane] ");
             } else if (auto a = std::dynamic_pointer_cast<DatumAxisNode>(node)) {
                 prefix = a->IsVertexAssociative() ? "[DatumAxis (Vertex Tied)] " : "[DatumAxis] ";
+            } else if (std::dynamic_pointer_cast<FilletNode>(node)) {
+                prefix = "[⌒ Fillet] ";
+            } else if (std::dynamic_pointer_cast<ChamferNode>(node)) {
+                prefix = "[⟍ Chamfer] ";
             }
 
             std::string label = prefix + node->GetName() + " (ID " + std::to_string(node->GetId()) + ")";
@@ -1211,6 +1398,50 @@ void CADGui::RenderUI(
                     ClearSubElementSelection();
                     graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
                     graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1);
+                }
+                ImGui::EndChild();
+                ImGui::PopStyleColor(2);
+                ImGui::Spacing();
+            } else if (m_selectedEdgeIndex >= 0) {
+                ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.22f, 0.17f, 0.05f, 0.9f));
+                ImGui::BeginChild("EdgeSubElementCard", ImVec2(0, 185), true);
+                ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.3f, 1.0f), "● Sub-Element Selected: Corner Edge #%d", m_selectedEdgeIndex);
+                float edgeLen = static_cast<float>(m_selectedEdgeP0.distance_to(m_selectedEdgeP1));
+                ImGui::Text("Length: %.2f m", edgeLen);
+                ImGui::Text("From: (%.2f, %.2f, %.2f)", m_selectedEdgeP0.x, m_selectedEdgeP0.y, m_selectedEdgeP0.z);
+                ImGui::Text("To:   (%.2f, %.2f, %.2f)", m_selectedEdgeP1.x, m_selectedEdgeP1.y, m_selectedEdgeP1.z);
+                ImGui::Spacing();
+
+                ImGui::SetNextItemWidth(90.0f);
+                ImGui::InputFloat("##EdgeFilletR", &m_newFilletRadius, 0.05f, 0.2f, "%.2f m");
+                if (m_newFilletRadius < 0.01f) m_newFilletRadius = 0.01f;
+                ImGui::SameLine();
+                if (ImGui::Button("⌒ Create Fillet", ImVec2(-1, 24))) {
+                    std::string name = "Fillet_" + std::to_string(m_shapeCounter++);
+                    auto fillet = std::make_shared<FilletNode>(name, selectedNode, m_selectedEdgeIndex, m_newFilletRadius);
+                    graph.AddNode(fillet);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    SetSelectedNodeId(fillet->GetId());
+                }
+
+                ImGui::SetNextItemWidth(90.0f);
+                ImGui::InputFloat("##EdgeChamferD", &m_newChamferDistance, 0.05f, 0.2f, "%.2f m");
+                if (m_newChamferDistance < 0.01f) m_newChamferDistance = 0.01f;
+                ImGui::SameLine();
+                if (ImGui::Button("⟍ Create Chamfer", ImVec2(-1, 24))) {
+                    std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
+                    auto chamfer = std::make_shared<ChamferNode>(name, selectedNode, m_selectedEdgeIndex, m_newChamferDistance);
+                    graph.AddNode(chamfer);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                    SetSelectedNodeId(chamfer->GetId());
+                }
+
+                if (ImGui::Button("✕ Deselect Edge (Select Whole Model)", ImVec2(-1, 22))) {
+                    ClearSubElementSelection();
+                    graph.SetSubElementSelection(m_selectedNodeId, -1, -1, -1);
+                    graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1, -1);
                 }
                 ImGui::EndChild();
                 ImGui::PopStyleColor(2);
@@ -1581,6 +1812,78 @@ void CADGui::RenderUI(
                                                              Geom::Axis3D::Y(ax.origin);
                     axisNode->SetAxis(newAx);
                     graph.EvaluateDirtyNodes(device, exchange);
+                }
+            } else if (auto fillet = std::dynamic_pointer_cast<FilletNode>(selectedNode)) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "⌒ Fillet Feature Properties:");
+                ImGui::Separator();
+
+                if (auto target = fillet->GetTargetFeature()) {
+                    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1.0f), "Linked to Model: '%s' (Edge #%d)", target->GetName().c_str(), fillet->GetReferencedEdgeIndex());
+                    if (ImGui::Button("Jump to Target Model", ImVec2(-1, 24))) {
+                        SetSelectedNodeId(target->GetId());
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Target Model: MISSING / DELETED!");
+                }
+
+                if (fillet->HasConflict()) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[!] CONFLICT: %s", fillet->GetConflictMessage().c_str());
+                }
+
+                float r = fillet->GetRadius();
+                if (ImGui::InputFloat("Fillet Radius", &r, 0.05f, 0.2f, "%.2f m")) {
+                    fillet->SetRadius(r);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                if (m_selectedEdgeIndex >= 0 && m_selectedNodeId != 0 && m_selectedNodeId != fillet->GetId()) {
+                    for (const auto& n : nodes) {
+                        if (n->GetId() == m_selectedNodeId) {
+                            std::string reattachLabel = "Re-attach Fillet to Selected Edge #" + std::to_string(m_selectedEdgeIndex) + " on '" + n->GetName() + "'";
+                            if (ImGui::Button(reattachLabel.c_str(), ImVec2(-1, 26))) {
+                                fillet->SetEdgeReference(n, m_selectedEdgeIndex);
+                                graph.EvaluateDirtyNodes(device, exchange);
+                            }
+                            break;
+                        }
+                    }
+                }
+            } else if (auto chamfer = std::dynamic_pointer_cast<ChamferNode>(selectedNode)) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.75f, 0.55f, 1.0f, 1.0f), "⟍ Chamfer Feature Properties:");
+                ImGui::Separator();
+
+                if (auto target = chamfer->GetTargetFeature()) {
+                    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1.0f), "Linked to Model: '%s' (Edge #%d)", target->GetName().c_str(), chamfer->GetReferencedEdgeIndex());
+                    if (ImGui::Button("Jump to Target Model", ImVec2(-1, 24))) {
+                        SetSelectedNodeId(target->GetId());
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Target Model: MISSING / DELETED!");
+                }
+
+                if (chamfer->HasConflict()) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[!] CONFLICT: %s", chamfer->GetConflictMessage().c_str());
+                }
+
+                float d = chamfer->GetDistance();
+                if (ImGui::InputFloat("Chamfer Distance", &d, 0.05f, 0.2f, "%.2f m")) {
+                    chamfer->SetDistance(d);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                if (m_selectedEdgeIndex >= 0 && m_selectedNodeId != 0 && m_selectedNodeId != chamfer->GetId()) {
+                    for (const auto& n : nodes) {
+                        if (n->GetId() == m_selectedNodeId) {
+                            std::string reattachLabel = "Re-attach Chamfer to Selected Edge #" + std::to_string(m_selectedEdgeIndex) + " on '" + n->GetName() + "'";
+                            if (ImGui::Button(reattachLabel.c_str(), ImVec2(-1, 26))) {
+                                chamfer->SetEdgeReference(n, m_selectedEdgeIndex);
+                                graph.EvaluateDirtyNodes(device, exchange);
+                            }
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -1960,6 +2263,30 @@ void CADGui::RenderSketchCanvas(
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete selected vertex handle (Del)");
             ImGui::SameLine();
+
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::InputFloat("##SkFilletR", &m_sketchFilletRadius, 0.05f, 0.1f, "%.2fm");
+            if (m_sketchFilletRadius < 0.01f) m_sketchFilletRadius = 0.01f;
+            ImGui::SameLine();
+            if (ImGui::Button("⌒ Fillet", ImVec2(66, 28))) {
+                if (Sketch::ApplyFillet2D(selShape.points, static_cast<size_t>(m_selectedVertexIdx), m_sketchFilletRadius, selShape.isClosed, 6)) {
+                    m_selectedVertexIdx = -1;
+                }
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Apply round fillet arc of radius %.2fm to selected corner vertex", m_sketchFilletRadius);
+            ImGui::SameLine();
+
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::InputFloat("##SkChamferD", &m_sketchChamferDist, 0.05f, 0.1f, "%.2fm");
+            if (m_sketchChamferDist < 0.01f) m_sketchChamferDist = 0.01f;
+            ImGui::SameLine();
+            if (ImGui::Button("⟍ Chamfer", ImVec2(78, 28))) {
+                if (Sketch::ApplyChamfer2D(selShape.points, static_cast<size_t>(m_selectedVertexIdx), m_sketchChamferDist, selShape.isClosed)) {
+                    m_selectedVertexIdx = -1;
+                }
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Apply beveled chamfer of distance %.2fm to selected corner vertex", m_sketchChamferDist);
+            ImGui::SameLine();
         } else {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.28f, 0.28f, 1.0f));
@@ -1970,6 +2297,32 @@ void CADGui::RenderSketchCanvas(
             }
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete selected shape (Del)");
+            ImGui::SameLine();
+
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::InputFloat("##AllFilletR", &m_sketchFilletRadius, 0.05f, 0.1f, "%.2fm");
+            if (m_sketchFilletRadius < 0.01f) m_sketchFilletRadius = 0.01f;
+            ImGui::SameLine();
+            if (ImGui::Button("⌒ Fillet All", ImVec2(80, 28))) {
+                size_t origSize = selShape.points.size();
+                for (int c = static_cast<int>(origSize) - 1; c >= 0; --c) {
+                    Sketch::ApplyFillet2D(selShape.points, static_cast<size_t>(c), m_sketchFilletRadius, selShape.isClosed, 6);
+                }
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Apply fillet arc to all corners of this shape");
+            ImGui::SameLine();
+
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::InputFloat("##AllChamferD", &m_sketchChamferDist, 0.05f, 0.1f, "%.2fm");
+            if (m_sketchChamferDist < 0.01f) m_sketchChamferDist = 0.01f;
+            ImGui::SameLine();
+            if (ImGui::Button("⟍ Chamfer All", ImVec2(92, 28))) {
+                size_t origSize = selShape.points.size();
+                for (int c = static_cast<int>(origSize) - 1; c >= 0; --c) {
+                    Sketch::ApplyChamfer2D(selShape.points, static_cast<size_t>(c), m_sketchChamferDist, selShape.isClosed);
+                }
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Apply beveled chamfer to all corners of this shape");
             ImGui::SameLine();
         }
     }
