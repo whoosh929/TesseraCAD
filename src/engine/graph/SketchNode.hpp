@@ -34,8 +34,11 @@ public:
     ) : DAGNode(std::move(name)),
         m_plane(plane),
         m_profile(std::move(initialProfile)) {
-        if (m_profile.empty()) {
-            SetPresetRectangle(3.0f, 2.0f);
+        if (!m_profile.empty()) {
+            m_shapes = { m_profile };
+            m_preset = SketchPreset::Custom;
+        } else {
+            m_preset = SketchPreset::Custom;
         }
     }
 
@@ -46,8 +49,11 @@ public:
     ) : DAGNode(std::move(name)),
         m_profile(std::move(initialProfile)) {
         SetDatumPlaneReference(datumPlane);
-        if (m_profile.empty()) {
-            SetPresetRectangle(3.0f, 2.0f);
+        if (!m_profile.empty()) {
+            m_shapes = { m_profile };
+            m_preset = SketchPreset::Custom;
+        } else {
+            m_preset = SketchPreset::Custom;
         }
     }
 
@@ -97,7 +103,12 @@ public:
         }
     }
 
-    [[nodiscard]] const std::vector<std::array<float, 2>>& GetProfile() const noexcept { return m_profile; }
+    [[nodiscard]] const std::vector<std::array<float, 2>>& GetProfile() const noexcept {
+        if (m_profile.empty() && !m_shapes.empty()) {
+            const_cast<SketchNode*>(this)->m_profile = m_shapes[0];
+        }
+        return m_profile;
+    }
     void SetProfile(std::vector<std::array<float, 2>> profile) {
         m_profile = std::move(profile);
         m_shapes = { m_profile };
@@ -354,16 +365,18 @@ public:
     }
     void SetParentFeature(std::shared_ptr<DAGNode> parent) noexcept {
         m_parentFeature = parent;
-        m_isConsumed = (parent != nullptr);
     }
     [[nodiscard]] bool HasParentFeature() const noexcept override {
         return !m_parentFeature.expired();
     }
 
     void MarkDirty() override {
+        if (m_isDirty.load(std::memory_order_acquire)) return;
         DAGNode::MarkDirty();
         if (auto parent = m_parentFeature.lock()) {
-            parent->MarkDirty();
+            if (!parent->IsDirty()) {
+                parent->MarkDirty();
+            }
         }
     }
 
@@ -375,7 +388,7 @@ public:
     void Evaluate(RHI::RHIDevice* device, AtomicMeshExchange& exchange) override {
         (void)device;
         (void)exchange;
-        if (!IsDirty() || m_profile.size() < 3) return;
+        if (!IsDirty()) return;
 
         if (m_datumPlaneRef) {
             m_customPlane = m_datumPlaneRef->GetPlane();
@@ -383,6 +396,15 @@ public:
             m_position[0] = static_cast<float>(m_customPlane.origin.x);
             m_position[1] = static_cast<float>(m_customPlane.origin.y);
             m_position[2] = static_cast<float>(m_customPlane.origin.z);
+        }
+
+        const auto& shapesToRender = GetShapes();
+        if (m_profile.size() < 3 && shapesToRender.empty()) {
+            m_cachedVertices.clear();
+            m_cachedIndices.clear();
+            m_cachedEdges.clear();
+            ClearDirty();
+            return;
         }
 
         uint64_t currentGen = GetGeneration();
@@ -395,7 +417,6 @@ public:
         std::vector<uint32_t> indices;
         std::vector<uint32_t> featureEdges;
 
-        const auto& shapesToRender = GetShapes();
         for (const auto& poly : shapesToRender) {
             if (poly.size() < 3) continue;
 
@@ -464,7 +485,7 @@ public:
 
 private:
     SketchPlane m_plane{SketchPlane::XZ_Ground};
-    SketchPreset m_preset{SketchPreset::Rectangle};
+    SketchPreset m_preset{SketchPreset::Custom};
     std::vector<std::array<float, 2>> m_profile;
     std::vector<std::vector<std::array<float, 2>>> m_shapes;
     std::map<size_t, std::map<size_t, float>> m_shapeEdgeConstraints;

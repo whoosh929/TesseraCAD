@@ -346,5 +346,63 @@ public:
     }
 };
 
+// =============================================================================
+// 3D Measurement Data & Calculation
+// =============================================================================
+
+struct MeasurementResult {
+    Point3D p1{0.0, 0.0, 0.0};
+    Point3D p2{0.0, 0.0, 0.0};
+    double directDistance{0.0};
+    double deltaX{0.0};
+    double deltaY{0.0};
+    double deltaZ{0.0};
+    double absDeltaX{0.0};
+    double absDeltaY{0.0};
+    double absDeltaZ{0.0};
+    double planarDistXY{0.0}; // Front plane projection
+    double planarDistXZ{0.0}; // Horizontal ground plane projection
+    double planarDistYZ{0.0}; // Side plane projection
+    double angleDegX{0.0};    // Angle of vector relative to +X axis [0..180 deg]
+    double angleDegY{0.0};    // Angle of vector relative to +Y axis [0..180 deg]
+    double angleDegZ{0.0};    // Angle of vector relative to +Z axis [0..180 deg]
+    double elevationDeg{0.0}; // Inclination angle from horizontal ground XZ plane [-90..90 deg]
+    double azimuthDeg{0.0};   // Heading angle in horizontal ground XZ plane [-180..180 deg]
+    bool isValid{false};
+};
+
+inline MeasurementResult ComputeMeasurement(const Point3D& p1, const Point3D& p2) noexcept {
+    constexpr double RAD_TO_DEG = 180.0 / 3.14159265358979323846;
+    MeasurementResult res;
+    res.isValid = true;
+    res.p1 = p1;
+    res.p2 = p2;
+    res.deltaX = p2.x - p1.x;
+    res.deltaY = p2.y - p1.y;
+    res.deltaZ = p2.z - p1.z;
+    res.absDeltaX = std::abs(res.deltaX);
+    res.absDeltaY = std::abs(res.deltaY);
+    res.absDeltaZ = std::abs(res.deltaZ);
+    res.directDistance = std::sqrt(res.deltaX * res.deltaX + res.deltaY * res.deltaY + res.deltaZ * res.deltaZ);
+    res.planarDistXY = std::hypot(res.deltaX, res.deltaY);
+    res.planarDistXZ = std::hypot(res.deltaX, res.deltaZ);
+    res.planarDistYZ = std::hypot(res.deltaY, res.deltaZ);
+
+    if (res.directDistance > 1e-9) {
+        double invD = 1.0 / res.directDistance;
+        double ux = std::clamp(res.deltaX * invD, -1.0, 1.0);
+        double uy = std::clamp(res.deltaY * invD, -1.0, 1.0);
+        double uz = std::clamp(res.deltaZ * invD, -1.0, 1.0);
+
+        res.angleDegX = std::acos(ux) * RAD_TO_DEG;
+        res.angleDegY = std::acos(uy) * RAD_TO_DEG;
+        res.angleDegZ = std::acos(uz) * RAD_TO_DEG;
+        res.elevationDeg = std::asin(uy) * RAD_TO_DEG;
+        res.azimuthDeg = std::atan2(res.deltaZ, res.deltaX) * RAD_TO_DEG;
+    }
+
+    return res;
+}
+
 } // namespace Tessera::Geom
 

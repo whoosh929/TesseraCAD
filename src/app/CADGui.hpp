@@ -116,11 +116,77 @@ public:
     void CancelFeaturePreview(ParametricGraph& graph, RHI::RHIDevice* device, AtomicMeshExchange& exchange);
     void RenderFeaturePreviewDialog(ParametricGraph& graph, RHI::RHIDevice* device, AtomicMeshExchange& exchange);
     void EnterSketchMode(uint64_t sketchId) noexcept { 
+        CloseMeasurement();
         m_sketchModeActive = true; 
         m_activeSketchId = sketchId;
         m_paletteTab = 1; // Switch to 2D Sketching tab
+        m_mouseTool = SketchMouseTool::SelectMove;
+        m_currentEditingSketchId = 0;
     }
-    void ExitSketchMode() noexcept { m_sketchModeActive = false; }
+    void ExitSketchMode() noexcept { 
+        m_sketchModeActive = false; 
+        m_currentEditingSketchId = 0;
+    }
+    [[nodiscard]] SketchMouseTool GetSketchMouseTool() const noexcept { return m_mouseTool; }
+    void SetSketchMouseTool(SketchMouseTool tool) noexcept { m_mouseTool = tool; }
+    [[nodiscard]] uint64_t GetActiveSketchId() const noexcept { return m_activeSketchId; }
+
+    // 3D Measurement Tool
+    [[nodiscard]] bool IsMeasureToolActive() const noexcept { return m_measureToolActive; }
+    [[nodiscard]] bool IsMeasureDialogOpen() const noexcept { return m_showMeasureDialog; }
+    void CloseMeasurement() noexcept {
+        m_measureToolActive = false;
+        m_showMeasureDialog = false;
+        ClearMeasurePoints();
+    }
+    void SetMeasureToolActive(bool active) noexcept { 
+        m_measureToolActive = active; 
+        if (active) {
+            m_showMeasureDialog = true;
+            if (m_selectedVertexPositions.size() >= 2) {
+                m_measureP1 = m_selectedVertexPositions[0];
+                m_measureHasP1 = true;
+                m_measureP2 = m_selectedVertexPositions[1];
+                m_measureHasP2 = true;
+            }
+        } else {
+            CloseMeasurement();
+        }
+    }
+    void ToggleMeasureTool() noexcept { 
+        if (m_measureToolActive || m_showMeasureDialog || m_measureHasP1) {
+            CloseMeasurement();
+        } else {
+            SetMeasureToolActive(true);
+        }
+    }
+    void SetMeasurePoint1(const Geom::Point3D& p) noexcept {
+        m_measureP1 = p;
+        m_measureHasP1 = true;
+    }
+    void SetMeasurePoint2(const Geom::Point3D& p) noexcept {
+        m_measureP2 = p;
+        m_measureHasP2 = true;
+    }
+    void ClearMeasurePoints() noexcept {
+        m_measureHasP1 = false;
+        m_measureHasP2 = false;
+    }
+    void SwapMeasurePoints() noexcept {
+        if (m_measureHasP1 && m_measureHasP2) {
+            std::swap(m_measureP1, m_measureP2);
+        }
+    }
+    [[nodiscard]] bool HasMeasurePoint1() const noexcept { return m_measureHasP1; }
+    [[nodiscard]] bool HasMeasurePoint2() const noexcept { return m_measureHasP2; }
+    [[nodiscard]] const Geom::Point3D& GetMeasurePoint1() const noexcept { return m_measureP1; }
+    [[nodiscard]] const Geom::Point3D& GetMeasurePoint2() const noexcept { return m_measureP2; }
+    [[nodiscard]] Geom::MeasurementResult GetActiveMeasurement() const noexcept {
+        if (m_measureHasP1 && m_measureHasP2) {
+            return Geom::ComputeMeasurement(m_measureP1, m_measureP2);
+        }
+        return {};
+    }
 
     [[nodiscard]] uint64_t GetSelectedNodeId() const noexcept { return m_selectedNodeId; }
     void SetSelectedNodeId(uint64_t id) noexcept {
@@ -129,6 +195,10 @@ public:
             m_selectedFaceIndex = -1;
             m_selectedVertexIndex = -1;
             m_selectedEdgeIndex = -1;
+            m_selectedFaceIndices.clear();
+            m_selectedFacePlanes.clear();
+            m_selectedVertexIndices.clear();
+            m_selectedVertexPositions.clear();
             m_selectionScrollPending = true;
         }
     }
@@ -136,14 +206,66 @@ public:
     void SetSelectedVertex(int vIdx, Geom::Point3D pos) noexcept {
         m_selectedVertexIndex = vIdx;
         m_selectedVertexPos = pos;
+        m_selectedVertexIndices = {vIdx};
+        m_selectedVertexPositions = {pos};
         m_selectedFaceIndex = -1;
+        m_selectedFaceIndices.clear();
+        m_selectedFacePlanes.clear();
+        m_selectedEdgeIndex = -1;
+    }
+
+    void ToggleSelectedVertex(int vIdx, Geom::Point3D pos) noexcept {
+        auto it = std::find(m_selectedVertexIndices.begin(), m_selectedVertexIndices.end(), vIdx);
+        if (it != m_selectedVertexIndices.end()) {
+            size_t idx = static_cast<size_t>(std::distance(m_selectedVertexIndices.begin(), it));
+            m_selectedVertexIndices.erase(it);
+            if (idx < m_selectedVertexPositions.size()) {
+                m_selectedVertexPositions.erase(m_selectedVertexPositions.begin() + idx);
+            }
+        } else {
+            m_selectedVertexIndices.push_back(vIdx);
+            m_selectedVertexPositions.push_back(pos);
+        }
+        m_selectedVertexIndex = m_selectedVertexIndices.empty() ? -1 : m_selectedVertexIndices.back();
+        if (!m_selectedVertexPositions.empty()) {
+            m_selectedVertexPos = m_selectedVertexPositions.back();
+        }
+        m_selectedFaceIndex = -1;
+        m_selectedFaceIndices.clear();
+        m_selectedFacePlanes.clear();
         m_selectedEdgeIndex = -1;
     }
 
     void SetSelectedFace(int fIdx, Geom::Plane plane) noexcept {
         m_selectedFaceIndex = fIdx;
         m_selectedFacePlane = plane;
+        m_selectedFaceIndices = {fIdx};
+        m_selectedFacePlanes = {plane};
         m_selectedVertexIndex = -1;
+        m_selectedVertexIndices.clear();
+        m_selectedVertexPositions.clear();
+        m_selectedEdgeIndex = -1;
+    }
+
+    void ToggleSelectedFace(int fIdx, Geom::Plane plane) noexcept {
+        auto it = std::find(m_selectedFaceIndices.begin(), m_selectedFaceIndices.end(), fIdx);
+        if (it != m_selectedFaceIndices.end()) {
+            size_t idx = static_cast<size_t>(std::distance(m_selectedFaceIndices.begin(), it));
+            m_selectedFaceIndices.erase(it);
+            if (idx < m_selectedFacePlanes.size()) {
+                m_selectedFacePlanes.erase(m_selectedFacePlanes.begin() + idx);
+            }
+        } else {
+            m_selectedFaceIndices.push_back(fIdx);
+            m_selectedFacePlanes.push_back(plane);
+        }
+        m_selectedFaceIndex = m_selectedFaceIndices.empty() ? -1 : m_selectedFaceIndices.back();
+        if (!m_selectedFacePlanes.empty()) {
+            m_selectedFacePlane = m_selectedFacePlanes.back();
+        }
+        m_selectedVertexIndex = -1;
+        m_selectedVertexIndices.clear();
+        m_selectedVertexPositions.clear();
         m_selectedEdgeIndex = -1;
     }
 
@@ -152,13 +274,21 @@ public:
         m_selectedEdgeP0 = p0;
         m_selectedEdgeP1 = p1;
         m_selectedFaceIndex = -1;
+        m_selectedFaceIndices.clear();
+        m_selectedFacePlanes.clear();
         m_selectedVertexIndex = -1;
+        m_selectedVertexIndices.clear();
+        m_selectedVertexPositions.clear();
     }
 
     void ClearSubElementSelection() noexcept {
         m_selectedFaceIndex = -1;
         m_selectedVertexIndex = -1;
         m_selectedEdgeIndex = -1;
+        m_selectedFaceIndices.clear();
+        m_selectedFacePlanes.clear();
+        m_selectedVertexIndices.clear();
+        m_selectedVertexPositions.clear();
     }
 
     [[nodiscard]] int GetSelectedFaceIndex() const noexcept { return m_selectedFaceIndex; }
@@ -168,6 +298,43 @@ public:
     [[nodiscard]] Geom::Point3D GetSelectedVertexPos() const noexcept { return m_selectedVertexPos; }
     [[nodiscard]] Geom::Point3D GetSelectedEdgeP0() const noexcept { return m_selectedEdgeP0; }
     [[nodiscard]] Geom::Point3D GetSelectedEdgeP1() const noexcept { return m_selectedEdgeP1; }
+
+    [[nodiscard]] const std::vector<int>& GetSelectedVertexIndices() const noexcept { return m_selectedVertexIndices; }
+    [[nodiscard]] const std::vector<Geom::Point3D>& GetSelectedVertexPositions() const noexcept { return m_selectedVertexPositions; }
+    [[nodiscard]] const std::vector<int>& GetSelectedFaceIndices() const noexcept { return m_selectedFaceIndices; }
+    [[nodiscard]] const std::vector<Geom::Plane>& GetSelectedFacePlanes() const noexcept { return m_selectedFacePlanes; }
+
+    void SetSelectionResolutionPreset(SelectionResolutionPreset preset) noexcept {
+        m_selectionResPreset = preset;
+        switch (preset) {
+            case SelectionResolutionPreset::UltraFine:
+                m_pointPickTolerance = 0.05;
+                m_edgePickTolerance = 0.05;
+                break;
+            case SelectionResolutionPreset::Fine:
+                m_pointPickTolerance = 0.12;
+                m_edgePickTolerance = 0.12;
+                break;
+            case SelectionResolutionPreset::Medium:
+                m_pointPickTolerance = 0.25;
+                m_edgePickTolerance = 0.25;
+                break;
+            case SelectionResolutionPreset::Coarse:
+                m_pointPickTolerance = 0.45;
+                m_edgePickTolerance = 0.45;
+                break;
+            case SelectionResolutionPreset::Custom:
+                break;
+        }
+    }
+
+    [[nodiscard]] SelectionResolutionPreset GetSelectionResolutionPreset() const noexcept { return m_selectionResPreset; }
+    [[nodiscard]] double GetPointPickTolerance() const noexcept { return m_pointPickTolerance; }
+    void SetPointPickTolerance(double tol) noexcept { m_pointPickTolerance = tol; m_selectionResPreset = SelectionResolutionPreset::Custom; }
+    [[nodiscard]] double GetEdgePickTolerance() const noexcept { return m_edgePickTolerance; }
+    void SetEdgePickTolerance(double tol) noexcept { m_edgePickTolerance = tol; m_selectionResPreset = SelectionResolutionPreset::Custom; }
+    [[nodiscard]] SelectionFilter GetSelectionFilter() const noexcept { return m_selectionFilter; }
+    void SetSelectionFilter(SelectionFilter filter) noexcept { m_selectionFilter = filter; }
 
     void OpenConflictPrompt(uint64_t nodeId) noexcept {
         m_conflictedNodeId = nodeId;
@@ -255,6 +422,13 @@ private:
     void RenderDimensionEditModal();
     static void EnforceShapeConstraints(CanvasShape& shape, int pinnedVertexIdx = -1);
 
+    void RenderMeasureToolDialog();
+    void RenderMeasureVisualOverlay(Camera& camera, ViewportRenderer& renderer);
+
+    // Target Solid Resolution & Cut Preview Overlay
+    [[nodiscard]] std::shared_ptr<DAGNode> ResolveTargetSolid(const std::shared_ptr<DAGNode>& featureOrSketch, const ParametricGraph& graph) const;
+    void RenderCutPreviewVisualOverlay(Camera& camera, ViewportRenderer& renderer);
+
     bool m_initialized{false};
     RHI::RHIDevice* m_rhiDevice{nullptr};
 
@@ -272,7 +446,7 @@ private:
     uint64_t m_activeSketchId{0};
 
     // 2D Mouse Drawing Tools & Canvas State
-    SketchMouseTool m_mouseTool{SketchMouseTool::Rectangle};
+    SketchMouseTool m_mouseTool{SketchMouseTool::SelectMove};
     bool m_gridSnapEnable{true};
     float m_gridSnapSize{0.5f};
     float m_canvasPanX{320.0f};
@@ -369,6 +543,14 @@ private:
     Geom::Point3D m_selectedVertexPos{0.0, 0.0, 0.0};
     Geom::Point3D m_selectedEdgeP0{0.0, 0.0, 0.0};
     Geom::Point3D m_selectedEdgeP1{0.0, 0.0, 0.0};
+    std::vector<int> m_selectedFaceIndices;
+    std::vector<Geom::Plane> m_selectedFacePlanes;
+    std::vector<int> m_selectedVertexIndices;
+    std::vector<Geom::Point3D> m_selectedVertexPositions;
+    SelectionResolutionPreset m_selectionResPreset{SelectionResolutionPreset::Medium};
+    double m_pointPickTolerance{0.25};
+    double m_edgePickTolerance{0.25};
+    SelectionFilter m_selectionFilter{SelectionFilter::All};
     uint64_t m_lastPublishedSelectedNodeId{std::numeric_limits<uint64_t>::max()};
     int m_lastPublishedSelectedFaceIndex{-1};
     int m_lastPublishedSelectedVertexIndex{-1};
@@ -399,6 +581,14 @@ private:
     // Empty Sketch Exit Confirmation Modal
     bool m_showEmptySketchExitPrompt{false};
     uint64_t m_emptySketchToExitId{0};
+
+    // 3D Measurement Tool State
+    bool m_measureToolActive{false};
+    bool m_showMeasureDialog{false};
+    bool m_measureHasP1{false};
+    bool m_measureHasP2{false};
+    Geom::Point3D m_measureP1{0.0, 0.0, 0.0};
+    Geom::Point3D m_measureP2{0.0, 0.0, 0.0};
 
     // Viewport display toggles
     bool m_showWireframe{true};

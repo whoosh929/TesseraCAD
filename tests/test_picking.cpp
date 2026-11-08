@@ -574,11 +574,12 @@ bool TestStandaloneSketchVisibilityAndVisualStyling() {
     graph.AddNode(extrude);
     TEST_ASSERT(sketch->HasParentFeature(), "Sketch must now have a parent feature");
 
-    // When sketch has a parent feature, it is NOT rendered standalone even if selected
+    // When sketch is selected in model tree, its outline and transparent shading MUST render in 3D viewport
     graph.PublishCombinedSceneMesh(&mockDevice, exchange, sketch->GetId());
     auto meshChildSketch = exchange.AcquireLatest();
     TEST_ASSERT(meshChildSketch->indexCount > 0, "Solid extrude body must be published to solid mesh buffer");
-    TEST_ASSERT(meshChildSketch->sketchIndexCount == 0, "Child sketch associated with feature must not render standalone");
+    TEST_ASSERT(meshChildSketch->sketchIndexCount > 0 || meshChildSketch->sketchEdgeIndexCount > 0, 
+                "Selected sketch must display outline/shading in 3D viewport");
 
     // 6. Delete Extrude feature: sketch is promoted back to parentless
     graph.RemoveNode(extrude->GetId());
@@ -3111,6 +3112,582 @@ bool TestExtrudedCutAndRevolvedCutOperations() {
     return true;
 }
 
+bool TestMultiVertexPointSelectionWithKeyboardModifier() {
+    std::cout << "[Test] Multi-Vertex Point Selection with Keyboard Modifier...\n";
+
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    auto sketch = std::make_shared<SketchNode>("Base_Sketch");
+    sketch->SetPresetRectangle(2.0f, 2.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Base_Box", sketch, 2.0f);
+    graph.AddNode(extrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    const auto& verts = extrude->GetCachedVertices();
+    TEST_ASSERT(verts.size() >= 8, "Box extrude must have at least 8 vertices");
+
+    // 1. Single click selects Vertex 0
+    graph.SetSubElementSelection(extrude->GetId(), -1, 0, -1);
+    TEST_ASSERT(graph.GetSelectedVertexIndex() == 0, "Selected vertex index must be 0");
+    auto selVerts = graph.GetSelectedVertexIndices();
+    TEST_ASSERT(selVerts.size() == 1 && selVerts[0] == 0, "Initial selection contains only Vertex 0");
+
+    // 2. Holding Shift/Ctrl modifier: Toggle Vertex 1 (Add)
+    graph.ToggleVertexSelection(1);
+    selVerts = graph.GetSelectedVertexIndices();
+    TEST_ASSERT(selVerts.size() == 2, "Multi-selection must have 2 vertices");
+    TEST_ASSERT(selVerts[0] == 0 && selVerts[1] == 1, "Multi-selection must contain Vertex 0 and 1");
+
+    // 3. Holding Shift/Ctrl modifier: Toggle Vertex 3 (Add)
+    graph.ToggleVertexSelection(3);
+    selVerts = graph.GetSelectedVertexIndices();
+    TEST_ASSERT(selVerts.size() == 3, "Multi-selection must have 3 vertices");
+
+    // 4. Holding Shift/Ctrl modifier: Toggle Vertex 1 again (Remove/Deselect)
+    graph.ToggleVertexSelection(1);
+    selVerts = graph.GetSelectedVertexIndices();
+    TEST_ASSERT(selVerts.size() == 2, "Multi-selection must now have 2 vertices after deselecting Vertex 1");
+    TEST_ASSERT(selVerts[0] == 0 && selVerts[1] == 3, "Multi-selection must now contain Vertex 0 and 3");
+
+    // 5. Publish combined scene mesh with multiple vertices selected
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, extrude->GetId(), std::nullopt, std::nullopt, -1, nullptr, &selVerts);
+    auto payload = exchange.AcquireLatest();
+    TEST_ASSERT(payload != nullptr, "Payload must be published");
+    TEST_ASSERT(payload->selectedVertexBuffer != nullptr, "Selected vertex buffer must be populated with 3D markers and crosshairs");
+    TEST_ASSERT(payload->selectedEdgeIndexCount > 0, "Selected edge buffer must contain incident edges and crosshairs for all selected points");
+    TEST_ASSERT(payload->indexCount > 0, "Combined mesh buffer must contain unselected model triangles");
+
+    // 6. Clear selection
+    graph.ClearSubElementSelection();
+    TEST_ASSERT(graph.GetSelectedVertexIndices().empty(), "Clearing selection must empty vertex list");
+    TEST_ASSERT(graph.GetSelectedVertexIndex() == -1, "Primary selected vertex index must be -1");
+
+    return true;
+}
+
+bool TestMultiPlaneFaceSelectionWithKeyboardModifier() {
+    std::cout << "[Test] Multi-Plane Face Selection with Keyboard Modifier...\n";
+
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    auto sketch = std::make_shared<SketchNode>("Base_Sketch");
+    sketch->SetPresetRectangle(2.0f, 2.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Base_Box", sketch, 2.0f);
+    graph.AddNode(extrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(extrude->GetFaces().size() >= 6, "Box extrude must have 6 faces");
+
+    // 1. Single click selects Face 0
+    graph.SetSubElementSelection(extrude->GetId(), 0, -1, -1);
+    TEST_ASSERT(graph.GetSelectedFaceIndex() == 0, "Selected face index must be 0");
+    auto selFaces = graph.GetSelectedFaceIndices();
+    TEST_ASSERT(selFaces.size() == 1 && selFaces[0] == 0, "Initial selection contains only Face 0");
+
+    // 2. Holding Shift/Ctrl modifier: Toggle Face 2 (Add)
+    graph.ToggleFaceSelection(2);
+    selFaces = graph.GetSelectedFaceIndices();
+    TEST_ASSERT(selFaces.size() == 2, "Multi-selection must have 2 faces");
+    TEST_ASSERT(selFaces[0] == 0 && selFaces[1] == 2, "Multi-selection must contain Face 0 and Face 2");
+
+    // 3. Holding Shift/Ctrl modifier: Toggle Face 4 (Add)
+    graph.ToggleFaceSelection(4);
+    selFaces = graph.GetSelectedFaceIndices();
+    TEST_ASSERT(selFaces.size() == 3, "Multi-selection must have 3 faces");
+
+    // 4. Holding Shift/Ctrl modifier: Toggle Face 2 again (Remove/Deselect)
+    graph.ToggleFaceSelection(2);
+    selFaces = graph.GetSelectedFaceIndices();
+    TEST_ASSERT(selFaces.size() == 2, "Multi-selection must now have 2 faces");
+    TEST_ASSERT(selFaces[0] == 0 && selFaces[1] == 4, "Multi-selection must contain Face 0 and Face 4");
+
+    // 5. Publish combined scene mesh with multiple faces selected
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, extrude->GetId(), std::nullopt, std::nullopt, -1, &selFaces, nullptr);
+    auto payload = exchange.AcquireLatest();
+    TEST_ASSERT(payload != nullptr, "Payload must be published");
+    TEST_ASSERT(payload->selectedIndexCount > 0, "Selected triangle count must be > 0 for selected faces");
+    TEST_ASSERT(payload->selectedEdgeIndexCount > 0, "Selected perimeter edges must be > 0 for selected faces");
+    TEST_ASSERT(payload->indexCount > 0, "Combined index count must be > 0 for non-selected faces");
+
+    // 6. Clear selection
+    graph.ClearSubElementSelection();
+    TEST_ASSERT(graph.GetSelectedFaceIndices().empty(), "Clearing selection must empty face list");
+    TEST_ASSERT(graph.GetSelectedFaceIndex() == -1, "Primary selected face index must be -1");
+
+    return true;
+}
+
+bool TestSelectionResolutionSettingsAndTolerances() {
+    std::cout << "[Test] Selection Resolution Settings and Tolerances...\n";
+
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    auto sketch = std::make_shared<SketchNode>("Base_Sketch");
+    sketch->SetPresetRectangle(2.0f, 2.0f);
+    sketch->Evaluate(&mockDevice, exchange);
+    graph.AddNode(sketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Base_Box", sketch, 2.0f);
+    graph.AddNode(extrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    const auto& verts = extrude->GetCachedVertices();
+    TEST_ASSERT(!verts.empty(), "Box vertices must not be empty");
+
+    // Pick vertex 0
+    Point3D v0(verts[0].position[0], verts[0].position[1], verts[0].position[2]);
+
+    // Construct a ray that passes 0.15m away from vertex 0
+    Point3D rayOrigin(v0.x + 0.15, v0.y + 0.15, v0.z + 5.0);
+    Vector3D rayDir(0.0, 0.0, -1.0);
+    // Closest approach distance to v0 is sqrt(0.15^2 + 0.15^2) ≈ 0.212m
+
+    // 1. Test UltraFine resolution (0.05m tolerance): distance ~0.21m > 0.05m -> Must NOT hit vertex!
+    auto resultUltraFine = graph.PickSubElement(rayOrigin, rayDir, extrude->GetId(), 0.05, 0.05, SelectionFilter::All);
+    TEST_ASSERT(resultUltraFine.vertexIndex == -1, "UltraFine (0.05m) must not hit vertex 0.21m away");
+
+    // 2. Test Coarse resolution (0.45m tolerance): distance ~0.21m < 0.45m -> Must hit vertex!
+    auto resultCoarse = graph.PickSubElement(rayOrigin, rayDir, extrude->GetId(), 0.45, 0.45, SelectionFilter::All);
+    TEST_ASSERT(resultCoarse.vertexIndex >= 0, "Coarse (0.45m) must hit vertex near v0");
+    Point3D hitVertPos(verts[resultCoarse.vertexIndex].position[0], verts[resultCoarse.vertexIndex].position[1], verts[resultCoarse.vertexIndex].position[2]);
+    double distToRay = std::hypot(hitVertPos.x - rayOrigin.x, hitVertPos.y - rayOrigin.y);
+    TEST_ASSERT(distToRay <= 0.45, "Hit vertex must be within 0.45m tolerance of ray");
+
+    // 3. Test SelectionFilter::PlanesOnly:
+    // Ray aimed directly at front face of the box (X=0.0, Y=1.0, Z=5.0) pointing along -Z
+    Point3D rayFace(0.0, 1.0, 5.0);
+    auto resultPlanesOnly = graph.PickSubElement(rayFace, rayDir, extrude->GetId(), 0.25, 0.25, SelectionFilter::PlanesOnly);
+    TEST_ASSERT(resultPlanesOnly.vertexIndex == -1, "PlanesOnly filter must not pick vertex");
+    TEST_ASSERT(resultPlanesOnly.faceIndex >= 0, "PlanesOnly filter must pick intersected face");
+
+    // 4. Test SelectionFilter::PointsOnly:
+    // Ray aimed directly at center of face (far from any vertex)
+    auto resultPointsOnly = graph.PickSubElement(rayFace, rayDir, extrude->GetId(), 0.10, 0.10, SelectionFilter::PointsOnly);
+    TEST_ASSERT(resultPointsOnly.vertexIndex == -1, "PointsOnly filter far from vertex must not pick vertex");
+    TEST_ASSERT(resultPointsOnly.faceIndex == -1, "PointsOnly filter must not pick face");
+
+    // 5. Test SelectionFilter::EdgesOnly:
+    // Ray aimed at center of face has no edges nearby
+    auto resultEdgesOnly = graph.PickSubElement(rayFace, rayDir, extrude->GetId(), 0.10, 0.10, SelectionFilter::EdgesOnly);
+    TEST_ASSERT(resultEdgesOnly.edgeIndex == -1, "EdgesOnly filter far from edge must not pick edge");
+    TEST_ASSERT(resultEdgesOnly.faceIndex == -1, "EdgesOnly filter must not pick face");
+
+    return true;
+}
+
+bool TestComputeMeasurementRobustSpatialCalculations() {
+    std::cout << "[Test] 3D Measure Tool Robust Spatial Calculations (X/Y/Z Deltas & Angles)...\n";
+
+    // 1. Points along primary axes
+    Point3D origin(0.0, 0.0, 0.0);
+    Point3D alongX(4.0, 0.0, 0.0);
+    auto mX = ComputeMeasurement(origin, alongX);
+    TEST_ASSERT(std::abs(mX.directDistance - 4.0) < 1e-6, "Direct distance along X must be 4.0");
+    TEST_ASSERT(std::abs(mX.deltaX - 4.0) < 1e-6, "Delta X must be 4.0");
+    TEST_ASSERT(std::abs(mX.deltaY) < 1e-6, "Delta Y must be 0.0");
+    TEST_ASSERT(std::abs(mX.deltaZ) < 1e-6, "Delta Z must be 0.0");
+    TEST_ASSERT(std::abs(mX.angleDegX - 0.0) < 1e-4, "Angle to X-axis must be 0 deg");
+    TEST_ASSERT(std::abs(mX.angleDegY - 90.0) < 1e-4, "Angle to Y-axis must be 90 deg");
+    TEST_ASSERT(std::abs(mX.angleDegZ - 90.0) < 1e-4, "Angle to Z-axis must be 90 deg");
+    TEST_ASSERT(std::abs(mX.elevationDeg - 0.0) < 1e-4, "Incline from horizontal must be 0 deg");
+
+    // 2. Vertical points along Y axis
+    Point3D alongY(0.0, 5.0, 0.0);
+    auto mY = ComputeMeasurement(origin, alongY);
+    TEST_ASSERT(std::abs(mY.directDistance - 5.0) < 1e-6, "Direct distance along Y must be 5.0");
+    TEST_ASSERT(std::abs(mY.deltaX) < 1e-6, "Delta X must be 0.0");
+    TEST_ASSERT(std::abs(mY.deltaY - 5.0) < 1e-6, "Delta Y must be 5.0");
+    TEST_ASSERT(std::abs(mY.deltaZ) < 1e-6, "Delta Z must be 0.0");
+    TEST_ASSERT(std::abs(mY.angleDegX - 90.0) < 1e-4, "Angle to X-axis must be 90 deg");
+    TEST_ASSERT(std::abs(mY.angleDegY - 0.0) < 1e-4, "Angle to Y-axis must be 0 deg");
+    TEST_ASSERT(std::abs(mY.angleDegZ - 90.0) < 1e-4, "Angle to Z-axis must be 90 deg");
+    TEST_ASSERT(std::abs(mY.elevationDeg - 90.0) < 1e-4, "Incline from horizontal must be 90 deg (straight vertical)");
+
+    // 3. 45-degree slope in vertical XY plane
+    Point3D slopeXY(3.0, 3.0, 0.0);
+    auto mSlope = ComputeMeasurement(origin, slopeXY);
+    double expectedDist = std::sqrt(18.0);
+    TEST_ASSERT(std::abs(mSlope.directDistance - expectedDist) < 1e-6, "Distance on 45 deg slope must be sqrt(18)");
+    TEST_ASSERT(std::abs(mSlope.deltaX - 3.0) < 1e-6, "Delta X must be 3.0");
+    TEST_ASSERT(std::abs(mSlope.deltaY - 3.0) < 1e-6, "Delta Y must be 3.0");
+    TEST_ASSERT(std::abs(mSlope.deltaZ) < 1e-6, "Delta Z must be 0.0");
+    TEST_ASSERT(std::abs(mSlope.angleDegX - 45.0) < 1e-4, "Angle to X-axis must be 45 deg");
+    TEST_ASSERT(std::abs(mSlope.angleDegY - 45.0) < 1e-4, "Angle to Y-axis must be 45 deg");
+    TEST_ASSERT(std::abs(mSlope.angleDegZ - 90.0) < 1e-4, "Angle to Z-axis must be 90 deg");
+    TEST_ASSERT(std::abs(mSlope.elevationDeg - 45.0) < 1e-4, "Incline from horizontal must be 45 deg");
+
+    // 4. True arbitrary 3D spatial points (not aligned with any axis)
+    Point3D p1(1.0, 2.0, 3.0);
+    Point3D p2(3.0, 4.0, 4.0); // deltas: dx=2, dy=2, dz=1 -> D = sqrt(4+4+1) = 3.0
+    auto m3D = ComputeMeasurement(p1, p2);
+    TEST_ASSERT(std::abs(m3D.directDistance - 3.0) < 1e-6, "Direct 3D distance must be exactly 3.0");
+    TEST_ASSERT(std::abs(m3D.deltaX - 2.0) < 1e-6, "Delta X must be 2.0");
+    TEST_ASSERT(std::abs(m3D.deltaY - 2.0) < 1e-6, "Delta Y must be 2.0");
+    TEST_ASSERT(std::abs(m3D.deltaZ - 1.0) < 1e-6, "Delta Z must be 1.0");
+    TEST_ASSERT(std::abs(m3D.planarDistXZ - std::sqrt(5.0)) < 1e-6, "Planar ground distance XZ must be sqrt(5)");
+    TEST_ASSERT(std::abs(m3D.planarDistXY - std::sqrt(8.0)) < 1e-6, "Planar front distance XY must be sqrt(8)");
+
+    // Spatial angles:
+    // cos(angleX) = 2/3 -> angleX ≈ 48.1897 deg
+    double expectedAngleX = std::acos(2.0 / 3.0) * (180.0 / 3.14159265358979323846);
+    TEST_ASSERT(std::abs(m3D.angleDegX - expectedAngleX) < 1e-3, "Angle to X-axis must match acos(2/3)");
+
+    // cos(angleY) = 2/3 -> angleY ≈ 48.1897 deg
+    double expectedAngleY = std::acos(2.0 / 3.0) * (180.0 / 3.14159265358979323846);
+    TEST_ASSERT(std::abs(m3D.angleDegY - expectedAngleY) < 1e-3, "Angle to Y-axis must match acos(2/3)");
+
+    // cos(angleZ) = 1/3 -> angleZ ≈ 70.5288 deg
+    double expectedAngleZ = std::acos(1.0 / 3.0) * (180.0 / 3.14159265358979323846);
+    TEST_ASSERT(std::abs(m3D.angleDegZ - expectedAngleZ) < 1e-3, "Angle to Z-axis must match acos(1/3)");
+
+    // Incline (elevation): sin(elevation) = 2/3 -> elevation ≈ 41.8103 deg
+    double expectedElev = std::asin(2.0 / 3.0) * (180.0 / 3.14159265358979323846);
+    TEST_ASSERT(std::abs(m3D.elevationDeg - expectedElev) < 1e-3, "Incline from horizontal must match asin(2/3)");
+
+    // Ground Azimuth: atan2(dz=1, dx=2) ≈ 26.565 deg
+    double expectedAzimuth = std::atan2(1.0, 2.0) * (180.0 / 3.14159265358979323846);
+    TEST_ASSERT(std::abs(m3D.azimuthDeg - expectedAzimuth) < 1e-3, "Ground azimuth must match atan2(1, 2)");
+
+    // 5. Reverse measurement (p2 to p1): signed deltas negate, magnitudes and absolute distances match
+    auto mRev = ComputeMeasurement(p2, p1);
+    TEST_ASSERT(std::abs(mRev.directDistance - m3D.directDistance) < 1e-6, "Reverse distance must be identical");
+    TEST_ASSERT(std::abs(mRev.absDeltaX - m3D.absDeltaX) < 1e-6, "Absolute delta X must match");
+    TEST_ASSERT(std::abs(mRev.deltaX - (-m3D.deltaX)) < 1e-6, "Signed delta X must negate");
+    TEST_ASSERT(std::abs(mRev.deltaY - (-m3D.deltaY)) < 1e-6, "Signed delta Y must negate");
+    TEST_ASSERT(std::abs(mRev.deltaZ - (-m3D.deltaZ)) < 1e-6, "Signed delta Z must negate");
+
+    return true;
+}
+
+bool TestMeasurementStateAndClearWorkflow() {
+    std::cout << "[Test] Measurement State Workflow and Resetting...\n";
+
+    // 1. Default uninitialized measurement result
+    MeasurementResult emptyResult{};
+    TEST_ASSERT(emptyResult.directDistance == 0.0, "Empty measurement distance must be 0.0");
+    TEST_ASSERT(!emptyResult.isValid, "Default measurement must not be valid");
+
+    // 2. Computed measurement
+    Point3D p1(1.0, 2.0, 3.0);
+    Point3D p2(4.0, 6.0, 3.0);
+    auto m = ComputeMeasurement(p1, p2);
+    TEST_ASSERT(m.isValid, "Computed measurement must be valid");
+    TEST_ASSERT(std::abs(m.directDistance - 5.0) < 1e-6, "Distance between (1,2,3) and (4,6,3) must be 5.0");
+
+    // 3. Coincident points: distance is 0, angles are non-NaN
+    auto mCoincident = ComputeMeasurement(p1, p1);
+    TEST_ASSERT(std::abs(mCoincident.directDistance) < 1e-6, "Coincident points distance must be 0.0");
+    TEST_ASSERT(!std::isnan(mCoincident.angleDegX), "Angle X must not be NaN");
+    TEST_ASSERT(!std::isnan(mCoincident.elevationDeg), "Elevation must not be NaN");
+
+    return true;
+}
+
+bool TestExtrudeAndRevolveCutToggleOperation() {
+    std::cout << "[Test] Extrude and Revolve Cut Toggle Operation...\n";
+
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    // 1. Create Base Solid Box via Extrude (Boss)
+    auto baseSketch = std::make_shared<SketchNode>("BaseSketch", SketchPlane::XZ_Ground);
+    baseSketch->SetProfile({ {-2.0f, -2.0f}, {2.0f, -2.0f}, {2.0f, 2.0f}, {-2.0f, 2.0f} });
+    graph.AddNode(baseSketch);
+
+    auto baseExtrude = std::make_shared<ExtrudeNode>("BaseBlock", baseSketch, 2.0f, ExtrudeOperation::Boss);
+    graph.AddNode(baseExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!baseExtrude->IsCut(), "Base block must start as Boss operation");
+    TEST_ASSERT(!baseExtrude->IsConsumed(), "Base block must not be consumed");
+
+    // 2. Create Feature Sketch on top of Base Box
+    auto featSketch = std::make_shared<SketchNode>("FeatureSketch", SketchPlane::XZ_Ground);
+    featSketch->SetPosition(0.0f, 2.0f, 0.0f);
+    featSketch->SetProfile({ {-0.8f, -0.8f}, {0.8f, -0.8f}, {0.8f, 0.8f}, {-0.8f, 0.8f} });
+    graph.AddNode(featSketch);
+
+    // 3. Extrude feature starts as Boss (Add Material)
+    auto featExtrude = std::make_shared<ExtrudeNode>("ExtrudeFeature", featSketch, 1.0f, ExtrudeOperation::Boss);
+    graph.AddNode(featExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!featExtrude->IsCut(), "Extrude feature initially is Boss");
+    TEST_ASSERT(!baseExtrude->IsConsumed(), "Base block is not consumed when extrude is Boss");
+
+    // 4. Toggle Extrude feature to Cut (Subtract Material)
+    featExtrude->SetTargetFeature(baseExtrude);
+    featExtrude->SetHeight(-1.0f); // Cut 1m down into the base
+    featExtrude->SetOperation(ExtrudeOperation::Cut);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(featExtrude->IsCut(), "Extrude feature is now Cut");
+    TEST_ASSERT(baseExtrude->IsConsumed(), "Base block is consumed when extrude is toggled to Cut");
+    TEST_ASSERT(featExtrude->GetParentFeature() == baseExtrude, "Base block is parent feature of Cut");
+    TEST_ASSERT(!featExtrude->GetCachedVertices().empty(), "Cut mesh must have valid vertices");
+
+    // 5. Toggle Extrude feature BACK to Boss (Add Material)
+    featExtrude->SetHeight(1.0f);
+    featExtrude->SetOperation(ExtrudeOperation::Boss);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!featExtrude->IsCut(), "Extrude feature is toggled back to Boss");
+    TEST_ASSERT(!baseExtrude->IsConsumed(), "Base block is restored/unconsumed when toggled back to Boss");
+
+    // 6. Test Revolve feature operation toggle
+    auto revSketch = std::make_shared<SketchNode>("RevolveSketch", SketchPlane::XY_Front);
+    revSketch->SetProfile({ {0.5f, 0.2f}, {1.2f, 0.2f}, {1.2f, 0.8f}, {0.5f, 0.8f} });
+    graph.AddNode(revSketch);
+
+    auto featRevolve = std::make_shared<RevolveNode>("RevolveFeature", revSketch, 360.0f, RevolveAxisMode::Sketch_V_Axis, RevolveOperation::Boss);
+    graph.AddNode(featRevolve);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!featRevolve->IsCut(), "Revolve feature initially is Boss");
+
+    // Toggle Revolve to Cut
+    featRevolve->SetTargetFeature(baseExtrude);
+    featRevolve->SetOperation(RevolveOperation::Cut);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(featRevolve->IsCut(), "Revolve feature is now Cut");
+    TEST_ASSERT(baseExtrude->IsConsumed(), "Base block is consumed when revolve is Cut");
+
+    // Toggle Revolve back to Boss
+    featRevolve->SetOperation(RevolveOperation::Boss);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!featRevolve->IsCut(), "Revolve feature is toggled back to Boss");
+    TEST_ASSERT(!baseExtrude->IsConsumed(), "Base block is unconsumed when revolve is Boss");
+
+    return true;
+}
+
+bool TestCutExtrudeFaceSketchMaterialRemovalAndTreeHierarchy() {
+    std::cout << "[Test] Cut Extrude Face Sketch Material Removal and Model Tree Hierarchy...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create a 3D base solid box: 4.0m x 4.0m ground sketch extruded 3.0m in +Y
+    auto baseSketch = std::make_shared<SketchNode>("BaseBoxSketch", SketchPlane::XZ_Ground);
+    baseSketch->SetPresetRectangle(4.0f, 4.0f);
+    graph.AddNode(baseSketch);
+
+    auto baseSolid = std::make_shared<ExtrudeNode>("BaseSolidBlock", baseSketch, 3.0f);
+    graph.AddNode(baseSolid);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!baseSolid->GetCachedVertices().empty(), "Base solid must have vertices");
+    TEST_ASSERT(!baseSolid->GetCachedIndices().empty(), "Base solid must have indices");
+    size_t baseVertCount = baseSolid->GetCachedVertices().size();
+
+    // 2. Select the top face (y = 3.0m) of the solid model
+    int topFaceIdx = -1;
+    for (const auto& f : baseSolid->GetFaces()) {
+        if (std::abs(f.plane.normal.y - 1.0) < 1e-3 && std::abs(f.plane.origin.y - 3.0) < 1e-3) {
+            topFaceIdx = f.faceIndex;
+            break;
+        }
+    }
+    TEST_ASSERT(topFaceIdx >= 0, "Top face at y = 3.0m must be found");
+
+    FaceInfo topFaceInfo;
+    baseSolid->GetFace(topFaceIdx, topFaceInfo);
+
+    // 3. Create associative DatumPlane and 2D sketch on this top face
+    auto planeNode = std::make_shared<DatumPlaneNode>("Plane_Face_Top", baseSolid, topFaceIdx, topFaceInfo.plane, 0.0);
+    graph.AddNode(planeNode);
+    planeNode->Evaluate(&mockDevice, exchange);
+
+    auto faceSketch = std::make_shared<SketchNode>("Sketch_Face_Top", planeNode);
+    TEST_ASSERT(faceSketch->GetProfile().empty(), "Newly created 2D sketch starts completely empty");
+    faceSketch->SetPresetRectangle(2.0f, 2.0f); // 2m x 2m centered pocket
+    graph.AddNode(faceSketch);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!faceSketch->IsConsumed(), "Freshly created face sketch is unconsumed and ready to extrude or cut");
+
+    // Verify sketch renders outline / shading when selected in model tree even with datum plane reference
+    graph.PublishCombinedSceneMesh(&mockDevice, exchange, faceSketch->GetId());
+    auto publishedSketch = exchange.AcquireLatest();
+    TEST_ASSERT(publishedSketch != nullptr && publishedSketch->sketchVertexBuffer != nullptr,
+                "Selecting sketch in model tree must publish sketch mesh to viewport for outline & shading");
+
+    // 4. Create Cut Extrude feature:
+    auto cutNode = std::make_shared<ExtrudeNode>("Pocket_Cut_Extrude", faceSketch, -1.0f, ExtrudeOperation::Cut, baseSolid);
+    graph.AddNode(cutNode);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!cutNode->HasConflict(), "Cut extrude must not conflict");
+    TEST_ASSERT(cutNode->IsCut(), "Cut extrude must be cut operation");
+    TEST_ASSERT(baseSolid->IsConsumed(), "Base solid must be consumed by cut");
+    TEST_ASSERT(cutNode->GetParentFeature() == baseSolid, "Parent feature of cut must be baseSolid");
+    TEST_ASSERT(!cutNode->GetCachedVertices().empty(), "Cut mesh must have valid vertices");
+    TEST_ASSERT(!cutNode->GetCachedIndices().empty(), "Cut mesh must have valid indices");
+
+    // 5. Verify Material Removal:
+    // CSG difference between 4x4x3 box and 2x2x1 top pocket creates new inner pocket faces and edges
+    // The cut mesh should have more vertices/triangles than the original base box!
+    TEST_ASSERT(cutNode->GetCachedVertices().size() > baseVertCount, "Pocket cut must generate pocket walls/floor");
+
+    // Cast a downward ray at center (0, 4.0, 0) direction (0, -1, 0)
+    // For original box, ray would hit top face at y = 3.0.
+    // With a 1.0m deep pocket cut from y = 3.0, top center has been removed, so ray must hit the pocket floor at y = 2.0!
+    Point3D rayOrig(0.0, 4.0, 0.0);
+    Vector3D rayDir(0.0, -1.0, 0.0);
+    double nearestT = 1e9;
+    const auto& verts = cutNode->GetCachedVertices();
+    const auto& indices = cutNode->GetCachedIndices();
+
+    for (size_t i = 0; i < indices.size(); i += 3) {
+        Point3D v0(verts[indices[i]].position[0], verts[indices[i]].position[1], verts[indices[i]].position[2]);
+        Point3D v1(verts[indices[i + 1]].position[0], verts[indices[i + 1]].position[1], verts[indices[i + 1]].position[2]);
+        Point3D v2(verts[indices[i + 2]].position[0], verts[indices[i + 2]].position[1], verts[indices[i + 2]].position[2]);
+
+        double t = 0.0;
+        if (RayIntersectsTriangle(rayOrig, rayDir, v0, v1, v2, t)) {
+            if (t > 0.0 && t < nearestT) {
+                nearestT = t;
+            }
+        }
+    }
+    double hitY = rayOrig.y + rayDir.y * nearestT;
+    TEST_ASSERT(std::abs(hitY - 2.0) < 0.05, "Ray through pocket center must hit pocket floor at y = 2.0m (material removed)");
+
+    // 6. Verify Model Tree Hierarchy:
+    // Find all children of baseSolid in graph: cutNode must be present!
+    std::vector<std::shared_ptr<DAGNode>> childFeatures;
+    for (const auto& n : graph.GetNodes()) {
+        if (n && n->GetParentFeature() == baseSolid) {
+            childFeatures.push_back(n);
+        }
+    }
+    bool cutFoundInTreeChildren = false;
+    for (const auto& cf : childFeatures) {
+        if (cf == cutNode) {
+            cutFoundInTreeChildren = true;
+            break;
+        }
+    }
+    TEST_ASSERT(cutFoundInTreeChildren, "Cut extrude must appear under baseSolid in the Model Tree hierarchy");
+
+    return true;
+}
+
+bool Test2DSketchDeletionDefaultToolAndEmptySketchWorkflow() {
+    std::cout << "[Test] 2D Sketch Deletion, Initial Select/Move Tool, and Empty Sketch Workflow...\n";
+
+    ParametricGraph graph(nullptr);
+    AtomicMeshExchange exchange;
+
+    // 1. Standalone 2D sketch deletion
+    auto sketch1 = std::make_shared<SketchNode>("Sketch_StandAlone", SketchPlane::XZ_Ground);
+    sketch1->SetPresetRectangle(2.0f, 2.0f);
+    sketch1->Evaluate(nullptr, exchange);
+    graph.AddNode(sketch1);
+    uint64_t id1 = sketch1->GetId();
+    TEST_ASSERT(graph.GetNode(id1) != nullptr, "SketchNode must exist in graph");
+
+    // Remove standalone sketch
+    graph.RemoveNode(id1);
+    TEST_ASSERT(graph.GetNode(id1) == nullptr, "SketchNode must be successfully deleted from graph");
+
+    // 2. Child 2D sketch deletion and dependent feature conflict propagation
+    auto sketch2 = std::make_shared<SketchNode>("Sketch_ExtrudeBase", SketchPlane::XZ_Ground);
+    sketch2->SetPresetRectangle(4.0f, 4.0f);
+    sketch2->Evaluate(nullptr, exchange);
+    graph.AddNode(sketch2);
+
+    auto extrudeNode = std::make_shared<ExtrudeNode>("Extrude_1", sketch2, 4.0f);
+    extrudeNode->Evaluate(nullptr, exchange);
+    graph.AddNode(extrudeNode);
+
+    // Also a child sketch created on a face of extrudeNode
+    auto childSketch = std::make_shared<SketchNode>("Sketch_ChildFace", SketchPlane::XZ_Ground);
+    childSketch->SetParentFeature(extrudeNode);
+    childSketch->SetPresetRegularPolygon(32, 1.0f);
+    childSketch->Evaluate(nullptr, exchange);
+    graph.AddNode(childSketch);
+    uint64_t childSketchId = childSketch->GetId();
+
+    TEST_ASSERT(childSketch->HasParentFeature(), "Child sketch must have parent feature set");
+    // Delete the child sketch: must succeed cleanly
+    graph.RemoveNode(childSketchId);
+    TEST_ASSERT(graph.GetNode(childSketchId) == nullptr, "Child sketch must be deletable from graph");
+
+    // Delete sketch2 which drives extrudeNode:
+    uint64_t id2 = sketch2->GetId();
+    graph.RemoveNode(id2);
+    TEST_ASSERT(graph.GetNode(id2) == nullptr, "Driving sketch2 must be removed from graph");
+    // extrudeNode should be in conflict state now
+    TEST_ASSERT(extrudeNode->HasConflict(), "ExtrudeNode must report conflict when driving sketch is deleted");
+    TEST_ASSERT(extrudeNode->GetSketchReference() == nullptr, "ExtrudeNode driving sketch pointer must be cleared");
+    // Evaluating the dirty graph with deleted sketch should clear cached geometry safely
+    extrudeNode->MarkDirty();
+    extrudeNode->Evaluate(nullptr, exchange);
+    TEST_ASSERT(extrudeNode->GetFaces().empty(), "ExtrudeNode geometry must be cleared when driving sketch is missing");
+
+    // 3. Empty sketch initialization and rejection/deletion workflow
+    auto emptySketch = std::make_shared<SketchNode>("Sketch_EmptyInit", SketchPlane::XZ_Ground);
+    // Newly initialized 2D sketch has no shapes and no closed profile
+    TEST_ASSERT(emptySketch->GetShapes().empty(), "Newly created 2D sketch must initialize empty with no shapes");
+    TEST_ASSERT(emptySketch->GetProfile().empty(), "Newly created 2D sketch must have empty profile");
+    
+    // Simulate user confirming empty sketch:
+    // If emptySketch->GetShapes().empty(), GUI prompts confirmation and deletes it
+    graph.AddNode(emptySketch);
+    uint64_t emptyId = emptySketch->GetId();
+    TEST_ASSERT(graph.GetNode(emptyId) != nullptr, "Empty sketch initially added to graph");
+
+    if (emptySketch->GetShapes().empty()) {
+        // Confirmation prompt deletes empty sketch
+        graph.RemoveNode(emptyId);
+    }
+    TEST_ASSERT(graph.GetNode(emptyId) == nullptr, "Empty sketch must be cleanly deleted upon exit/confirmation");
+
+    // 4. Face sketch unconsumed state & extrusion capability
+    auto baseSketch = std::make_shared<SketchNode>("Sketch_BaseBox", SketchPlane::XZ_Ground);
+    baseSketch->SetPresetRectangle(5.0f, 5.0f);
+    baseSketch->Evaluate(nullptr, exchange);
+    graph.AddNode(baseSketch);
+
+    auto baseSolid = std::make_shared<ExtrudeNode>("BaseSolid", baseSketch, 2.0f);
+    baseSolid->Evaluate(nullptr, exchange);
+    graph.AddNode(baseSolid);
+
+    auto faceDatumPlane = std::make_shared<DatumPlaneNode>("Plane_Face_1", baseSolid, 0, Geom::Plane::XZ(Geom::Point3D(0, 2, 0)), 0.0);
+    faceDatumPlane->Evaluate(nullptr, exchange);
+    graph.AddNode(faceDatumPlane);
+
+    auto faceSketch = std::make_shared<SketchNode>("Sketch_Face_1", faceDatumPlane);
+    faceSketch->SetParentFeature(baseSolid);
+    faceSketch->SetPresetRegularPolygon(32, 1.5f);
+    faceSketch->Evaluate(nullptr, exchange);
+    graph.AddNode(faceSketch);
+
+    // CRITICAL: A sketch created on a face/datum plane of a solid must NOT be marked consumed!
+    TEST_ASSERT(!faceSketch->IsConsumed(), "Sketch created on a face must remain unconsumed and ready to extrude");
+
+    // Extrude the face sketch:
+    auto faceExtrude = std::make_shared<ExtrudeNode>("Extrude_From_FaceSketch", faceSketch, 1.5f, ExtrudeOperation::Boss, baseSolid);
+    faceExtrude->Evaluate(nullptr, exchange);
+    graph.AddNode(faceExtrude);
+
+    // Now that faceSketch is actually consumed into an ExtrudeNode, it is consumed
+    TEST_ASSERT(faceSketch->IsConsumed(), "Sketch must now be marked consumed by the new extrude node");
+    TEST_ASSERT(!faceExtrude->GetFaces().empty(), "Extrusion from face sketch must generate valid 3D geometry");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -3154,6 +3731,14 @@ int main() {
     pass &= Test2DSketchDimensionConstraintsAndLocking();
     pass &= TestViewRecenterAndAxesReferenceAndSketchClick();
     pass &= TestExtrudedCutAndRevolvedCutOperations();
+    pass &= TestMultiVertexPointSelectionWithKeyboardModifier();
+    pass &= TestMultiPlaneFaceSelectionWithKeyboardModifier();
+    pass &= TestSelectionResolutionSettingsAndTolerances();
+    pass &= TestComputeMeasurementRobustSpatialCalculations();
+    pass &= TestMeasurementStateAndClearWorkflow();
+    pass &= TestExtrudeAndRevolveCutToggleOperation();
+    pass &= TestCutExtrudeFaceSketchMaterialRemovalAndTreeHierarchy();
+    pass &= Test2DSketchDeletionDefaultToolAndEmptySketchWorkflow();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

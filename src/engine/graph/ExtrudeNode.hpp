@@ -122,6 +122,12 @@ public:
     }
 
     void OnParentRemoved(uint64_t parentId) override {
+        if (m_sketchNode && m_sketchNode->GetId() == parentId) {
+            m_sketchNode = nullptr;
+            m_hasConflict = true;
+            m_conflictMessage = "Referenced 2D profile sketch was deleted.";
+            MarkDirty();
+        }
         if (m_targetNodeId == parentId) {
             m_targetNode = nullptr;
             m_hasConflict = true;
@@ -215,7 +221,15 @@ public:
             loopsToExtrude.push_back(m_profile);
         }
 
-        if (!IsDirty() || loopsToExtrude.empty()) return;
+        if (!IsDirty()) return;
+
+        if (m_hasConflict || loopsToExtrude.empty()) {
+            m_cachedVertices.clear();
+            m_cachedIndices.clear();
+            m_cachedEdges.clear();
+            ClearDirty();
+            return;
+        }
 
         uint64_t currentGen = GetGeneration();
         float h = m_height;
@@ -272,21 +286,63 @@ public:
         // Branch A: Cut Material from Target Model (Extruded Cut)
         // -------------------------------------------------------------
         if (m_operation == ExtrudeOperation::Cut) {
-            if (!m_targetNode) {
-                if (m_sketchNode) {
-                    if (auto p = m_sketchNode->GetParentFeature()) {
+            // Ensure target is a solid feature, not a sketch or datum plane
+            if (m_targetNode && (std::dynamic_pointer_cast<SketchNode>(m_targetNode) ||
+                                 std::dynamic_pointer_cast<DatumPlaneNode>(m_targetNode) ||
+                                 std::dynamic_pointer_cast<DatumAxisNode>(m_targetNode) ||
+                                 m_targetNode.get() == this)) {
+                if (auto sk = std::dynamic_pointer_cast<SketchNode>(m_targetNode)) {
+                    auto p = sk->GetParentFeature();
+                    if (p && p.get() != this && !std::dynamic_pointer_cast<SketchNode>(p) &&
+                        !std::dynamic_pointer_cast<DatumPlaneNode>(p) && !std::dynamic_pointer_cast<DatumAxisNode>(p)) {
                         m_targetNode = p;
                         m_targetNodeId = p->GetId();
-                    } else if (auto dp = m_sketchNode->GetDatumPlaneReference()) {
-                        if (auto t = dp->GetTargetFeature()) {
+                    } else if (auto dp = sk->GetDatumPlaneReference()) {
+                        auto t = dp->GetTargetFeature();
+                        if (t && t.get() != this) {
                             m_targetNode = t;
                             m_targetNodeId = t->GetId();
+                        } else {
+                            m_targetNode = nullptr;
+                        }
+                    } else {
+                        m_targetNode = nullptr;
+                    }
+                } else if (auto dp = std::dynamic_pointer_cast<DatumPlaneNode>(m_targetNode)) {
+                    auto t = dp->GetTargetFeature();
+                    if (t && t.get() != this) {
+                        m_targetNode = t;
+                        m_targetNodeId = t->GetId();
+                    } else {
+                        m_targetNode = nullptr;
+                    }
+                } else {
+                    m_targetNode = nullptr;
+                }
+            }
+
+            if (!m_targetNode || m_targetNode.get() == this) {
+                m_targetNode = nullptr;
+                if (m_sketchNode) {
+                    if (auto dp = m_sketchNode->GetDatumPlaneReference()) {
+                        auto t = dp->GetTargetFeature();
+                        if (t && t.get() != this) {
+                            m_targetNode = t;
+                            m_targetNodeId = t->GetId();
+                        }
+                    }
+                    if (!m_targetNode) {
+                        auto p = m_sketchNode->GetParentFeature();
+                        if (p && p.get() != this && !std::dynamic_pointer_cast<SketchNode>(p) &&
+                            !std::dynamic_pointer_cast<DatumPlaneNode>(p) && !std::dynamic_pointer_cast<DatumAxisNode>(p)) {
+                            m_targetNode = p;
+                            m_targetNodeId = p->GetId();
                         }
                     }
                 }
             }
 
-            if (!m_targetNode) {
+            if (!m_targetNode || m_targetNode.get() == this) {
                 m_hasConflict = true;
                 m_conflictMessage = "No target model feature referenced for Cut Extrude.";
                 m_cachedVertices.clear();
@@ -317,7 +373,7 @@ public:
                 return;
             }
 
-            if (m_targetNode->IsDirty()) {
+            if (m_targetNode != nullptr && m_targetNode.get() != this && m_targetNode->IsDirty()) {
                 m_targetNode->Evaluate(device, exchange);
             }
 
