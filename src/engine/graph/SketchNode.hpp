@@ -12,6 +12,7 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <map>
 
 namespace Tessera {
 
@@ -123,6 +124,97 @@ public:
         }
         m_preset = SketchPreset::Custom;
         MarkDirty();
+    }
+
+    [[nodiscard]] const std::map<size_t, std::map<size_t, float>>& GetEdgeConstraints() const noexcept {
+        return m_shapeEdgeConstraints;
+    }
+    void SetEdgeConstraints(std::map<size_t, std::map<size_t, float>> constraints) {
+        m_shapeEdgeConstraints = std::move(constraints);
+        MarkDirty();
+    }
+    void SetEdgeConstraint(size_t shapeIdx, size_t edgeIdx, float length) {
+        if (length > 0.0001f) {
+            m_shapeEdgeConstraints[shapeIdx][edgeIdx] = length;
+            MarkDirty();
+        }
+    }
+    void RemoveEdgeConstraint(size_t shapeIdx, size_t edgeIdx) {
+        auto it = m_shapeEdgeConstraints.find(shapeIdx);
+        if (it != m_shapeEdgeConstraints.end()) {
+            it->second.erase(edgeIdx);
+            if (it->second.empty()) {
+                m_shapeEdgeConstraints.erase(it);
+            }
+            MarkDirty();
+        }
+    }
+    [[nodiscard]] bool IsEdgeConstrained(size_t shapeIdx, size_t edgeIdx) const {
+        auto it = m_shapeEdgeConstraints.find(shapeIdx);
+        if (it == m_shapeEdgeConstraints.end()) return false;
+        return it->second.find(edgeIdx) != it->second.end();
+    }
+    [[nodiscard]] float GetEdgeConstrainedLength(size_t shapeIdx, size_t edgeIdx) const {
+        auto it = m_shapeEdgeConstraints.find(shapeIdx);
+        if (it == m_shapeEdgeConstraints.end()) return 0.0f;
+        auto edgeIt = it->second.find(edgeIdx);
+        return (edgeIt != it->second.end()) ? edgeIt->second : 0.0f;
+    }
+    void ClearEdgeConstraints() {
+        m_shapeEdgeConstraints.clear();
+        MarkDirty();
+    }
+
+    static void EnforceConstraints(
+        std::vector<std::array<float, 2>>& points,
+        const std::map<size_t, float>& edgeConstraints,
+        bool isClosed = true,
+        int pinnedVertexIdx = -1)
+    {
+        if (edgeConstraints.empty() || points.size() < 2) return;
+
+        size_t n = points.size();
+
+        // Iterate up to 10 passes for relaxation across coupled constraints
+        for (int iter = 0; iter < 10; ++iter) {
+            bool allSatisfied = true;
+            for (const auto& [edgeIdx, targetLen] : edgeConstraints) {
+                if (targetLen <= 0.0001f || edgeIdx >= n) continue;
+                size_t i0 = edgeIdx;
+                size_t i1 = (i0 + 1) % n;
+                if (!isClosed && i0 + 1 >= n) continue;
+
+                auto& p0 = points[i0];
+                auto& p1 = points[i1];
+
+                float dx = p1[0] - p0[0];
+                float dy = p1[1] - p0[1];
+                float curLen = std::hypot(dx, dy);
+                float diff = curLen - targetLen;
+                if (std::abs(diff) < 1e-4f) continue;
+
+                allSatisfied = false;
+                float ux = (curLen > 1e-6f) ? (dx / curLen) : 1.0f;
+                float uy = (curLen > 1e-6f) ? (dy / curLen) : 0.0f;
+
+                if (pinnedVertexIdx == static_cast<int>(i0)) {
+                    p1[0] = p0[0] + ux * targetLen;
+                    p1[1] = p0[1] + uy * targetLen;
+                } else if (pinnedVertexIdx == static_cast<int>(i1)) {
+                    p0[0] = p1[0] - ux * targetLen;
+                    p0[1] = p1[1] - uy * targetLen;
+                } else {
+                    float midX = (p0[0] + p1[0]) * 0.5f;
+                    float midY = (p0[1] + p1[1]) * 0.5f;
+                    float halfL = targetLen * 0.5f;
+                    p0[0] = midX - ux * halfL;
+                    p0[1] = midY - uy * halfL;
+                    p1[0] = midX + ux * halfL;
+                    p1[1] = midY + uy * halfL;
+                }
+            }
+            if (allSatisfied) break;
+        }
     }
 
     [[nodiscard]] SketchPreset GetPreset() const noexcept { return m_preset; }
@@ -375,6 +467,7 @@ private:
     SketchPreset m_preset{SketchPreset::Rectangle};
     std::vector<std::array<float, 2>> m_profile;
     std::vector<std::vector<std::array<float, 2>>> m_shapes;
+    std::map<size_t, std::map<size_t, float>> m_shapeEdgeConstraints;
     bool m_visible{true};
     std::weak_ptr<DAGNode> m_parentFeature;
 

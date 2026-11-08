@@ -17,6 +17,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <array>
+#include <map>
 
 struct GLFWwindow;
 
@@ -34,6 +36,34 @@ struct CanvasShape {
     std::string name;
     std::vector<std::array<float, 2>> points;
     bool isClosed{true};
+    std::map<size_t, float> edgeConstraints; // edge index -> target length
+
+    [[nodiscard]] bool IsEdgeConstrained(size_t edgeIdx) const {
+        return edgeConstraints.find(edgeIdx) != edgeConstraints.end();
+    }
+
+    [[nodiscard]] float GetEdgeConstrainedLength(size_t edgeIdx) const {
+        auto it = edgeConstraints.find(edgeIdx);
+        return (it != edgeConstraints.end()) ? it->second : 0.0f;
+    }
+
+    void SetEdgeConstraint(size_t edgeIdx, float len) {
+        if (len > 0.0001f) {
+            edgeConstraints[edgeIdx] = len;
+        }
+    }
+
+    void RemoveEdgeConstraint(size_t edgeIdx) {
+        edgeConstraints.erase(edgeIdx);
+    }
+
+    void ToggleEdgeConstraint(size_t edgeIdx, float currentLen) {
+        if (IsEdgeConstrained(edgeIdx)) {
+            RemoveEdgeConstraint(edgeIdx);
+        } else {
+            SetEdgeConstraint(edgeIdx, currentLen);
+        }
+    }
 };
 
 class CADGui {
@@ -61,9 +91,30 @@ public:
     [[nodiscard]] bool GetShowGrid() const noexcept { return m_showGrid; }
     [[nodiscard]] bool GetShowReferenceFeature() const noexcept { return m_showReferenceFeature; }
     void SetShowReferenceFeature(bool show) noexcept { m_showReferenceFeature = show; }
+    [[nodiscard]] bool GetShowAxesReference() const noexcept { return m_showAxesReference; }
+    void SetShowAxesReference(bool show) noexcept { m_showAxesReference = show; }
 
     [[nodiscard]] bool IsSketchModeActive() const noexcept { return m_sketchModeActive; }
     [[nodiscard]] bool IsSketchPlanePromptActive() const noexcept { return m_showSketchPlanePrompt; }
+
+    // 3D Feature Preview & Pending Confirmation
+    enum class PreviewFeatureType { None, Extrude, Revolve, Fillet, Chamfer, CutExtrude, CutRevolve };
+    [[nodiscard]] bool IsFeaturePreviewActive() const noexcept { return m_featurePreviewActive; }
+    [[nodiscard]] PreviewFeatureType GetPreviewFeatureType() const noexcept { return m_previewFeatureType; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetPreviewNode() const noexcept { return m_previewNode; }
+    static const char* GetPreviewFeatureTypeName(PreviewFeatureType type) noexcept;
+
+    void StartFeaturePreview(
+        PreviewFeatureType type,
+        std::shared_ptr<DAGNode> previewNode,
+        std::shared_ptr<DAGNode> target,
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange
+    );
+    void ConfirmFeaturePreview();
+    void CancelFeaturePreview(ParametricGraph& graph, RHI::RHIDevice* device, AtomicMeshExchange& exchange);
+    void RenderFeaturePreviewDialog(ParametricGraph& graph, RHI::RHIDevice* device, AtomicMeshExchange& exchange);
     void EnterSketchMode(uint64_t sketchId) noexcept { 
         m_sketchModeActive = true; 
         m_activeSketchId = sketchId;
@@ -146,7 +197,21 @@ private:
         const std::vector<std::shared_ptr<DAGNode>>& nodes
     );
 
+    void RenderCutExtrudePromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
+    );
+
     void RenderRevolvePromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
+    );
+
+    void RenderCutRevolvePromptModal(
         ParametricGraph& graph,
         RHI::RHIDevice* device,
         AtomicMeshExchange& exchange,
@@ -187,13 +252,18 @@ private:
         AtomicMeshExchange& exchange
     );
 
+    void RenderDimensionEditModal();
+    static void EnforceShapeConstraints(CanvasShape& shape, int pinnedVertexIdx = -1);
+
     bool m_initialized{false};
     RHI::RHIDevice* m_rhiDevice{nullptr};
 
     // Top Bar prompts & state
     bool m_showSketchPlanePrompt{false};
     bool m_showExtrudePrompt{false};
+    bool m_showCutExtrudePrompt{false};
     bool m_showRevolvePrompt{false};
+    bool m_showCutRevolvePrompt{false};
     uint64_t m_promptInitialSelectedId{0};
 
     // UI Navigation Mode
@@ -219,13 +289,48 @@ private:
     std::vector<std::array<float, 2>> m_dragShapeOrigPoints; // shape outline when a whole-shape drag began
     float m_dragShapeStartU{0.0f};
     float m_dragShapeStartV{0.0f};
+    float m_dragVertexOrigU{0.0f};
+    float m_dragVertexOrigV{0.0f};
     int m_hoveredShapeIdx{-1};
     int m_hoveredVertexIdx{-1};
+    int m_hoveredEdgeIdx{-1};
     int m_selectedShapeIdx{-1};
     int m_selectedVertexIdx{-1};
 
     std::vector<CanvasShape> m_canvasShapes;
     uint64_t m_currentEditingSketchId{0};
+
+    // 2D Sketch Keyboard Dimensions Input State
+    float m_kbRectWidth{3.0f};
+    float m_kbRectHeight{2.0f};
+    float m_kbRectCenterU{0.0f};
+    float m_kbRectCenterV{0.0f};
+    float m_kbCircleRadius{1.5f};
+    float m_kbCircleCenterU{0.0f};
+    float m_kbCircleCenterV{0.0f};
+    float m_kbLineLength{2.0f};
+    float m_kbLineAngle{0.0f};
+    float m_kbLineTargetU{2.0f};
+    float m_kbLineTargetV{0.0f};
+    int m_selectedEdgeSegmentIdx{-1};
+
+    // 2D Sketch Edge Dimension Constraint & In-Place Editing
+    bool m_showDimensionEditPopup{false};
+    int m_dimEditShapeIdx{-1};
+    int m_dimEditEdgeIdx{-1};
+    float m_dimEditValue{0.0f};
+    bool m_dimEditConstrained{true};
+    std::array<float, 2> m_dimEditPopupPos{0.0f, 0.0f};
+
+    // 3D Feature Preview & Pending Confirmation State
+    bool m_featurePreviewActive{false};
+    PreviewFeatureType m_previewFeatureType{PreviewFeatureType::None};
+    std::shared_ptr<DAGNode> m_previewNode{nullptr};
+    std::shared_ptr<DAGNode> m_previewTarget{nullptr};
+    uint64_t m_previewSavedSelectionId{0};
+    int m_previewSavedFaceIndex{-1};
+    int m_previewSavedVertexIndex{-1};
+    int m_previewSavedEdgeIndex{-1};
 
     // Primitive creation state
     float m_newCylinderRadius{1.5f};
@@ -299,6 +404,7 @@ private:
     bool m_showWireframe{true};
     bool m_showGrid{true};
     bool m_showReferenceFeature{true};
+    bool m_showAxesReference{true};
     float m_surfaceColor[4]{0.72f, 0.76f, 0.82f, 1.0f};
 };
 

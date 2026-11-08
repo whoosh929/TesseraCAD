@@ -180,7 +180,43 @@ public:
         return (ndcX >= -1.5f && ndcX <= 1.5f && ndcY >= -1.5f && ndcY <= 1.5f);
     }
 
-private:
+    void RecenterOrigin() noexcept {
+        m_target[0] = 0.0f;
+        m_target[1] = 0.0f;
+        m_target[2] = 0.0f;
+        UpdateMatrices();
+    }
+
+    void SetViewPreset(float azimuth, float elevation, bool recenterOrigin = true) noexcept {
+        m_azimuth = azimuth;
+        m_elevation = std::clamp(elevation, -1.5f, 1.5f);
+        if (recenterOrigin) {
+            m_target[0] = 0.0f;
+            m_target[1] = 0.0f;
+            m_target[2] = 0.0f;
+        }
+        UpdateMatrices();
+    }
+
+    void SetTopView(bool recenter = true) noexcept {
+        SetViewPreset(0.0f, 1.5f, recenter);
+    }
+
+    void SetSideView(bool recenter = true) noexcept {
+        SetViewPreset(1.570796f, 0.0f, recenter);
+    }
+
+    void SetFrontView(bool recenter = true) noexcept {
+        SetViewPreset(0.0f, 0.0f, recenter);
+    }
+
+    void SetIsometricView(bool recenter = true) noexcept {
+        SetViewPreset(0.785398f, 0.523599f, recenter);
+    }
+
+    [[nodiscard]] float GetAzimuth() const noexcept { return m_azimuth; }
+    [[nodiscard]] float GetElevation() const noexcept { return m_elevation; }
+
     void GetBasisVectors(float forward[3], float right[3], float up[3]) const noexcept {
         float cosElev = std::cos(m_elevation);
         float sinElev = std::sin(m_elevation);
@@ -199,6 +235,8 @@ private:
         up[1] = cosElev;
         up[2] = -sinElev * cosAzim;
     }
+
+private:
 
     void UpdateMatrices() noexcept {
         float cosElev = std::cos(m_elevation);

@@ -61,6 +61,7 @@ target_sources(tessera_engine
         src/engine/modeling/Topology.hpp
         src/engine/modeling/ExtrudeOp.hpp
         src/engine/modeling/RevolveOp.hpp
+        src/engine/modeling/MeshBoolean3D.hpp
         src/engine/modeling/Tessellator.hpp
         src/engine/modeling/BlendGeometry.hpp
         src/engine/modeling/BlendGeometry.cpp

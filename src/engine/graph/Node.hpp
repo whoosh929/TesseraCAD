@@ -140,7 +140,15 @@ public:
         }
     }
 
-    /// Notifies all downstream dependent nodes that this node is being removed from the graph
+    void RemoveDependent(uint64_t childId) {
+        m_dependents.erase(std::remove_if(m_dependents.begin(), m_dependents.end(), [childId](const auto& depWeak) {
+            auto dep = depWeak.lock();
+            return !dep || dep->GetId() == childId;
+        }), m_dependents.end());
+    }
+
+    /// Notifies all downstream dependent nodes that this node is being removed from the graph,
+    /// and detaches this node from its upstream parents
     virtual void NotifyRemoval() {
         for (auto& depWeak : m_dependents) {
             if (auto dep = depWeak.lock()) {
@@ -148,6 +156,12 @@ public:
             }
         }
         m_dependents.clear();
+        for (auto& in : m_inputs) {
+            if (in) {
+                in->RemoveDependent(m_id);
+            }
+        }
+        m_inputs.clear();
     }
 
     /// Called on a dependent node when one of its upstream parents is removed

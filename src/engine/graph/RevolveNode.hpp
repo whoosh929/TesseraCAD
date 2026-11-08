@@ -2,6 +2,7 @@
 
 #include "Node.hpp"
 #include "SketchNode.hpp"
+#include "Tessellation.hpp"
 #include "engine/geom/Plane.hpp"
 #include "engine/geom/Axis3D.hpp"
 #include "engine/sketch/Sketch.hpp"
@@ -9,6 +10,7 @@
 #include "engine/modeling/Topology.hpp"
 #include "engine/modeling/RevolveOp.hpp"
 #include "engine/modeling/Tessellator.hpp"
+#include "engine/modeling/MeshBoolean3D.hpp"
 #include "engine/hal/RHI.hpp"
 #include <memory>
 #include <string>
@@ -18,6 +20,11 @@
 #include <iostream>
 
 namespace Tessera {
+
+enum class RevolveOperation : uint8_t {
+    Boss = 0, // Add material (default)
+    Cut  = 1  // Cut away material from target model
+};
 
 enum class RevolveAxisMode : uint8_t {
     Sketch_V_Axis = 0,    // In-plane Vertical (V) axis of sketch
@@ -46,17 +53,26 @@ public:
         std::string name,
         std::shared_ptr<SketchNode> sketch,
         float angleDegrees = 360.0f,
-        RevolveAxisMode axisMode = RevolveAxisMode::Sketch_V_Axis
+        RevolveAxisMode axisMode = RevolveAxisMode::Sketch_V_Axis,
+        RevolveOperation op = RevolveOperation::Boss,
+        std::shared_ptr<DAGNode> target = nullptr
     ) : DAGNode(std::move(name)),
         m_sketchNode(sketch),
         m_angleDegrees(angleDegrees),
-        m_axisMode(axisMode) {
+        m_axisMode(axisMode),
+        m_operation(op),
+        m_targetNode(target),
+        m_targetNodeId(target ? target->GetId() : 0) {
         if (m_sketchNode) {
             AddInput(m_sketchNode);
             m_sketchNode->SetConsumed(true);
             m_position[0] = m_sketchNode->GetPosition()[0];
             m_position[1] = m_sketchNode->GetPosition()[1];
             m_position[2] = m_sketchNode->GetPosition()[2];
+        }
+        if (m_targetNode && m_operation == RevolveOperation::Cut) {
+            AddInput(m_targetNode);
+            m_targetNode->SetConsumed(true);
         }
     }
 
@@ -64,12 +80,17 @@ public:
         std::string name,
         std::shared_ptr<SketchNode> sketch,
         float angleDegrees,
-        Geom::Axis3D customAxis
+        Geom::Axis3D customAxis,
+        RevolveOperation op = RevolveOperation::Boss,
+        std::shared_ptr<DAGNode> target = nullptr
     ) : DAGNode(std::move(name)),
         m_sketchNode(sketch),
         m_angleDegrees(angleDegrees),
         m_axis(customAxis),
-        m_axisMode(RevolveAxisMode::Custom_Axis) {
+        m_axisMode(RevolveAxisMode::Custom_Axis),
+        m_operation(op),
+        m_targetNode(target),
+        m_targetNodeId(target ? target->GetId() : 0) {
         if (m_sketchNode) {
             AddInput(m_sketchNode);
             m_sketchNode->SetConsumed(true);
@@ -77,7 +98,76 @@ public:
             m_position[1] = m_sketchNode->GetPosition()[1];
             m_position[2] = m_sketchNode->GetPosition()[2];
         }
+        if (m_targetNode && m_operation == RevolveOperation::Cut) {
+            AddInput(m_targetNode);
+            m_targetNode->SetConsumed(true);
+        }
     }
+
+    ~RevolveNode() override {
+        if (m_targetNode && m_operation == RevolveOperation::Cut) {
+            m_targetNode->SetConsumed(false);
+        }
+    }
+
+    [[nodiscard]] RevolveOperation GetOperation() const noexcept { return m_operation; }
+    void SetOperation(RevolveOperation op) {
+        if (m_operation != op) {
+            m_operation = op;
+            if (m_operation == RevolveOperation::Boss && m_targetNode) {
+                m_targetNode->SetConsumed(false);
+            } else if (m_operation == RevolveOperation::Cut && m_targetNode) {
+                m_targetNode->SetConsumed(true);
+            }
+            MarkDirty();
+        }
+    }
+    [[nodiscard]] bool IsCut() const noexcept { return m_operation == RevolveOperation::Cut; }
+
+    [[nodiscard]] std::shared_ptr<DAGNode> GetTargetFeature() const noexcept { return m_targetNode; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetParentFeature() const noexcept override {
+        return (m_operation == RevolveOperation::Cut) ? m_targetNode : nullptr;
+    }
+    [[nodiscard]] bool HasParentFeature() const noexcept override {
+        return (m_operation == RevolveOperation::Cut) && (m_targetNode != nullptr);
+    }
+
+    void SetTargetFeature(std::shared_ptr<DAGNode> target) {
+        if (m_targetNode && m_targetNode != target && m_operation == RevolveOperation::Cut) {
+            m_targetNode->SetConsumed(false);
+            m_targetNode->MarkDirty();
+        }
+        m_targetNode = target;
+        m_targetNodeId = target ? target->GetId() : 0;
+        m_hasConflict = false;
+        m_conflictMessage.clear();
+        if (m_targetNode && m_operation == RevolveOperation::Cut) {
+            AddInput(m_targetNode);
+            m_targetNode->SetConsumed(true);
+        }
+        MarkDirty();
+    }
+
+    void NotifyRemoval() override {
+        if (m_targetNode && m_operation == RevolveOperation::Cut) {
+            m_targetNode->SetConsumed(false);
+            m_targetNode->MarkDirty();
+        }
+        DAGNode::NotifyRemoval();
+    }
+
+    void OnParentRemoved(uint64_t parentId) override {
+        if (m_targetNodeId == parentId) {
+            m_targetNode = nullptr;
+            m_hasConflict = true;
+            m_conflictMessage = "Referenced parent model feature was deleted.";
+            MarkDirty();
+        }
+        DAGNode::OnParentRemoved(parentId);
+    }
+
+    [[nodiscard]] bool HasConflict() const noexcept override { return m_hasConflict; }
+    [[nodiscard]] std::string GetConflictMessage() const noexcept override { return m_conflictMessage; }
 
     void SetAngleDegrees(float deg) {
         if (std::abs(m_angleDegrees - deg) > 0.01f) {
@@ -278,9 +368,99 @@ public:
                   << ", Indices: " << allIndices.size() 
                   << ", FeatureEdges: " << allEdges.size() << ").\n";
 
+        if (m_operation == RevolveOperation::Cut) {
+            if (!m_targetNode) {
+                if (m_sketchNode) {
+                    if (auto p = m_sketchNode->GetParentFeature()) {
+                        m_targetNode = p;
+                        m_targetNodeId = p->GetId();
+                    } else if (auto dp = m_sketchNode->GetDatumPlaneReference()) {
+                        if (auto t = dp->GetTargetFeature()) {
+                            m_targetNode = t;
+                            m_targetNodeId = t->GetId();
+                        }
+                    }
+                }
+            }
+
+            if (!m_targetNode) {
+                m_hasConflict = true;
+                m_conflictMessage = "No target model feature referenced for Cut Revolve.";
+                m_cachedVertices.clear();
+                m_cachedIndices.clear();
+                m_cachedEdges.clear();
+                ClearDirty();
+                return;
+            }
+
+            bool hasTargetInInputs = false;
+            for (const auto& in : m_inputs) {
+                if (in && in->GetId() == m_targetNode->GetId()) {
+                    hasTargetInInputs = true;
+                    break;
+                }
+            }
+            if (!hasTargetInInputs) {
+                AddInput(m_targetNode);
+            }
+
+            if (m_targetNode->HasConflict()) {
+                m_hasConflict = true;
+                m_conflictMessage = "Referenced target model has a conflict: " + m_targetNode->GetConflictMessage();
+                m_cachedVertices.clear();
+                m_cachedIndices.clear();
+                m_cachedEdges.clear();
+                ClearDirty();
+                return;
+            }
+
+            if (m_targetNode->IsDirty()) {
+                m_targetNode->Evaluate(device, exchange);
+            }
+
+            const auto& targetVerts = m_targetNode->GetCachedVertices();
+            const auto& targetIndices = m_targetNode->GetCachedIndices();
+
+            if (targetVerts.empty() || targetIndices.empty()) {
+                m_hasConflict = true;
+                m_conflictMessage = "Target model feature has empty mesh.";
+                m_cachedVertices.clear();
+                m_cachedIndices.clear();
+                m_cachedEdges.clear();
+                ClearDirty();
+                return;
+            }
+
+            m_hasConflict = false;
+            m_conflictMessage.clear();
+            m_targetNode->SetConsumed(true);
+            auto leaf = m_targetNode->GetActiveLeafFeature();
+            if (leaf && leaf.get() != this) {
+                leaf->SetConsumed(true);
+            }
+
+            // Perform 3D Boolean Difference: target \ cutter (allVerts, allIndices)
+            bool diffOk = Modeling::MeshBoolean3D::Difference(
+                targetVerts, targetIndices,
+                allVerts, allIndices,
+                m_cachedVertices, m_cachedIndices
+            );
+
+            if (!diffOk || m_cachedVertices.empty() || m_cachedIndices.empty()) {
+                m_cachedVertices = targetVerts;
+                m_cachedIndices = targetIndices;
+            }
+
+            m_cachedEdges = TessellationUtils::ExtractFeatureEdges(m_cachedVertices, m_cachedIndices, 30.0f);
+            ComputeFaces();
+            ClearDirty();
+            return;
+        }
+
         m_cachedVertices = std::move(allVerts);
         m_cachedIndices = std::move(allIndices);
         m_cachedEdges = std::move(allEdges);
+        ComputeFaces();
         ClearDirty();
     }
 
@@ -331,6 +511,22 @@ private:
     Geom::Axis3D m_axis{Geom::Axis3D::Y()};
     RevolveAxisMode m_axisMode{RevolveAxisMode::Sketch_V_Axis};
     bool m_isSolid{true};
+    RevolveOperation m_operation{RevolveOperation::Boss};
+    std::shared_ptr<DAGNode> m_targetNode{nullptr};
+    uint64_t m_targetNodeId{0};
+    bool m_hasConflict{false};
+    std::string m_conflictMessage;
+};
+
+class CutRevolveNode : public RevolveNode {
+public:
+    CutRevolveNode(
+        std::string name,
+        std::shared_ptr<SketchNode> sketch,
+        float angleDegrees = 360.0f,
+        RevolveAxisMode axisMode = RevolveAxisMode::Sketch_V_Axis,
+        std::shared_ptr<DAGNode> target = nullptr
+    ) : RevolveNode(std::move(name), sketch, angleDegrees, axisMode, RevolveOperation::Cut, target) {}
 };
 
 } // namespace Tessera

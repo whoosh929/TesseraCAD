@@ -314,6 +314,7 @@ public:
     [[nodiscard]] int GetReferencedVertexIndex() const noexcept { return m_vertexIndex; }
     [[nodiscard]] int GetReferencedEdgeIndex() const noexcept { return m_edgeIndex; }
     [[nodiscard]] std::shared_ptr<DAGNode> GetReferencedFeature() const noexcept { return m_parentFeature.lock(); }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetTargetFeature() const noexcept { return m_parentFeature.lock(); }
     [[nodiscard]] uint64_t GetReferencedFeatureId() const noexcept { return m_parentFeatureId; }
 
     void OnParentRemoved(uint64_t parentId) override {

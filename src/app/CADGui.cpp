@@ -479,16 +479,13 @@ void CADGui::RenderTopBar(
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.38f, 0.28f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.52f, 0.38f, 1.0f));
         if (ImGui::Button("⤊ Extrude", ImVec2(92, 32))) {
-            // If a 2d sketch is selected, try to make the feature from that sketch automatically.
-            // If a 2d sketch is not selected, ask to reference one in the model tree or allow you to jump into 2d sketch creation.
+            // If a 2d sketch is selected, start live feature preview from that sketch.
+            // If a 2d sketch is not selected, prompt to pick one or jump into 2d sketch creation.
             auto sketchNode = std::dynamic_pointer_cast<SketchNode>(selectedNode);
             if (sketchNode && !sketchNode->HasParentFeature() && !sketchNode->IsConsumed()) {
                 std::string name = "Extrude_" + std::to_string(m_shapeCounter++);
                 auto extrude = std::make_shared<ExtrudeNode>(name, sketchNode, m_newExtrudeHeight);
-                graph.AddNode(extrude);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(extrude->GetId());
-                m_showExtrudePrompt = false;
+                StartFeaturePreview(PreviewFeatureType::Extrude, extrude, sketchNode, graph, device, exchange);
             } else {
                 m_showExtrudePrompt = true;
                 m_promptInitialSelectedId = m_selectedNodeId;
@@ -496,7 +493,47 @@ void CADGui::RenderTopBar(
         }
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("4. Create Extrude Feature:\n- Automatically creates from selected sketch.\n- If none selected, prompts to pick from model tree or jump into sketch creation.");
+            ImGui::SetTooltip("4. Create Extrude Feature:\n- Previews 3D extrusion live in viewport with confirm/cancel.\n- If none selected, prompts to pick from model tree or jump into sketch creation.");
+        }
+
+        // 4B. Cut Extrude (Subtract material from existing model)
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.48f, 0.22f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.62f, 0.28f, 0.22f, 1.0f));
+        if (ImGui::Button("⤋ Cut Extrude", ImVec2(108, 32))) {
+            auto sketchNode = std::dynamic_pointer_cast<SketchNode>(selectedNode);
+            if (sketchNode && !sketchNode->HasParentFeature() && !sketchNode->IsConsumed()) {
+                std::shared_ptr<DAGNode> target = nullptr;
+                if (auto p = sketchNode->GetParentFeature()) target = p;
+                else if (auto dp = sketchNode->GetDatumPlaneReference()) target = dp->GetTargetFeature();
+                
+                if (!target) {
+                    for (const auto& n : nodes) {
+                        if (n && n != sketchNode && !n->IsConsumed()) {
+                            if (!std::dynamic_pointer_cast<SketchNode>(n) && !std::dynamic_pointer_cast<DatumPlaneNode>(n) && !std::dynamic_pointer_cast<DatumAxisNode>(n)) {
+                                target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (target) {
+                    std::string name = "Cut_Extrude_" + std::to_string(m_shapeCounter++);
+                    auto extrude = std::make_shared<ExtrudeNode>(name, sketchNode, m_newExtrudeHeight, ExtrudeOperation::Cut, target);
+                    StartFeaturePreview(PreviewFeatureType::CutExtrude, extrude, target, graph, device, exchange);
+                } else {
+                    m_showCutExtrudePrompt = true;
+                    m_promptInitialSelectedId = m_selectedNodeId;
+                }
+            } else {
+                m_showCutExtrudePrompt = true;
+                m_promptInitialSelectedId = m_selectedNodeId;
+            }
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("4B. Create Cut Extrude Feature:\n- Cuts away / subtracts 3D extruded volume from an existing model.\n- Previews 3D cut live in viewport with confirm/cancel.");
         }
 
         ImGui::SameLine();
@@ -507,10 +544,7 @@ void CADGui::RenderTopBar(
             if (sketchNode && !sketchNode->HasParentFeature() && !sketchNode->IsConsumed()) {
                 std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
                 auto revolve = std::make_shared<RevolveNode>(name, sketchNode, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis);
-                graph.AddNode(revolve);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(revolve->GetId());
-                m_showRevolvePrompt = false;
+                StartFeaturePreview(PreviewFeatureType::Revolve, revolve, sketchNode, graph, device, exchange);
             } else {
                 m_showRevolvePrompt = true;
                 m_promptInitialSelectedId = m_selectedNodeId;
@@ -518,7 +552,47 @@ void CADGui::RenderTopBar(
         }
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("4. Create Revolve Feature:\n- Revolve sketch around an axis to create a cylindrical 3D model.\n- Cylindrical wall thickness is directly dictated by 2D sketch drawing.");
+            ImGui::SetTooltip("4. Create Revolve Feature:\n- Previews 3D cylindrical revolution live in viewport with confirm/cancel.\n- Cylindrical wall thickness is directly dictated by 2D sketch drawing.");
+        }
+
+        // 4D. Cut Revolve (Subtract material using revolution sweep)
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.20f, 0.28f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.26f, 0.36f, 1.0f));
+        if (ImGui::Button("⤋ Cut Revolve", ImVec2(108, 32))) {
+            auto sketchNode = std::dynamic_pointer_cast<SketchNode>(selectedNode);
+            if (sketchNode && !sketchNode->HasParentFeature() && !sketchNode->IsConsumed()) {
+                std::shared_ptr<DAGNode> target = nullptr;
+                if (auto p = sketchNode->GetParentFeature()) target = p;
+                else if (auto dp = sketchNode->GetDatumPlaneReference()) target = dp->GetTargetFeature();
+                
+                if (!target) {
+                    for (const auto& n : nodes) {
+                        if (n && n != sketchNode && !n->IsConsumed()) {
+                            if (!std::dynamic_pointer_cast<SketchNode>(n) && !std::dynamic_pointer_cast<DatumPlaneNode>(n) && !std::dynamic_pointer_cast<DatumAxisNode>(n)) {
+                                target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (target) {
+                    std::string name = "Cut_Revolve_" + std::to_string(m_shapeCounter++);
+                    auto revolve = std::make_shared<RevolveNode>(name, sketchNode, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis, RevolveOperation::Cut, target);
+                    StartFeaturePreview(PreviewFeatureType::CutRevolve, revolve, target, graph, device, exchange);
+                } else {
+                    m_showCutRevolvePrompt = true;
+                    m_promptInitialSelectedId = m_selectedNodeId;
+                }
+            } else {
+                m_showCutRevolvePrompt = true;
+                m_promptInitialSelectedId = m_selectedNodeId;
+            }
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("4D. Create Cut Revolve Feature:\n- Cuts away / subtracts 3D revolved volume from an existing model.\n- Previews 3D cut live in viewport with confirm/cancel.");
         }
 
         // Fillet & Chamfer features
@@ -537,11 +611,7 @@ void CADGui::RenderTopBar(
                     fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                     fillet->SetAngle(m_newFilletAngle);
                 }
-                graph.AddNode(fillet);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(fillet->GetId());
-                ClearSubElementSelection();
-                m_showFilletPrompt = false;
+                StartFeaturePreview(PreviewFeatureType::Fillet, fillet, target, graph, device, exchange);
             } else if (m_selectedVertexIndex >= 0 && selectedNode) {
                 auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                 const auto& edges = target->GetCachedEdges();
@@ -573,11 +643,7 @@ void CADGui::RenderTopBar(
                         fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                         fillet->SetAngle(m_newFilletAngle);
                     }
-                    graph.AddNode(fillet);
-                    graph.EvaluateDirtyNodes(device, exchange);
-                    SetSelectedNodeId(fillet->GetId());
-                    ClearSubElementSelection();
-                    m_showFilletPrompt = false;
+                    StartFeaturePreview(PreviewFeatureType::Fillet, fillet, target, graph, device, exchange);
                 }
             } else {
                 m_showFilletPrompt = true;
@@ -586,7 +652,7 @@ void CADGui::RenderTopBar(
         }
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Create Fillet Feature:\n- Rounds a model corner edge or vertex with input radius/angle.\n- Click on any model corner edge or vertex in 3D viewport, then apply Fillet.");
+            ImGui::SetTooltip("Create Fillet Feature:\n- Previews rounded model corner edge or vertex live with confirm/cancel.\n- Click on any model corner edge or vertex in 3D viewport, then apply Fillet.");
         }
 
         ImGui::SameLine();
@@ -597,11 +663,7 @@ void CADGui::RenderTopBar(
                 auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                 std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
                 auto chamfer = std::make_shared<ChamferNode>(name, target, m_selectedEdgeIndex, m_newChamferDistance);
-                graph.AddNode(chamfer);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(chamfer->GetId());
-                ClearSubElementSelection();
-                m_showChamferPrompt = false;
+                StartFeaturePreview(PreviewFeatureType::Chamfer, chamfer, target, graph, device, exchange);
             } else if (m_selectedVertexIndex >= 0 && selectedNode) {
                 auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                 const auto& edges = target->GetCachedEdges();
@@ -625,11 +687,7 @@ void CADGui::RenderTopBar(
                 if (corner.primaryEdge >= 0) {
                     std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
                     auto chamfer = std::make_shared<ChamferNode>(name, target, corner.primaryEdge, m_newChamferDistance);
-                    graph.AddNode(chamfer);
-                    graph.EvaluateDirtyNodes(device, exchange);
-                    SetSelectedNodeId(chamfer->GetId());
-                    ClearSubElementSelection();
-                    m_showChamferPrompt = false;
+                    StartFeaturePreview(PreviewFeatureType::Chamfer, chamfer, target, graph, device, exchange);
                 }
             } else {
                 m_showChamferPrompt = true;
@@ -638,7 +696,31 @@ void CADGui::RenderTopBar(
         }
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Create Chamfer Feature:\n- Bevels a model corner edge or vertex with input distance.\n- Click on any model corner edge or vertex in 3D viewport, then apply Chamfer.");
+            ImGui::SetTooltip("Create Chamfer Feature:\n- Previews beveled model corner edge or vertex live with confirm/cancel.\n- Click on any model corner edge or vertex in 3D viewport, then apply Chamfer.");
+        }
+
+        // If a 3D feature preview is active, show Confirm & Cancel buttons right in the topbar!
+        if (m_featurePreviewActive && m_previewNode) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
+
+            std::string confirmLabel = std::string("✓ Confirm ") + GetPreviewFeatureTypeName(m_previewFeatureType) + "##TopBar";
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.62f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.72f, 0.42f, 1.0f));
+            if (ImGui::Button(confirmLabel.c_str(), ImVec2(145, 32))) {
+                ConfirmFeaturePreview();
+            }
+            ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
+            std::string cancelLabel = "✕ Cancel##TopBar";
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.62f, 0.22f, 0.22f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.28f, 0.28f, 1.0f));
+            if (ImGui::Button(cancelLabel.c_str(), ImVec2(80, 32))) {
+                CancelFeaturePreview(graph, device, exchange);
+            }
+            ImGui::PopStyleColor(2);
         }
 
         // If 2D Sketch mode is active, always show Confirm / Cancel Sketch right in the topbar as well!
@@ -935,6 +1017,322 @@ void CADGui::RenderSketchPlanePromptModal(
     ImGui::PopStyleColor(2);
 }
 
+const char* CADGui::GetPreviewFeatureTypeName(CADGui::PreviewFeatureType type) noexcept {
+    switch (type) {
+        case PreviewFeatureType::Extrude:    return "Extrude";
+        case PreviewFeatureType::CutExtrude: return "Cut Extrude";
+        case PreviewFeatureType::Revolve:    return "Revolve";
+        case PreviewFeatureType::CutRevolve: return "Cut Revolve";
+        case PreviewFeatureType::Fillet:     return "Fillet";
+        case PreviewFeatureType::Chamfer:    return "Chamfer";
+        case PreviewFeatureType::None:       return "Feature";
+    }
+    return "Feature";
+}
+
+void CADGui::StartFeaturePreview(
+    PreviewFeatureType type,
+    std::shared_ptr<DAGNode> previewNode,
+    std::shared_ptr<DAGNode> target,
+    ParametricGraph& graph,
+    RHI::RHIDevice* device,
+    AtomicMeshExchange& exchange
+) {
+    if (!previewNode) return;
+    if (m_featurePreviewActive && m_previewNode) {
+        ConfirmFeaturePreview();
+    }
+
+    m_previewSavedSelectionId = m_selectedNodeId;
+    m_previewSavedFaceIndex = m_selectedFaceIndex;
+    m_previewSavedVertexIndex = m_selectedVertexIndex;
+    m_previewSavedEdgeIndex = m_selectedEdgeIndex;
+
+    m_previewFeatureType = type;
+    m_previewNode = previewNode;
+    m_previewTarget = target;
+    m_featurePreviewActive = true;
+
+    graph.AddNode(previewNode);
+    graph.EvaluateDirtyNodes(device, exchange);
+    SetSelectedNodeId(previewNode->GetId());
+    ClearSubElementSelection();
+
+    m_showExtrudePrompt = false;
+    m_showRevolvePrompt = false;
+    m_showFilletPrompt = false;
+    m_showChamferPrompt = false;
+}
+
+void CADGui::ConfirmFeaturePreview() {
+    m_featurePreviewActive = false;
+    m_previewFeatureType = PreviewFeatureType::None;
+    m_previewNode = nullptr;
+    m_previewTarget = nullptr;
+}
+
+void CADGui::CancelFeaturePreview(ParametricGraph& graph, RHI::RHIDevice* device, AtomicMeshExchange& exchange) {
+    if (!m_featurePreviewActive || !m_previewNode) return;
+
+    uint64_t prevId = m_previewNode->GetId();
+    graph.RemoveNode(prevId);
+    graph.EvaluateDirtyNodes(device, exchange);
+
+    if (m_previewTarget && graph.GetNode(m_previewTarget->GetId())) {
+        SetSelectedNodeId(m_previewTarget->GetId());
+    } else if (m_previewSavedSelectionId != 0 && graph.GetNode(m_previewSavedSelectionId)) {
+        SetSelectedNodeId(m_previewSavedSelectionId);
+    } else {
+        SetSelectedNodeId(0);
+    }
+
+    if (m_previewSavedFaceIndex >= 0) {
+        m_selectedFaceIndex = m_previewSavedFaceIndex;
+    } else if (m_previewSavedEdgeIndex >= 0) {
+        m_selectedEdgeIndex = m_previewSavedEdgeIndex;
+    } else if (m_previewSavedVertexIndex >= 0) {
+        m_selectedVertexIndex = m_previewSavedVertexIndex;
+    }
+
+    m_lastPublishedSelectedNodeId = m_selectedNodeId;
+    m_lastPublishedSelectedFaceIndex = m_selectedFaceIndex;
+    m_lastPublishedSelectedVertexIndex = m_selectedVertexIndex;
+    m_lastPublishedSelectedEdgeIndex = m_selectedEdgeIndex;
+    graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, m_selectedFaceIndex, m_selectedVertexIndex, m_selectedEdgeIndex);
+
+    m_featurePreviewActive = false;
+    m_previewFeatureType = PreviewFeatureType::None;
+    m_previewNode = nullptr;
+    m_previewTarget = nullptr;
+}
+
+void CADGui::RenderFeaturePreviewDialog(
+    ParametricGraph& graph,
+    RHI::RHIDevice* device,
+    AtomicMeshExchange& exchange
+) {
+    if (!m_featurePreviewActive || !m_previewNode) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    if (!io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            CancelFeaturePreview(graph, device, exchange);
+            return;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+            ConfirmFeaturePreview();
+            return;
+        }
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(390.0f, 60.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(540.0f, 0.0f), ImGuiCond_Always);
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.16f, 0.22f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.20f, 0.70f, 0.95f, 1.0f));
+
+    std::string winTitle = std::string("3D Feature Preview: ") + GetPreviewFeatureTypeName(m_previewFeatureType) + "###FeaturePreviewModal";
+    bool isOpen = true;
+    if (ImGui::Begin(winTitle.c_str(), &isOpen, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextColored(ImVec4(0.25f, 0.85f, 1.0f, 1.0f), "● 3D Feature Preview: %s", m_previewNode->GetName().c_str());
+        ImGui::TextDisabled("Previewing live in viewport. Confirm to apply chain, or Cancel to discard.");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (m_previewFeatureType == PreviewFeatureType::Extrude || m_previewFeatureType == PreviewFeatureType::CutExtrude) {
+            auto extrude = std::dynamic_pointer_cast<ExtrudeNode>(m_previewNode);
+            if (extrude) {
+                bool isCut = extrude->IsCut();
+                if (ImGui::RadioButton("Add Material (Boss)##ExtPrev", !isCut)) {
+                    extrude->SetOperation(ExtrudeOperation::Boss);
+                    m_previewFeatureType = PreviewFeatureType::Extrude;
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Cut Material (Subtract)##ExtPrev", isCut)) {
+                    extrude->SetOperation(ExtrudeOperation::Cut);
+                    m_previewFeatureType = PreviewFeatureType::CutExtrude;
+                    if (!extrude->GetTargetFeature() && m_previewTarget) {
+                        extrude->SetTargetFeature(m_previewTarget);
+                    }
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::Spacing();
+
+                float h = extrude->GetHeight();
+                const char* depthLabel = isCut ? "Cut Depth:" : "Extrude Depth:";
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("%s", depthLabel);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(150.0f);
+                std::string inputId = std::string("##Depth_") + (isCut ? "Cut" : "Extrude");
+                if (ImGui::InputFloat(inputId.c_str(), &h, 0.1f, 1.0f, "%.2f m")) {
+                    if (std::abs(h) < 0.001f) h = (h < 0.0f ? -0.01f : 0.01f);
+                    m_newExtrudeHeight = h;
+                    extrude->SetHeight(h);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("⇄ Flip", ImVec2(80.0f, 0.0f))) {
+                    h = -h;
+                    m_newExtrudeHeight = h;
+                    extrude->SetHeight(h);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                if (isCut) {
+                    if (auto tgt = extrude->GetTargetFeature()) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Cutting from Target: %s", tgt->GetName().c_str());
+                    } else {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "No target model specified to cut from.");
+                    }
+                }
+            }
+        } else if (m_previewFeatureType == PreviewFeatureType::Chamfer) {
+            auto chamfer = std::dynamic_pointer_cast<ChamferNode>(m_previewNode);
+            if (chamfer) {
+                float d = chamfer->GetDistance();
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Chamfer Distance:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(150.0f);
+                if (ImGui::InputFloat("##ChamferDist", &d, 0.05f, 0.2f, "%.2f m")) {
+                    if (d < 0.01f) d = 0.01f;
+                    m_newChamferDistance = d;
+                    chamfer->SetDistance(d);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+            }
+        } else if (m_previewFeatureType == PreviewFeatureType::Fillet) {
+            auto fillet = std::dynamic_pointer_cast<FilletNode>(m_previewNode);
+            if (fillet) {
+                bool isDist = (m_filletChoice == FilletDimensionChoice::Distance);
+                if (ImGui::RadioButton("Distance##PrevFilletChoice", isDist)) {
+                    m_filletChoice = FilletDimensionChoice::Distance;
+                    fillet->SetDimensionChoice(FilletNode::DimensionChoice::Distance);
+                    fillet->SetRadius(m_newFilletRadius);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Angle##PrevFilletChoice", !isDist)) {
+                    m_filletChoice = FilletDimensionChoice::Angle;
+                    fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
+                    fillet->SetAngle(m_newFilletAngle);
+                    float effRadius = 0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f);
+                    fillet->SetRadius(effRadius);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                if (m_filletChoice == FilletDimensionChoice::Distance) {
+                    float r = fillet->GetRadius();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("Fillet Radius:");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::InputFloat("##FilletRadius", &r, 0.05f, 0.2f, "%.2f m")) {
+                        if (r < 0.01f) r = 0.01f;
+                        m_newFilletRadius = r;
+                        fillet->SetRadius(r);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                    }
+                } else {
+                    float a = fillet->GetAngle();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("Fillet Angle:");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::InputFloat("##FilletAngle", &a, 1.0f, 5.0f, "%.1f °")) {
+                        a = std::clamp(a, 5.0f, 175.0f);
+                        m_newFilletAngle = a;
+                        fillet->SetAngle(a);
+                        float effRadius = 0.25f * std::tan(a * 3.14159265f / 360.0f);
+                        fillet->SetRadius(effRadius);
+                        graph.EvaluateDirtyNodes(device, exchange);
+                    }
+                }
+            }
+        } else if (m_previewFeatureType == PreviewFeatureType::Revolve || m_previewFeatureType == PreviewFeatureType::CutRevolve) {
+            auto revolve = std::dynamic_pointer_cast<RevolveNode>(m_previewNode);
+            if (revolve) {
+                bool isCut = revolve->IsCut();
+                if (ImGui::RadioButton("Add Material (Boss)##RevPrev", !isCut)) {
+                    revolve->SetOperation(RevolveOperation::Boss);
+                    m_previewFeatureType = PreviewFeatureType::Revolve;
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Cut Material (Subtract)##RevPrev", isCut)) {
+                    revolve->SetOperation(RevolveOperation::Cut);
+                    m_previewFeatureType = PreviewFeatureType::CutRevolve;
+                    if (!revolve->GetTargetFeature() && m_previewTarget) {
+                        revolve->SetTargetFeature(m_previewTarget);
+                    }
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::Spacing();
+
+                float ang = revolve->GetAngleDegrees();
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Revolve Angle:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(150.0f);
+                if (ImGui::InputFloat("##RevolveAngle", &ang, 1.0f, 15.0f, "%.1f deg")) {
+                    ang = std::clamp(ang, 0.1f, 360.0f);
+                    m_newRevolveAngle = ang;
+                    revolve->SetAngleDegrees(ang);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                int currentMode = static_cast<int>(revolve->GetAxisMode());
+                const char* axisModes[] = {
+                    "Sketch V-Axis (Vertical)",
+                    "Sketch U-Axis (Horizontal)",
+                    "World Y-Axis (0, 1, 0)",
+                    "World X-Axis (1, 0, 0)",
+                    "World Z-Axis (0, 0, 1)"
+                };
+                if (ImGui::Combo("Axis Mode", &currentMode, axisModes, IM_ARRAYSIZE(axisModes))) {
+                    revolve->SetAxisMode(static_cast<RevolveAxisMode>(currentMode));
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+
+                if (isCut) {
+                    if (auto tgt = revolve->GetTargetFeature()) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Cutting from Target: %s", tgt->GetName().c_str());
+                    } else {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "No target model specified to cut from.");
+                    }
+                }
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.62f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.72f, 0.42f, 1.0f));
+        std::string confirmBtnText = std::string("✓ Confirm ") + GetPreviewFeatureTypeName(m_previewFeatureType) + " (Enter)";
+        if (ImGui::Button(confirmBtnText.c_str(), ImVec2(200, 32))) {
+            ConfirmFeaturePreview();
+        }
+        ImGui::PopStyleColor(2);
+
+        ImGui::SameLine();
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.20f, 0.20f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.26f, 0.26f, 1.0f));
+        if (ImGui::Button("✕ Cancel (Esc)", ImVec2(140, 32))) {
+            CancelFeaturePreview(graph, device, exchange);
+        }
+        ImGui::PopStyleColor(2);
+    }
+    if (!isOpen) {
+        CancelFeaturePreview(graph, device, exchange);
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+}
+
 void CADGui::RenderExtrudePromptModal(
     ParametricGraph& graph,
     RHI::RHIDevice* device,
@@ -951,10 +1349,7 @@ void CADGui::RenderExtrudePromptModal(
                     if (!s->HasParentFeature() && !s->IsConsumed()) {
                         std::string name = "Extrude_" + std::to_string(m_shapeCounter++);
                         auto extrude = std::make_shared<ExtrudeNode>(name, s, m_newExtrudeHeight);
-                        graph.AddNode(extrude);
-                        graph.EvaluateDirtyNodes(device, exchange);
-                        SetSelectedNodeId(extrude->GetId());
-                        m_showExtrudePrompt = false;
+                        StartFeaturePreview(PreviewFeatureType::Extrude, extrude, s, graph, device, exchange);
                         return;
                     }
                 }
@@ -962,8 +1357,8 @@ void CADGui::RenderExtrudePromptModal(
         }
     }
 
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 240.0f, 68.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(480.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 270.0f, 68.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(540.0f, 0.0f), ImGuiCond_Always);
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.13f, 0.15f, 0.20f, 0.98f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.35f, 0.75f, 0.45f, 1.0f));
@@ -985,8 +1380,17 @@ void CADGui::RenderExtrudePromptModal(
 
         if (!availableSketches.empty()) {
             ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Available Sketches in Model Tree:");
-            ImGui::InputFloat("Extrude Depth", &m_newExtrudeHeight, 0.1f, 1.0f, "%.2f m");
-            if (std::abs(m_newExtrudeHeight) < 0.001f) m_newExtrudeHeight = (m_newExtrudeHeight < 0.0f ? -0.01f : 0.01f);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Extrude Depth:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::InputFloat("##PromptExtrudeDepth", &m_newExtrudeHeight, 0.1f, 1.0f, "%.2f m")) {
+                if (std::abs(m_newExtrudeHeight) < 0.001f) m_newExtrudeHeight = (m_newExtrudeHeight < 0.0f ? -0.01f : 0.01f);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("⇄ Flip##PromptExtrudeFlip", ImVec2(80.0f, 0.0f))) {
+                m_newExtrudeHeight = -m_newExtrudeHeight;
+            }
             ImGui::Spacing();
 
             for (const auto& s : availableSketches) {
@@ -994,9 +1398,7 @@ void CADGui::RenderExtrudePromptModal(
                 if (ImGui::Button(btnLabel.c_str(), ImVec2(-1, 30))) {
                     std::string name = "Extrude_" + std::to_string(m_shapeCounter++);
                     auto extrude = std::make_shared<ExtrudeNode>(name, s, m_newExtrudeHeight);
-                    graph.AddNode(extrude);
-                    graph.EvaluateDirtyNodes(device, exchange);
-                    SetSelectedNodeId(extrude->GetId());
+                    StartFeaturePreview(PreviewFeatureType::Extrude, extrude, s, graph, device, exchange);
                     m_showExtrudePrompt = false;
                     break;
                 }
@@ -1058,6 +1460,108 @@ void CADGui::RenderExtrudePromptModal(
     ImGui::PopStyleColor(2);
 }
 
+void CADGui::RenderCutExtrudePromptModal(
+    ParametricGraph& graph,
+    RHI::RHIDevice* device,
+    AtomicMeshExchange& exchange,
+    const std::vector<std::shared_ptr<DAGNode>>& nodes
+) {
+    if (!m_showCutExtrudePrompt) return;
+
+    std::shared_ptr<DAGNode> target = nullptr;
+    for (const auto& n : nodes) {
+        if (n && !n->IsConsumed()) {
+            if (!std::dynamic_pointer_cast<SketchNode>(n) && !std::dynamic_pointer_cast<DatumPlaneNode>(n) && !std::dynamic_pointer_cast<DatumAxisNode>(n)) {
+                target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
+                break;
+            }
+        }
+    }
+
+    if (m_selectedNodeId != 0 && m_selectedNodeId != m_promptInitialSelectedId) {
+        for (const auto& n : nodes) {
+            if (n->GetId() == m_selectedNodeId) {
+                if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                    if (!s->HasParentFeature() && !s->IsConsumed() && target) {
+                        std::string name = "Cut_Extrude_" + std::to_string(m_shapeCounter++);
+                        auto extrude = std::make_shared<ExtrudeNode>(name, s, m_newExtrudeHeight, ExtrudeOperation::Cut, target);
+                        StartFeaturePreview(PreviewFeatureType::CutExtrude, extrude, target, graph, device, exchange);
+                        m_showCutExtrudePrompt = false;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 270.0f, 68.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(540.0f, 0.0f), ImGuiCond_Always);
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.12f, 0.13f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.35f, 0.30f, 1.0f));
+
+    if (ImGui::Begin("Cut Extrude Feature - Select Reference Sketch##Modal", &m_showCutExtrudePrompt, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.0f), "⤋ Cut Extrude (Subtract Material)");
+        ImGui::Separator();
+        if (target) {
+            ImGui::TextColored(ImVec4(0.2f, 0.85f, 1.0f, 1.0f), "Target Model: '%s' (ID %llu)", target->GetName().c_str(), target->GetId());
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Warning: No solid model exists in scene to cut away material from.");
+        }
+        ImGui::Spacing();
+
+        std::vector<std::shared_ptr<SketchNode>> availableSketches;
+        for (const auto& n : nodes) {
+            if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                if (!s->HasParentFeature() && !s->IsConsumed()) {
+                    availableSketches.push_back(s);
+                }
+            }
+        }
+
+        if (!availableSketches.empty()) {
+            ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Available Sketches in Model Tree:");
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Cut Depth:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::InputFloat("##PromptCutDepth", &m_newExtrudeHeight, 0.1f, 1.0f, "%.2f m")) {
+                if (std::abs(m_newExtrudeHeight) < 0.001f) m_newExtrudeHeight = (m_newExtrudeHeight < 0.0f ? -0.01f : 0.01f);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("⇄ Flip##PromptCutFlip", ImVec2(80.0f, 0.0f))) {
+                m_newExtrudeHeight = -m_newExtrudeHeight;
+            }
+            ImGui::Spacing();
+
+            for (const auto& s : availableSketches) {
+                std::string btnLabel = "⤋ Cut with Sketch: '" + s->GetName() + "' (ID " + std::to_string(s->GetId()) + ")";
+                if (ImGui::Button(btnLabel.c_str(), ImVec2(-1, 30))) {
+                    if (target) {
+                        std::string name = "Cut_Extrude_" + std::to_string(m_shapeCounter++);
+                        auto extrude = std::make_shared<ExtrudeNode>(name, s, m_newExtrudeHeight, ExtrudeOperation::Cut, target);
+                        StartFeaturePreview(PreviewFeatureType::CutExtrude, extrude, target, graph, device, exchange);
+                        m_showCutExtrudePrompt = false;
+                        break;
+                    }
+                }
+            }
+            ImGui::Spacing();
+        } else {
+            ImGui::TextDisabled("No available (unconsumed) 2D sketches exist in the model tree.");
+            ImGui::Spacing();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        if (ImGui::Button("Cancel", ImVec2(-1, 26))) {
+            m_showCutExtrudePrompt = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+}
+
 void CADGui::RenderRevolvePromptModal(
     ParametricGraph& graph,
     RHI::RHIDevice* device,
@@ -1073,9 +1577,7 @@ void CADGui::RenderRevolvePromptModal(
                     if (!s->HasParentFeature() && !s->IsConsumed()) {
                         std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
                         auto revolve = std::make_shared<RevolveNode>(name, s, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis);
-                        graph.AddNode(revolve);
-                        graph.EvaluateDirtyNodes(device, exchange);
-                        SetSelectedNodeId(revolve->GetId());
+                        StartFeaturePreview(PreviewFeatureType::Revolve, revolve, s, graph, device, exchange);
                         m_showRevolvePrompt = false;
                         return;
                     }
@@ -1117,9 +1619,7 @@ void CADGui::RenderRevolvePromptModal(
                 if (ImGui::Button(btnLabel.c_str(), ImVec2(-1, 30))) {
                     std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
                     auto revolve = std::make_shared<RevolveNode>(name, s, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis);
-                    graph.AddNode(revolve);
-                    graph.EvaluateDirtyNodes(device, exchange);
-                    SetSelectedNodeId(revolve->GetId());
+                    StartFeaturePreview(PreviewFeatureType::Revolve, revolve, s, graph, device, exchange);
                     m_showRevolvePrompt = false;
                     break;
                 }
@@ -1156,6 +1656,99 @@ void CADGui::RenderRevolvePromptModal(
     ImGui::PopStyleColor(2);
 }
 
+void CADGui::RenderCutRevolvePromptModal(
+    ParametricGraph& graph,
+    RHI::RHIDevice* device,
+    AtomicMeshExchange& exchange,
+    const std::vector<std::shared_ptr<DAGNode>>& nodes
+) {
+    if (!m_showCutRevolvePrompt) return;
+
+    std::shared_ptr<DAGNode> target = nullptr;
+    for (const auto& n : nodes) {
+        if (n && !n->IsConsumed()) {
+            if (!std::dynamic_pointer_cast<SketchNode>(n) && !std::dynamic_pointer_cast<DatumPlaneNode>(n) && !std::dynamic_pointer_cast<DatumAxisNode>(n)) {
+                target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
+                break;
+            }
+        }
+    }
+
+    if (m_selectedNodeId != 0 && m_selectedNodeId != m_promptInitialSelectedId) {
+        for (const auto& n : nodes) {
+            if (n->GetId() == m_selectedNodeId) {
+                if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                    if (!s->HasParentFeature() && !s->IsConsumed() && target) {
+                        std::string name = "Cut_Revolve_" + std::to_string(m_shapeCounter++);
+                        auto revolve = std::make_shared<RevolveNode>(name, s, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis, RevolveOperation::Cut, target);
+                        StartFeaturePreview(PreviewFeatureType::CutRevolve, revolve, target, graph, device, exchange);
+                        m_showCutRevolvePrompt = false;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 240.0f, 68.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(480.0f, 0.0f), ImGuiCond_Always);
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.16f, 0.12f, 0.14f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.35f, 0.40f, 1.0f));
+
+    if (ImGui::Begin("Cut Revolve Feature - Select Reference Sketch##Modal", &m_showCutRevolvePrompt, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.45f, 1.0f), "⤋ Cut Revolve (Subtract Material via Revolution)");
+        ImGui::Separator();
+        if (target) {
+            ImGui::TextColored(ImVec4(0.2f, 0.85f, 1.0f, 1.0f), "Target Model: '%s' (ID %llu)", target->GetName().c_str(), target->GetId());
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Warning: No solid model exists in scene to cut away material from.");
+        }
+        ImGui::Spacing();
+
+        std::vector<std::shared_ptr<SketchNode>> availableSketches;
+        for (const auto& n : nodes) {
+            if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                if (!s->HasParentFeature() && !s->IsConsumed()) {
+                    availableSketches.push_back(s);
+                }
+            }
+        }
+
+        if (!availableSketches.empty()) {
+            ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Available Sketches in Model Tree:");
+            ImGui::InputFloat("Revolve Angle", &m_newRevolveAngle, 1.0f, 15.0f, "%.1f deg");
+            m_newRevolveAngle = std::clamp(m_newRevolveAngle, 0.1f, 360.0f);
+            ImGui::Spacing();
+
+            for (const auto& s : availableSketches) {
+                std::string btnLabel = "⤋ Cut Revolve with Sketch: '" + s->GetName() + "' (ID " + std::to_string(s->GetId()) + ")";
+                if (ImGui::Button(btnLabel.c_str(), ImVec2(-1, 30))) {
+                    if (target) {
+                        std::string name = "Cut_Revolve_" + std::to_string(m_shapeCounter++);
+                        auto revolve = std::make_shared<RevolveNode>(name, s, m_newRevolveAngle, RevolveAxisMode::Sketch_V_Axis, RevolveOperation::Cut, target);
+                        StartFeaturePreview(PreviewFeatureType::CutRevolve, revolve, target, graph, device, exchange);
+                        m_showCutRevolvePrompt = false;
+                        break;
+                    }
+                }
+            }
+            ImGui::Spacing();
+        } else {
+            ImGui::TextDisabled("No available (unconsumed) 2D sketches exist in the model tree.");
+            ImGui::Spacing();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        if (ImGui::Button("Cancel", ImVec2(-1, 26))) {
+            m_showCutRevolvePrompt = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+}
+
 void CADGui::RenderFilletPromptModal(
     ParametricGraph& graph,
     RHI::RHIDevice* device,
@@ -1177,10 +1770,7 @@ void CADGui::RenderFilletPromptModal(
                     fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                     fillet->SetAngle(m_newFilletAngle);
                 }
-                graph.AddNode(fillet);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(fillet->GetId());
-                ClearSubElementSelection();
+                StartFeaturePreview(PreviewFeatureType::Fillet, fillet, target, graph, device, exchange);
                 m_showFilletPrompt = false;
                 return;
             }
@@ -1234,10 +1824,7 @@ void CADGui::RenderFilletPromptModal(
                     fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                     fillet->SetAngle(m_newFilletAngle);
                 }
-                graph.AddNode(fillet);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(fillet->GetId());
-                ClearSubElementSelection();
+                StartFeaturePreview(PreviewFeatureType::Fillet, fillet, target, graph, device, exchange);
                 m_showFilletPrompt = false;
                 break;
             }
@@ -1270,10 +1857,7 @@ void CADGui::RenderChamferPromptModal(
                 auto target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
                 std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
                 auto chamfer = std::make_shared<ChamferNode>(name, target, m_selectedEdgeIndex, m_newChamferDistance);
-                graph.AddNode(chamfer);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(chamfer->GetId());
-                ClearSubElementSelection();
+                StartFeaturePreview(PreviewFeatureType::Chamfer, chamfer, target, graph, device, exchange);
                 m_showChamferPrompt = false;
                 return;
             }
@@ -1306,10 +1890,7 @@ void CADGui::RenderChamferPromptModal(
                 auto target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
                 std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
                 auto chamfer = std::make_shared<ChamferNode>(name, target, 0, m_newChamferDistance);
-                graph.AddNode(chamfer);
-                graph.EvaluateDirtyNodes(device, exchange);
-                SetSelectedNodeId(chamfer->GetId());
-                ClearSubElementSelection();
+                StartFeaturePreview(PreviewFeatureType::Chamfer, chamfer, target, graph, device, exchange);
                 m_showChamferPrompt = false;
                 break;
             }
@@ -1573,6 +2154,96 @@ void CADGui::RenderEmptySketchPromptModal(
     ImGui::PopStyleColor(2);
 }
 
+void CADGui::EnforceShapeConstraints(CanvasShape& shape, int pinnedVertexIdx) {
+    SketchNode::EnforceConstraints(shape.points, shape.edgeConstraints, shape.isClosed, pinnedVertexIdx);
+}
+
+void CADGui::RenderDimensionEditModal() {
+    if (!m_showDimensionEditPopup) return;
+    if (m_dimEditShapeIdx < 0 || m_dimEditShapeIdx >= static_cast<int>(m_canvasShapes.size())) {
+        m_showDimensionEditPopup = false;
+        return;
+    }
+    auto& shape = m_canvasShapes[m_dimEditShapeIdx];
+    size_t n = shape.points.size();
+    if (m_dimEditEdgeIdx < 0 || m_dimEditEdgeIdx >= static_cast<int>(n)) {
+        m_showDimensionEditPopup = false;
+        return;
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(m_dimEditPopupPos[0] + 8.0f, m_dimEditPopupPos[1] - 35.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(350.0f, 0.0f), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.15f, 0.20f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.95f, 0.70f, 0.15f, 1.0f));
+
+    bool isOpen = true;
+    if (ImGui::Begin("Edit Dimension Constraint###DimEditModal", &isOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "📐 Line Dimension (Edge #%d of '%s'):", m_dimEditEdgeIdx, shape.name.c_str());
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+        ImGui::SetNextItemWidth(130.0f);
+        bool enterPressed = ImGui::InputFloat("Dimension (Length)##DimValInput", &m_dimEditValue, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+        if (m_dimEditValue < 0.01f) m_dimEditValue = 0.01f;
+
+        ImGui::Spacing();
+        ImGui::Checkbox("Lock & Constrain Dimension (🔒)", &m_dimEditConstrained);
+        ImGui::TextDisabled("Constrained dimensions will not change when modifying\nother dimensions or dragging elements.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.62f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.72f, 0.42f, 1.0f));
+        bool apply = ImGui::Button("✓ Apply (Enter)", ImVec2(130, 28)) || enterPressed;
+        ImGui::PopStyleColor(2);
+
+        ImGui::SameLine();
+        if (ImGui::Button("✕ Cancel (Esc)", ImVec2(100, 28)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            m_showDimensionEditPopup = false;
+        }
+
+        if (apply) {
+            size_t i0 = m_dimEditEdgeIdx;
+            size_t i1 = (i0 + 1) % n;
+            float dU = shape.points[i1][0] - shape.points[i0][0];
+            float dV = shape.points[i1][1] - shape.points[i0][1];
+            float curLen = std::hypot(dU, dV);
+            float ux = (curLen > 1e-6f) ? (dU / curLen) : 1.0f;
+            float uy = (curLen > 1e-6f) ? (dV / curLen) : 0.0f;
+            float deltaL = m_dimEditValue - curLen;
+
+            if (shape.isClosed && shape.points.size() == 4) {
+                size_t i2 = (i0 + 2) % 4;
+                shape.points[i1][0] += ux * deltaL;
+                shape.points[i1][1] += uy * deltaL;
+                shape.points[i2][0] += ux * deltaL;
+                shape.points[i2][1] += uy * deltaL;
+            } else {
+                shape.points[i1][0] = shape.points[i0][0] + ux * m_dimEditValue;
+                shape.points[i1][1] = shape.points[i0][1] + uy * m_dimEditValue;
+            }
+
+            if (m_dimEditConstrained) {
+                shape.SetEdgeConstraint(m_dimEditEdgeIdx, m_dimEditValue);
+            } else {
+                shape.RemoveEdgeConstraint(m_dimEditEdgeIdx);
+            }
+
+            EnforceShapeConstraints(shape, static_cast<int>(i0));
+            m_showDimensionEditPopup = false;
+        }
+    }
+    if (!isOpen) {
+        m_showDimensionEditPopup = false;
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+}
+
 void CADGui::RenderUI(
     ParametricGraph& graph,
     RHI::RHIDevice* device,
@@ -1642,11 +2313,15 @@ void CADGui::RenderUI(
     // Interactive identification modals for Sketch Planes and Feature References
     RenderSketchPlanePromptModal(graph, device, exchange, nodes);
     RenderExtrudePromptModal(graph, device, exchange, nodes);
+    RenderCutExtrudePromptModal(graph, device, exchange, nodes);
     RenderRevolvePromptModal(graph, device, exchange, nodes);
+    RenderCutRevolvePromptModal(graph, device, exchange, nodes);
     RenderFilletPromptModal(graph, device, exchange, nodes);
     RenderChamferPromptModal(graph, device, exchange, nodes);
     RenderConflictPromptModal(graph, device, exchange, nodes);
     RenderEmptySketchPromptModal(graph, device, exchange);
+    RenderFeaturePreviewDialog(graph, device, exchange);
+    RenderDimensionEditModal();
 
     // Refresh nodes & selectedNode if the top bar or prompt modals added/selected a new node this frame
     nodes = graph.GetNodes();
@@ -1696,7 +2371,9 @@ void CADGui::RenderUI(
                 bool hasChildren = (childSketch != nullptr) || !childFeatures.empty();
 
                 std::string prefix = (depth > 0) ? "↳ [Solid] " : "[Solid] ";
-                if (node->HasConflict()) {
+                if (m_featurePreviewActive && m_previewNode && node == m_previewNode) {
+                    prefix = (depth > 0) ? "↳ [PREVIEW] " : "[PREVIEW] ";
+                } else if (node->HasConflict()) {
                     prefix = (depth > 0) ? "↳ [!] CONFLICT: " : "[!] CONFLICT: ";
                 } else if (std::dynamic_pointer_cast<SketchNode>(node)) {
                     if (isSelected) {
@@ -1705,9 +2382,9 @@ void CADGui::RenderUI(
                         prefix = (depth > 0) ? "↳ [Sketch 👁 Hidden] " : "[Sketch 👁 Hidden] ";
                     }
                 } else if (auto e = std::dynamic_pointer_cast<ExtrudeNode>(node)) {
-                    prefix = (depth > 0) ? "↳ [Extrude] " : "[Extrude] ";
+                    prefix = (depth > 0) ? (e->IsCut() ? "↳ [⤋ Cut Extrude] " : "↳ [Extrude] ") : (e->IsCut() ? "[⤋ Cut Extrude] " : "[Extrude] ");
                 } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
-                    prefix = (depth > 0) ? "↳ [Revolve] " : "[Revolve] ";
+                    prefix = (depth > 0) ? (r->IsCut() ? "↳ [⤋ Cut Revolve] " : "↳ [Revolve] ") : (r->IsCut() ? "[⤋ Cut Revolve] " : "[Revolve] ");
                 } else if (auto p = std::dynamic_pointer_cast<DatumPlaneNode>(node)) {
                     if (p->IsFaceAssociative()) prefix = "↳ [DatumPlane (Face Tied)] ";
                     else if (p->IsEdgeAssociative()) prefix = "↳ [DatumPlane (Edge Tied)] ";
@@ -1802,6 +2479,25 @@ void CADGui::RenderUI(
 
         if (selectedNode) {
             ImGui::Text("Selected: %s (Gen %llu)", selectedNode->GetName().c_str(), selectedNode->GetGeneration());
+
+            if (m_featurePreviewActive && m_previewNode && selectedNode == m_previewNode) {
+                ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.35f, 0.75f, 0.45f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.22f, 0.15f, 0.95f));
+                ImGui::BeginChild("FeaturePreviewCard", ImVec2(0, 78), true);
+                ImGui::TextColored(ImVec4(0.4f, 0.95f, 0.55f, 1.0f), "● PREVIEW MODE: %s", GetPreviewFeatureTypeName(m_previewFeatureType));
+                ImGui::TextWrapped("Previewing feature in 3D viewport. Adjust parameters above/below, then confirm or cancel.");
+                if (ImGui::Button("✓ Confirm", ImVec2(100, 24))) {
+                    ConfirmFeaturePreview();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("✕ Cancel", ImVec2(80, 24))) {
+                    CancelFeaturePreview(graph, device, exchange);
+                }
+                ImGui::EndChild();
+                ImGui::PopStyleColor(2);
+                ImGui::Spacing();
+            }
 
             if (selectedNode->HasConflict()) {
                 ImGui::Spacing();
@@ -2038,7 +2734,12 @@ void CADGui::RenderUI(
             // B. Extrude Node Inspector
             // -----------------------------------------------------------------
             else if (auto extrude = std::dynamic_pointer_cast<ExtrudeNode>(selectedNode)) {
-                ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Extrude Feature Properties:");
+                bool isCut = extrude->IsCut();
+                if (isCut) {
+                    ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.0f), "Cut Extrude Feature Properties:");
+                } else {
+                    ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Extrude Feature Properties:");
+                }
                 
                 if (auto refSketch = extrude->GetSketchReference()) {
                     ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1.0f), "Linked to Sketch: %s", refSketch->GetName().c_str());
@@ -2049,8 +2750,15 @@ void CADGui::RenderUI(
                     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Standalone Profile (No Sketch Ref)");
                 }
 
+                if (isCut) {
+                    if (auto tgt = extrude->GetTargetFeature()) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Cutting from Target: %s", tgt->GetName().c_str());
+                    }
+                }
+
                 float h = extrude->GetHeight();
-                if (ImGui::InputFloat("Extrude Depth", &h, 0.1f, 1.0f, "%.2f m")) {
+                const char* depthLabel = isCut ? "Cut Depth" : "Extrude Depth";
+                if (ImGui::InputFloat(depthLabel, &h, 0.1f, 1.0f, "%.2f m")) {
                     if (std::abs(h) < 0.001f) h = (h < 0.0f ? -0.01f : 0.01f);
                     extrude->SetHeight(h);
                     graph.EvaluateDirtyNodes(device, exchange);
@@ -2060,7 +2768,12 @@ void CADGui::RenderUI(
             // B2. Revolve Node Inspector
             // -----------------------------------------------------------------
             else if (auto revolve = std::dynamic_pointer_cast<RevolveNode>(selectedNode)) {
-                ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Revolve Feature Properties:");
+                bool isCut = revolve->IsCut();
+                if (isCut) {
+                    ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.45f, 1.0f), "Cut Revolve Feature Properties:");
+                } else {
+                    ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Revolve Feature Properties:");
+                }
                 
                 if (auto refSketch = revolve->GetSketchReference()) {
                     ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1.0f), "Linked to Sketch: %s", refSketch->GetName().c_str());
@@ -2069,6 +2782,12 @@ void CADGui::RenderUI(
                     }
                 } else {
                     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Standalone Profile (No Sketch Ref)");
+                }
+
+                if (isCut) {
+                    if (auto tgt = revolve->GetTargetFeature()) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Cutting from Target: %s", tgt->GetName().c_str());
+                    }
                 }
 
                 ImGui::Spacing();
@@ -2489,30 +3208,40 @@ void CADGui::RenderUI(
     ImGui::SetNextWindowSize(ImVec2(344.0f, 320.0f), ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("CAD Viewport & Performance HUD", nullptr)) {
-        ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Camera Presets");
+        ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Camera Presets (Recenter on Origin)");
         ImGui::Separator();
 
         if (ImGui::Button("Top View", ImVec2(76, 26))) {
-            camera.Orbit(0.0f, 1.55f);
+            camera.SetTopView(true);
         }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter on Top View (+Y down onto XZ plane)");
         ImGui::SameLine();
-        if (ImGui::Button("Front View", ImVec2(76, 26))) {
-            camera.Orbit(0.0f, 0.0f);
+        if (ImGui::Button("Side View", ImVec2(76, 26))) {
+            camera.SetSideView(true);
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Right View", ImVec2(76, 26))) {
-            camera.Orbit(1.5707f, 0.0f);
-        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter on Side View (+X looking towards YZ plane)");
         ImGui::SameLine();
         if (ImGui::Button("Isometric", ImVec2(76, 26))) {
-            camera.Orbit(0.785f, 0.523f);
+            camera.SetIsometricView(true);
         }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter on Isometric View (CAD corner angle)");
+        ImGui::SameLine();
+        if (ImGui::Button("Front View", ImVec2(76, 26))) {
+            camera.SetFrontView(true);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter on Front View (+Z looking towards XY plane)");
+
+        if (ImGui::Button("⌂ Recenter Origin", ImVec2(140, 24))) {
+            camera.RecenterOrigin();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter camera target on (0, 0, 0) origin without altering orbit angle");
 
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Display Options");
         ImGui::Separator();
         ImGui::Checkbox("Sharp Feature Edges / Wireframe", &m_showWireframe);
         ImGui::Checkbox("Infinite Datum Ground Grid", &m_showGrid);
+        ImGui::Checkbox("X/Y/Z Axes Reference & Triad", &m_showAxesReference);
 
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "Engine Telemetry (Decoupled)");
@@ -2787,6 +3516,155 @@ void CADGui::RenderUI(
             }
         }
     }
+
+    // -------------------------------------------------------------------------
+    // 3D Viewport Subtle X/Y/Z Axes Reference & View Orientation Controls
+    // -------------------------------------------------------------------------
+    if (m_showAxesReference && !m_sketchModeActive) {
+        ImDrawList* bg = ImGui::GetBackgroundDrawList();
+        float vpW = static_cast<float>(renderer.GetWidth());
+        float vpH = static_cast<float>(renderer.GetHeight());
+        if (vpW <= 0.0f || vpH <= 0.0f) {
+            ImGuiIO& io = ImGui::GetIO();
+            vpW = io.DisplaySize.x;
+            vpH = io.DisplaySize.y;
+        }
+
+        // 1. Subtle 3D World Axes Cross at World Origin (0, 0, 0)
+        float ox = 0.0f, oy = 0.0f;
+        if (camera.WorldToScreenPoint(Geom::Point3D(0.0, 0.0, 0.0), vpW, vpH, ox, oy)) {
+            float axisLength = 2.0f; // 2 meters in world space
+            float px = 0.0f, py = 0.0f;
+
+            // Subtle center origin point
+            bg->AddCircleFilled(ImVec2(ox, oy), 3.5f, IM_COL32(230, 235, 245, 210), 12);
+            bg->AddCircle(ImVec2(ox, oy), 4.5f, IM_COL32(20, 25, 35, 180), 12, 1.2f);
+
+            // +X Axis (Red)
+            if (camera.WorldToScreenPoint(Geom::Point3D(axisLength, 0.0, 0.0), vpW, vpH, px, py)) {
+                bg->AddLine(ImVec2(ox, oy), ImVec2(px, py), IM_COL32(235, 65, 65, 190), 2.0f);
+                bg->AddText(ImVec2(px + 4.0f, py - 8.0f), IM_COL32(255, 110, 110, 240), "+X");
+            }
+            // +Y Axis (Green)
+            if (camera.WorldToScreenPoint(Geom::Point3D(0.0, axisLength, 0.0), vpW, vpH, px, py)) {
+                bg->AddLine(ImVec2(ox, oy), ImVec2(px, py), IM_COL32(65, 220, 85, 190), 2.0f);
+                bg->AddText(ImVec2(px + 4.0f, py - 8.0f), IM_COL32(110, 255, 130, 240), "+Y");
+            }
+            // +Z Axis (Blue)
+            if (camera.WorldToScreenPoint(Geom::Point3D(0.0, 0.0, axisLength), vpW, vpH, px, py)) {
+                bg->AddLine(ImVec2(ox, oy), ImVec2(px, py), IM_COL32(65, 140, 255, 190), 2.0f);
+                bg->AddText(ImVec2(px + 4.0f, py - 8.0f), IM_COL32(120, 180, 255, 240), "+Z");
+            }
+        }
+
+        // 2. Subtle Viewport Coordinate Triad (Orientation Triad in corner)
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        ImGuiIO& io = ImGui::GetIO();
+
+        float triadCenterX = 60.0f;
+        float triadCenterY = vpH - 86.0f;
+        float triadRadius = 32.0f;
+
+        // Subtle dark background circle
+        fg->AddCircleFilled(ImVec2(triadCenterX, triadCenterY), 38.0f, IM_COL32(15, 18, 24, 180), 32);
+        fg->AddCircle(ImVec2(triadCenterX, triadCenterY), 38.0f, IM_COL32(60, 75, 95, 140), 32, 1.0f);
+
+        float fwd[3], rgt[3], up[3];
+        camera.GetBasisVectors(fwd, rgt, up);
+
+        struct AxisProj {
+            const char* name;
+            float scrX, scrY, depth;
+            ImU32 color;
+            void (*onClick)(Camera&);
+        };
+
+        std::vector<AxisProj> axes = {
+            { "X",  rgt[0], -up[0], fwd[0], IM_COL32(235, 65, 65, 240), [](Camera& c) { c.SetSideView(true); } },
+            { "Y",  rgt[1], -up[1], fwd[1], IM_COL32(65, 220, 85, 240), [](Camera& c) { c.SetTopView(true); } },
+            { "Z",  rgt[2], -up[2], fwd[2], IM_COL32(65, 140, 255, 240), [](Camera& c) { c.SetFrontView(true); } }
+        };
+
+        std::sort(axes.begin(), axes.end(), [](const AxisProj& a, const AxisProj& b) {
+            return a.depth < b.depth;
+        });
+
+        for (const auto& ax : axes) {
+            ImVec2 tip(triadCenterX + ax.scrX * triadRadius, triadCenterY + ax.scrY * triadRadius);
+            fg->AddLine(ImVec2(triadCenterX, triadCenterY), tip, ax.color, 2.2f);
+
+            float dMouse = std::hypot(io.MousePos.x - tip.x, io.MousePos.y - tip.y);
+            bool hovered = (dMouse < 9.0f);
+            if (hovered) {
+                fg->AddCircleFilled(tip, 8.5f, IM_COL32(255, 255, 255, 240), 16);
+                fg->AddCircleFilled(tip, 6.5f, ax.color, 16);
+                char tipBuf[64];
+                std::snprintf(tipBuf, sizeof(tipBuf), "%s-Axis View [Click to Recenter on Origin]", ax.name);
+                ImGui::SetTooltip("%s", tipBuf);
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    ax.onClick(camera);
+                }
+            } else {
+                fg->AddCircleFilled(tip, 6.0f, ax.color, 16);
+            }
+            fg->AddText(ImVec2(tip.x - 3.5f, tip.y - 6.0f), IM_COL32(255, 255, 255, 255), ax.name);
+        }
+
+        // Center origin pivot
+        float dCenter = std::hypot(io.MousePos.x - triadCenterX, io.MousePos.y - triadCenterY);
+        bool centerHovered = (dCenter < 7.0f);
+        fg->AddCircleFilled(ImVec2(triadCenterX, triadCenterY), centerHovered ? 6.0f : 4.0f, centerHovered ? IM_COL32(255, 230, 80, 255) : IM_COL32(180, 195, 215, 220), 16);
+        if (centerHovered) {
+            ImGui::SetTooltip("Isometric View [Click to Recenter on Origin]");
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                camera.SetIsometricView(true);
+            }
+        }
+    }
+
+    // 3. Floating Viewport Recenter & Orientation Control Bar
+    if (!m_sketchModeActive) {
+        float vpH = static_cast<float>(renderer.GetHeight());
+        if (vpH <= 0.0f) vpH = ImGui::GetIO().DisplaySize.y;
+
+        ImGui::SetNextWindowPos(ImVec2(18.0f, vpH - 38.0f), ImGuiCond_Always);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.15f, 0.20f, 0.88f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.28f, 0.38f, 0.52f, 0.70f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+        if (ImGui::Begin("##ViewportViewControlsHUD", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(ImVec4(0.35f, 0.8f, 1.0f, 1.0f), "View:");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("⌂ Origin")) {
+                camera.RecenterOrigin();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter camera target on (0, 0, 0) origin");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Top")) {
+                camera.SetTopView(true);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter view on Top origin (+Y looking down on XZ)");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Side")) {
+                camera.SetSideView(true);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter view on Side origin (+X looking on YZ)");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Iso")) {
+                camera.SetIsometricView(true);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter view on Isometric 3D origin");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Front")) {
+                camera.SetFrontView(true);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recenter view on Front origin (+Z looking on XY)");
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -2855,20 +3733,29 @@ void CADGui::RenderSketchCanvas(
         m_hoveredVertexIdx = -1;
 
         const auto& shapes = activeSketch->GetShapes();
+        const auto& savedConstraints = activeSketch->GetEdgeConstraints();
         if (!shapes.empty()) {
             for (size_t i = 0; i < shapes.size(); ++i) {
-                m_canvasShapes.push_back({
-                    "Shape " + std::to_string(i + 1),
-                    shapes[i],
-                    true
-                });
+                CanvasShape cs;
+                cs.name = "Shape " + std::to_string(i + 1);
+                cs.points = shapes[i];
+                cs.isClosed = true;
+                auto it = savedConstraints.find(i);
+                if (it != savedConstraints.end()) {
+                    cs.edgeConstraints = it->second;
+                }
+                m_canvasShapes.push_back(std::move(cs));
             }
         } else if (!activeSketch->GetProfile().empty()) {
-            m_canvasShapes.push_back({
-                "Shape 1",
-                activeSketch->GetProfile(),
-                true
-            });
+            CanvasShape cs;
+            cs.name = "Shape 1";
+            cs.points = activeSketch->GetProfile();
+            cs.isClosed = true;
+            auto it = savedConstraints.find(0);
+            if (it != savedConstraints.end()) {
+                cs.edgeConstraints = it->second;
+            }
+            m_canvasShapes.push_back(std::move(cs));
         }
     }
 
@@ -2937,12 +3824,17 @@ void CADGui::RenderSketchCanvas(
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.72f, 0.42f, 1.0f));
     if (ImGui::Button("✓ Confirm Changes", ImVec2(128, 28))) {
         std::vector<std::vector<std::array<float, 2>>> outShapes;
+        std::map<size_t, std::map<size_t, float>> outConstraints;
         for (const auto& sh : m_canvasShapes) {
             if (sh.isClosed && sh.points.size() >= 3) {
                 outShapes.push_back(sh.points);
+                if (!sh.edgeConstraints.empty()) {
+                    outConstraints[outShapes.size() - 1] = sh.edgeConstraints;
+                }
             }
         }
         activeSketch->SetShapes(std::move(outShapes));
+        activeSketch->SetEdgeConstraints(std::move(outConstraints));
         graph.EvaluateDirtyNodes(device, exchange);
         m_sketchModeActive = false;
     }
@@ -3208,7 +4100,344 @@ void CADGui::RenderSketchCanvas(
         }
     }
 
-    ImGui::Separator();
+    // -------------------------------------------------------------------------
+    // Top Tool Ribbon (Row 3: Keyboard Dimensions & Precision CAD Inputs)
+    // -------------------------------------------------------------------------
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.15f, 0.20f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.45f, 0.70f, 0.85f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+    if (ImGui::BeginChild("SketchKeyboardDimensionsBar", ImVec2(0, 36.0f), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        ImGui::AlignTextToFramePadding();
+
+        bool enterPressed = ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter);
+
+        if (m_selectedShapeIdx >= 0 && m_selectedShapeIdx < static_cast<int>(m_canvasShapes.size())) {
+            auto& selShape = m_canvasShapes[m_selectedShapeIdx];
+
+            if (m_selectedVertexIdx >= 0 && m_selectedVertexIdx < static_cast<int>(selShape.points.size())) {
+                ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "⌨ Vertex #%d:", m_selectedVertexIdx);
+                ImGui::SameLine();
+                float vertU = selShape.points[m_selectedVertexIdx][0];
+                float vertV = selShape.points[m_selectedVertexIdx][1];
+                ImGui::SetNextItemWidth(75.0f);
+                if (ImGui::InputFloat("U##VertU", &vertU, 0.1f, 0.5f, "%.2f m")) {
+                    selShape.points[m_selectedVertexIdx][0] = vertU;
+                    EnforceShapeConstraints(selShape, m_selectedVertexIdx);
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(75.0f);
+                if (ImGui::InputFloat("V##VertV", &vertV, 0.1f, 0.5f, "%.2f m")) {
+                    selShape.points[m_selectedVertexIdx][1] = vertV;
+                    EnforceShapeConstraints(selShape, m_selectedVertexIdx);
+                }
+
+                size_t nPts = selShape.points.size();
+                if (nPts >= 2) {
+                    size_t prevIdx = (m_selectedVertexIdx + nPts - 1) % nPts;
+                    float prevD = std::hypot(vertU - selShape.points[prevIdx][0], vertV - selShape.points[prevIdx][1]);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("|");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(75.0f);
+                    if (ImGui::InputFloat("Prev Len##VertPrevLen", &prevD, 0.1f, 0.5f, "%.2f m")) {
+                        if (prevD > 0.001f) {
+                            float dU = vertU - selShape.points[prevIdx][0];
+                            float dV = vertV - selShape.points[prevIdx][1];
+                            float curLen = std::hypot(dU, dV);
+                            if (curLen > 1e-4f) {
+                                selShape.points[m_selectedVertexIdx][0] = selShape.points[prevIdx][0] + (dU / curLen) * prevD;
+                                selShape.points[m_selectedVertexIdx][1] = selShape.points[prevIdx][1] + (dV / curLen) * prevD;
+                                EnforceShapeConstraints(selShape, m_selectedVertexIdx);
+                            }
+                        }
+                    }
+                    size_t nextIdx = (m_selectedVertexIdx + 1) % nPts;
+                    float nextD = std::hypot(selShape.points[nextIdx][0] - vertU, selShape.points[nextIdx][1] - vertV);
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(75.0f);
+                    if (ImGui::InputFloat("Next Len##VertNextLen", &nextD, 0.1f, 0.5f, "%.2f m")) {
+                        if (nextD > 0.001f) {
+                            float dU = selShape.points[nextIdx][0] - vertU;
+                            float dV = selShape.points[nextIdx][1] - vertV;
+                            float curLen = std::hypot(dU, dV);
+                            if (curLen > 1e-4f) {
+                                selShape.points[nextIdx][0] = vertU + (dU / curLen) * nextD;
+                                selShape.points[nextIdx][1] = vertV + (dV / curLen) * nextD;
+                                EnforceShapeConstraints(selShape, m_selectedVertexIdx);
+                            }
+                        }
+                    }
+                }
+            } else if (m_selectedEdgeSegmentIdx >= 0 && m_selectedEdgeSegmentIdx < static_cast<int>(selShape.points.size())) {
+                size_t nPts = selShape.points.size();
+                size_t i0 = m_selectedEdgeSegmentIdx;
+                size_t i1 = (i0 + 1) % nPts;
+                float edgeLen = std::hypot(selShape.points[i1][0] - selShape.points[i0][0], selShape.points[i1][1] - selShape.points[i0][1]);
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "⌨ Edge #%zu:", i0);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80.0f);
+                if (ImGui::InputFloat("Length##EdgeLen", &edgeLen, 0.1f, 0.5f, "%.2f m")) {
+                    if (edgeLen > 0.001f) {
+                        float dU = selShape.points[i1][0] - selShape.points[i0][0];
+                        float dV = selShape.points[i1][1] - selShape.points[i0][1];
+                        float curLen = std::hypot(dU, dV);
+                        if (curLen > 1e-4f) {
+                            float deltaL = edgeLen - curLen;
+                            float ux = dU / curLen;
+                            float uy = dV / curLen;
+                            if (selShape.isClosed && selShape.points.size() == 4) {
+                                size_t i2 = (i0 + 2) % 4;
+                                selShape.points[i1][0] += ux * deltaL;
+                                selShape.points[i1][1] += uy * deltaL;
+                                selShape.points[i2][0] += ux * deltaL;
+                                selShape.points[i2][1] += uy * deltaL;
+                            } else {
+                                selShape.points[i1][0] = selShape.points[i0][0] + ux * edgeLen;
+                                selShape.points[i1][1] = selShape.points[i0][1] + uy * edgeLen;
+                            }
+                            if (selShape.IsEdgeConstrained(m_selectedEdgeSegmentIdx)) {
+                                selShape.SetEdgeConstraint(m_selectedEdgeSegmentIdx, edgeLen);
+                            }
+                            EnforceShapeConstraints(selShape, static_cast<int>(i0));
+                        }
+                    }
+                }
+                ImGui::SameLine();
+                bool isConstrained = selShape.IsEdgeConstrained(m_selectedEdgeSegmentIdx);
+                if (isConstrained) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.55f, 0.10f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.65f, 0.15f, 1.0f));
+                    if (ImGui::SmallButton("🔒 Constrained (Unlock)")) {
+                        selShape.RemoveEdgeConstraint(m_selectedEdgeSegmentIdx);
+                    }
+                    ImGui::PopStyleColor(2);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("This dimension is CONSTRAINED/LOCKED.\nSubsequent edits to other dimensions will not alter this length.\nClick to toggle OFF constraint.");
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.30f, 0.40f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.40f, 0.55f, 1.0f));
+                    if (ImGui::SmallButton("🔓 Lock / Constrain")) {
+                        selShape.SetEdgeConstraint(m_selectedEdgeSegmentIdx, edgeLen);
+                    }
+                    ImGui::PopStyleColor(2);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click to toggle ON constraint (locks this edge to %.2f m)", edgeLen);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("< Prev Edge")) {
+                    m_selectedEdgeSegmentIdx = (m_selectedEdgeSegmentIdx + static_cast<int>(nPts) - 1) % static_cast<int>(nPts);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Next Edge >")) {
+                    m_selectedEdgeSegmentIdx = (m_selectedEdgeSegmentIdx + 1) % static_cast<int>(nPts);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Deselect Edge")) {
+                    m_selectedEdgeSegmentIdx = -1;
+                }
+            } else {
+                // Calculate bounding box and center
+                float minU = 1e9f, maxU = -1e9f, minV = 1e9f, maxV = -1e9f;
+                for (const auto& pt : selShape.points) {
+                    minU = std::min(minU, pt[0]); maxU = std::max(maxU, pt[0]);
+                    minV = std::min(minV, pt[1]); maxV = std::max(maxV, pt[1]);
+                }
+                float shW = (maxU > minU) ? (maxU - minU) : 0.01f;
+                float shH = (maxV > minV) ? (maxV - minV) : 0.01f;
+                float cU = (minU + maxU) * 0.5f;
+                float cV = (minV + maxV) * 0.5f;
+
+                // Detect if circular
+                bool isCircle = (selShape.points.size() >= 16);
+                float avgR = 0.0f;
+                if (isCircle) {
+                    for (const auto& pt : selShape.points) avgR += std::hypot(pt[0] - cU, pt[1] - cV);
+                    avgR /= selShape.points.size();
+                    for (const auto& pt : selShape.points) {
+                        if (std::abs(std::hypot(pt[0] - cU, pt[1] - cV) - avgR) > 0.06f * avgR) { isCircle = false; break; }
+                    }
+                }
+
+                if (isCircle) {
+                    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "⌨ Circle '%s':", selShape.name.c_str());
+                    ImGui::SameLine();
+                    float r = avgR;
+                    ImGui::SetNextItemWidth(75.0f);
+                    if (ImGui::InputFloat("Radius##ShR", &r, 0.1f, 0.5f, "%.2f m")) {
+                        if (r > 0.01f && avgR > 0.001f) {
+                            float scale = r / avgR;
+                            for (auto& pt : selShape.points) {
+                                pt[0] = cU + (pt[0] - cU) * scale;
+                                pt[1] = cV + (pt[1] - cV) * scale;
+                            }
+                        }
+                    }
+                    ImGui::SameLine();
+                    float d = avgR * 2.0f;
+                    ImGui::SetNextItemWidth(75.0f);
+                    if (ImGui::InputFloat("Diameter##ShD", &d, 0.1f, 0.5f, "%.2f m")) {
+                        if (d > 0.02f && avgR > 0.001f) {
+                            float scale = (d * 0.5f) / avgR;
+                            for (auto& pt : selShape.points) {
+                                pt[0] = cU + (pt[0] - cU) * scale;
+                                pt[1] = cV + (pt[1] - cV) * scale;
+                            }
+                        }
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "⌨ Shape '%s':", selShape.name.c_str());
+                    ImGui::SameLine();
+                    float w = shW;
+                    ImGui::SetNextItemWidth(75.0f);
+                    if (ImGui::InputFloat("Width##ShW", &w, 0.1f, 0.5f, "%.2f m")) {
+                        if (w > 0.01f && shW > 0.001f) {
+                            float scale = w / shW;
+                            for (auto& pt : selShape.points) {
+                                pt[0] = cU + (pt[0] - cU) * scale;
+                            }
+                            EnforceShapeConstraints(selShape);
+                        }
+                    }
+                    ImGui::SameLine();
+                    float h = shH;
+                    ImGui::SetNextItemWidth(75.0f);
+                    if (ImGui::InputFloat("Height##ShH", &h, 0.1f, 0.5f, "%.2f m")) {
+                        if (h > 0.01f && shH > 0.001f) {
+                            float scale = h / shH;
+                            for (auto& pt : selShape.points) {
+                                pt[1] = cV + (pt[1] - cV) * scale;
+                            }
+                            EnforceShapeConstraints(selShape);
+                        }
+                    }
+                }
+                ImGui::SameLine();
+                float newCU = cU;
+                ImGui::SetNextItemWidth(70.0f);
+                if (ImGui::InputFloat("Center U##ShCU", &newCU, 0.1f, 0.5f, "%.2f m")) {
+                    float dU = newCU - cU;
+                    for (auto& pt : selShape.points) pt[0] += dU;
+                }
+                ImGui::SameLine();
+                float newCV = cV;
+                ImGui::SetNextItemWidth(70.0f);
+                if (ImGui::InputFloat("Center V##ShCV", &newCV, 0.1f, 0.5f, "%.2f m")) {
+                    float dV = newCV - cV;
+                    for (auto& pt : selShape.points) pt[1] += dV;
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Select First Edge")) {
+                    m_selectedEdgeSegmentIdx = 0;
+                }
+            }
+        } else {
+            if (m_mouseTool == SketchMouseTool::Rectangle) {
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 0.45f, 1.0f), "⌨ New Rectangle:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(75.0f);
+                bool enterW = ImGui::InputFloat("Width##KbRW", &m_kbRectWidth, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                if (m_kbRectWidth < 0.05f) m_kbRectWidth = 0.05f;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(75.0f);
+                bool enterH = ImGui::InputFloat("Height##KbRH", &m_kbRectHeight, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                if (m_kbRectHeight < 0.05f) m_kbRectHeight = 0.05f;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(68.0f);
+                bool enterCU = ImGui::InputFloat("Center U##KbRCU", &m_kbRectCenterU, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(68.0f);
+                bool enterCV = ImGui::InputFloat("Center V##KbRCV", &m_kbRectCenterV, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                bool addRect = ImGui::Button("+ Add Rect (Enter)", ImVec2(130, 22)) || enterW || enterH || enterCU || enterCV || enterPressed;
+                if (addRect) {
+                    float hw = m_kbRectWidth * 0.5f;
+                    float hh = m_kbRectHeight * 0.5f;
+                    m_canvasShapes.push_back({
+                        "Rectangle " + std::to_string(m_canvasShapes.size() + 1),
+                        { {m_kbRectCenterU - hw, m_kbRectCenterV - hh},
+                          {m_kbRectCenterU + hw, m_kbRectCenterV - hh},
+                          {m_kbRectCenterU + hw, m_kbRectCenterV + hh},
+                          {m_kbRectCenterU - hw, m_kbRectCenterV + hh} },
+                        true
+                    });
+                    m_selectedShapeIdx = static_cast<int>(m_canvasShapes.size() - 1);
+                }
+            } else if (m_mouseTool == SketchMouseTool::Circle) {
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 0.45f, 1.0f), "⌨ New Circle:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(75.0f);
+                bool enterR = ImGui::InputFloat("Radius##KbCR", &m_kbCircleRadius, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                if (m_kbCircleRadius < 0.05f) m_kbCircleRadius = 0.05f;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(68.0f);
+                bool enterCU = ImGui::InputFloat("Center U##KbCCU", &m_kbCircleCenterU, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(68.0f);
+                bool enterCV = ImGui::InputFloat("Center V##KbCCV", &m_kbCircleCenterV, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                bool addCircle = ImGui::Button("+ Add Circle (Enter)", ImVec2(130, 22)) || enterR || enterCU || enterCV || enterPressed;
+                if (addCircle) {
+                    const int segs = 32;
+                    std::vector<std::array<float, 2>> profile;
+                    profile.reserve(segs);
+                    for (int i = 0; i < segs; ++i) {
+                        float theta = (static_cast<float>(i) / static_cast<float>(segs)) * 6.2831853f;
+                        profile.push_back({m_kbCircleCenterU + m_kbCircleRadius * std::cos(theta), m_kbCircleCenterV + m_kbCircleRadius * std::sin(theta)});
+                    }
+                    m_canvasShapes.push_back({
+                        "Circle " + std::to_string(m_canvasShapes.size() + 1),
+                        std::move(profile),
+                        true
+                    });
+                    m_selectedShapeIdx = static_cast<int>(m_canvasShapes.size() - 1);
+                }
+            } else if (m_mouseTool == SketchMouseTool::Line) {
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 0.45f, 1.0f), "⌨ Next Line Segment:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(72.0f);
+                bool enterLen = ImGui::InputFloat("Length##KbLLen", &m_kbLineLength, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                if (m_kbLineLength < 0.01f) m_kbLineLength = 0.01f;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(65.0f);
+                bool enterAng = ImGui::InputFloat("Angle##KbLAng", &m_kbLineAngle, 5.0f, 15.0f, "%.1f°", ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(65.0f);
+                bool enterTU = ImGui::InputFloat("Target U##KbLTU", &m_kbLineTargetU, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(65.0f);
+                bool enterTV = ImGui::InputFloat("Target V##KbLTV", &m_kbLineTargetV, 0.1f, 0.5f, "%.2f m", ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                bool addPt = ImGui::Button("+ Add Segment (Enter)", ImVec2(140, 22)) || enterLen || enterAng || enterTU || enterTV || enterPressed;
+                if (addPt) {
+                    if (m_inProgressPoints.empty()) {
+                        m_inProgressPoints.push_back({m_kbLineTargetU, m_kbLineTargetV});
+                    } else {
+                        float rad = m_kbLineAngle * 3.14159265f / 180.0f;
+                        const auto& last = m_inProgressPoints.back();
+                        float nextU = (enterTU || enterTV) ? m_kbLineTargetU : (last[0] + m_kbLineLength * std::cos(rad));
+                        float nextV = (enterTU || enterTV) ? m_kbLineTargetV : (last[1] + m_kbLineLength * std::sin(rad));
+                        m_inProgressPoints.push_back({nextU, nextV});
+                        m_kbLineTargetU = nextU;
+                        m_kbLineTargetV = nextV;
+                    }
+                }
+                if (m_inProgressPoints.size() >= 3) {
+                    ImGui::SameLine();
+                    if (ImGui::Button("Close Loop", ImVec2(80, 22))) {
+                        m_canvasShapes.push_back({
+                            "Polyline " + std::to_string(m_canvasShapes.size() + 1),
+                            m_inProgressPoints,
+                            true
+                        });
+                        m_inProgressPoints.clear();
+                    }
+                }
+            } else {
+                ImGui::TextColored(ImVec4(0.7f, 0.8f, 0.9f, 1.0f), "⌨ Select a shape, edge, or vertex handle to edit dimensions directly via keyboard.");
+            }
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
 
     // -------------------------------------------------------------------------
     // Canvas Area
@@ -3238,6 +4467,7 @@ void CADGui::RenderSketchCanvas(
         } else if (m_draggedShapeIdx < 0) {
             m_selectedShapeIdx = -1;
             m_selectedVertexIdx = -1;
+            m_selectedEdgeSegmentIdx = -1;
         }
         m_isDrawing = false;
         m_inProgressPoints.clear();
@@ -3267,6 +4497,7 @@ void CADGui::RenderSketchCanvas(
                 if (m_selectedVertexIdx >= 0 && m_selectedVertexIdx < static_cast<int>(selShape.points.size())) {
                     selShape.points.erase(selShape.points.begin() + m_selectedVertexIdx);
                     m_selectedVertexIdx = -1;
+                    m_selectedEdgeSegmentIdx = -1;
                     if (selShape.points.size() < 3) selShape.isClosed = false;
                     if (selShape.points.empty()) {
                         m_canvasShapes.erase(m_canvasShapes.begin() + m_selectedShapeIdx);
@@ -3276,6 +4507,7 @@ void CADGui::RenderSketchCanvas(
                     m_canvasShapes.erase(m_canvasShapes.begin() + m_selectedShapeIdx);
                     m_selectedShapeIdx = -1;
                     m_selectedVertexIdx = -1;
+                    m_selectedEdgeSegmentIdx = -1;
                 }
             }
         }
@@ -3438,6 +4670,159 @@ void CADGui::RenderSketchCanvas(
     }
 
     // -------------------------------------------------------------------------
+    // Cursor coordinates & Snapping (Grid Snap + Vertex Snapping to any shape)
+    // -------------------------------------------------------------------------
+    float rawU = (io.MousePos.x - canvasP0.x - m_canvasPanX) / m_canvasZoom;
+    float rawV = -(io.MousePos.y - canvasP0.y - m_canvasPanY) / m_canvasZoom;
+    float snapU = m_gridSnapEnable ? (std::round(rawU / m_gridSnapSize) * m_gridSnapSize) : rawU;
+    float snapV = m_gridSnapEnable ? (std::round(rawV / m_gridSnapSize) * m_gridSnapSize) : rawV;
+
+    // Check vertex snapping across all existing shapes (enabling vertex stitching)
+    bool snappedToVertex = false;
+    bool snappedToRef = false;
+    float bestSnapDist = 14.0f; // Screen pixel snap distance
+    for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
+        for (size_t v = 0; v < m_canvasShapes[s].points.size(); ++v) {
+            ImVec2 scr = ToScreen(m_canvasShapes[s].points[v][0], m_canvasShapes[s].points[v][1]);
+            float d = std::hypot(io.MousePos.x - scr.x, io.MousePos.y - scr.y);
+            if (d < bestSnapDist) {
+                bestSnapDist = d;
+                snapU = m_canvasShapes[s].points[v][0];
+                snapV = m_canvasShapes[s].points[v][1];
+                snappedToVertex = true;
+                snappedToRef = false;
+            }
+        }
+    }
+    for (const auto& rpt : refSnapPoints) {
+        ImVec2 scr = ToScreen(rpt[0], rpt[1]);
+        float d = std::hypot(io.MousePos.x - scr.x, io.MousePos.y - scr.y);
+        if (d < bestSnapDist) {
+            bestSnapDist = d;
+            snapU = rpt[0];
+            snapV = rpt[1];
+            snappedToVertex = true;
+            snappedToRef = true;
+        }
+    }
+    ImVec2 snapPosScr = ToScreen(snapU, snapV);
+
+    auto DistToSegment = [](const ImVec2& p, const ImVec2& a, const ImVec2& b) -> float {
+        float dx = b.x - a.x;
+        float dy = b.y - a.y;
+        float lenSq = dx * dx + dy * dy;
+        if (lenSq < 1e-6f) return std::hypot(p.x - a.x, p.y - a.y);
+        float t = std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq, 0.0f, 1.0f);
+        float projX = a.x + t * dx;
+        float projY = a.y + t * dy;
+        return std::hypot(p.x - projX, p.y - projY);
+    };
+
+    // Calculate hover states across shapes, vertices, and edges
+    if (m_draggedShapeIdx < 0) {
+        m_hoveredShapeIdx = -1;
+        m_hoveredVertexIdx = -1;
+        m_hoveredEdgeIdx = -1;
+        float bestDist = 14.0f;
+        for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
+            for (size_t i = 0; i < m_canvasShapes[s].points.size(); ++i) {
+                ImVec2 ptScr = ToScreen(m_canvasShapes[s].points[i][0], m_canvasShapes[s].points[i][1]);
+                float dist = std::hypot(io.MousePos.x - ptScr.x, io.MousePos.y - ptScr.y);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    m_hoveredShapeIdx = static_cast<int>(s);
+                    m_hoveredVertexIdx = static_cast<int>(i);
+                }
+            }
+        }
+
+        // If no vertex handle is hovered, check if cursor is over a shape edge or body
+        if (m_hoveredVertexIdx < 0) {
+            for (int s = static_cast<int>(m_canvasShapes.size()) - 1; s >= 0; --s) {
+                const auto& sh = m_canvasShapes[s];
+                size_t numEdges = sh.isClosed ? sh.points.size() : (sh.points.size() > 1 ? sh.points.size() - 1 : 0);
+                for (size_t i = 0; i < numEdges; ++i) {
+                    size_t next = (i + 1) % sh.points.size();
+                    ImVec2 p0 = ToScreen(sh.points[i][0], sh.points[i][1]);
+                    ImVec2 p1 = ToScreen(sh.points[next][0], sh.points[next][1]);
+                    if (DistToSegment(io.MousePos, p0, p1) < 8.0f) {
+                        m_hoveredShapeIdx = s;
+                        m_hoveredEdgeIdx = static_cast<int>(i);
+                        break;
+                    }
+                }
+                if (m_hoveredShapeIdx >= 0) break;
+                if (sh.points.size() >= 3 && Sketch::PointInPolygon2D({rawU, rawV}, sh.points)) {
+                    m_hoveredShapeIdx = s;
+                    break;
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Double-Click: edit dimension and lock/constrain line (works across tools)
+    // -------------------------------------------------------------------------
+    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && isHovered) {
+        int hitShape = -1;
+        int hitEdge = -1;
+        float bestDist = 20.0f; // pixel tolerance for line or dimension badge
+
+        for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
+            const auto& sh = m_canvasShapes[s];
+            if (sh.points.size() < 2) continue;
+            size_t numEdges = sh.isClosed ? sh.points.size() : (sh.points.size() > 1 ? sh.points.size() - 1 : 0);
+            for (size_t i = 0; i < numEdges; ++i) {
+                size_t next = (i + 1) % sh.points.size();
+                ImVec2 p0 = ToScreen(sh.points[i][0], sh.points[i][1]);
+                ImVec2 p1 = ToScreen(sh.points[next][0], sh.points[next][1]);
+                float dSeg = DistToSegment(io.MousePos, p0, p1);
+
+                float dx = p1.x - p0.x;
+                float dy = p1.y - p0.y;
+                float segLen = std::hypot(dx, dy);
+                float offX = 0.0f, offY = 0.0f;
+                if (segLen > 1e-3f) {
+                    offX = (-dy / segLen) * 14.0f;
+                    offY = (dx / segLen) * 14.0f;
+                }
+                ImVec2 mid = ImVec2((p0.x + p1.x) * 0.5f + offX, (p0.y + p1.y) * 0.5f + offY);
+                float dMid = std::hypot(io.MousePos.x - mid.x, io.MousePos.y - mid.y);
+                float d = std::min(dSeg, dMid);
+                if (d < bestDist) {
+                    bestDist = d;
+                    hitShape = static_cast<int>(s);
+                    hitEdge = static_cast<int>(i);
+                }
+            }
+        }
+
+        if (hitShape >= 0 && hitEdge >= 0) {
+            auto& sh = m_canvasShapes[hitShape];
+            size_t next = (hitEdge + 1) % sh.points.size();
+            float curLen = std::hypot(sh.points[next][0] - sh.points[hitEdge][0],
+                                      sh.points[next][1] - sh.points[hitEdge][1]);
+            if (sh.IsEdgeConstrained(hitEdge)) {
+                m_dimEditValue = sh.GetEdgeConstrainedLength(hitEdge);
+            } else {
+                m_dimEditValue = curLen;
+            }
+            m_dimEditConstrained = true; // Auto-checked: "remember that this is 'constraining' the drawing"
+            m_dimEditShapeIdx = hitShape;
+            m_dimEditEdgeIdx = hitEdge;
+            m_dimEditPopupPos = { io.MousePos.x, io.MousePos.y };
+            m_showDimensionEditPopup = true;
+            m_selectedShapeIdx = hitShape;
+            m_selectedEdgeSegmentIdx = hitEdge;
+            m_selectedVertexIdx = -1;
+            m_draggedShapeIdx = -1;
+            m_draggedVertexIdx = -1;
+            m_dragShapeOrigPoints.clear();
+            m_mouseTool = SketchMouseTool::SelectMove;
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Render Canvas Shapes (Enclosed shapes signified by shaded area)
     // -------------------------------------------------------------------------
     for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
@@ -3500,53 +4885,192 @@ void CADGui::RenderSketchCanvas(
             drawList->AddCircle(ptScr, radius + 1.5f, isSelectedPt ? IM_COL32(255, 230, 0, 255) : IM_COL32(10, 10, 10, 200), 16, 1.5f);
 
             if (isSelectedPt) {
-                drawList->AddText(ImVec2(ptScr.x + 10.0f, ptScr.y - 16.0f), IM_COL32(255, 230, 50, 255), "Selected (Del/RMB to remove)");
+                // Crosshairs on selected vertex
+                drawList->AddLine(ImVec2(ptScr.x - 12.0f, ptScr.y), ImVec2(ptScr.x + 12.0f, ptScr.y), IM_COL32(255, 230, 0, 220), 1.5f);
+                drawList->AddLine(ImVec2(ptScr.x, ptScr.y - 12.0f), ImVec2(ptScr.x, ptScr.y + 12.0f), IM_COL32(255, 230, 0, 220), 1.5f);
+                char vPosBuf[64];
+                snprintf(vPosBuf, sizeof(vPosBuf), "Vertex #%zu (%.2f, %.2f) m", i, shape.points[i][0], shape.points[i][1]);
+                drawList->AddText(ImVec2(ptScr.x + 10.0f, ptScr.y - 18.0f), IM_COL32(255, 230, 50, 255), vPosBuf);
             } else if (isHoveredPt || isDraggedPt) {
                 char buf[64];
                 snprintf(buf, sizeof(buf), "%s #%zu (%.2f, %.2f) [RMB: Del]", shape.name.c_str(), i, shape.points[i][0], shape.points[i][1]);
                 drawList->AddText(ImVec2(ptScr.x + 8.0f, ptScr.y - 14.0f), IM_COL32(255, 255, 100, 255), buf);
             }
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Cursor coordinates & Snapping (Grid Snap + Vertex Snapping to any shape)
-    // -------------------------------------------------------------------------
-    float rawU = (io.MousePos.x - canvasP0.x - m_canvasPanX) / m_canvasZoom;
-    float rawV = -(io.MousePos.y - canvasP0.y - m_canvasPanY) / m_canvasZoom;
-    float snapU = m_gridSnapEnable ? (std::round(rawU / m_gridSnapSize) * m_gridSnapSize) : rawU;
-    float snapV = m_gridSnapEnable ? (std::round(rawV / m_gridSnapSize) * m_gridSnapSize) : rawV;
+        // ---------------------------------------------------------------------
+        // CAD Dimension Annotations (Extension lines, Arrows & Numerical Labels)
+        // ---------------------------------------------------------------------
+        if (isShapeSelected) {
+            float minU = 1e9f, maxU = -1e9f, minV = 1e9f, maxV = -1e9f;
+            for (const auto& pt : shape.points) {
+                minU = std::min(minU, pt[0]); maxU = std::max(maxU, pt[0]);
+                minV = std::min(minV, pt[1]); maxV = std::max(maxV, pt[1]);
+            }
+            float cU = (minU + maxU) * 0.5f;
+            float cV = (minV + maxV) * 0.5f;
 
-    // Check vertex snapping across all existing shapes (enabling vertex stitching)
-    bool snappedToVertex = false;
-    bool snappedToRef = false;
-    float bestSnapDist = 14.0f; // Screen pixel snap distance
-    for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
-        for (size_t v = 0; v < m_canvasShapes[s].points.size(); ++v) {
-            ImVec2 scr = ToScreen(m_canvasShapes[s].points[v][0], m_canvasShapes[s].points[v][1]);
-            float d = std::hypot(io.MousePos.x - scr.x, io.MousePos.y - scr.y);
-            if (d < bestSnapDist) {
-                bestSnapDist = d;
-                snapU = m_canvasShapes[s].points[v][0];
-                snapV = m_canvasShapes[s].points[v][1];
-                snappedToVertex = true;
-                snappedToRef = false;
+            // Check if circle
+            bool isCircle = (shape.points.size() >= 16);
+            float avgR = 0.0f;
+            if (isCircle) {
+                for (const auto& pt : shape.points) avgR += std::hypot(pt[0] - cU, pt[1] - cV);
+                avgR /= shape.points.size();
+                for (const auto& pt : shape.points) {
+                    if (std::abs(std::hypot(pt[0] - cU, pt[1] - cV) - avgR) > 0.06f * avgR) { isCircle = false; break; }
+                }
+            }
+
+            if (isCircle) {
+                // Circle Radius CAD callout
+                ImVec2 scrCenter = ToScreen(cU, cV);
+                float angleRad = 0.785398f; // 45 degrees
+                ImVec2 scrRim = ToScreen(cU + avgR * std::cos(angleRad), cV + avgR * std::sin(angleRad));
+                drawList->AddLine(scrCenter, scrRim, IM_COL32(255, 215, 0, 220), 1.5f);
+                drawList->AddCircleFilled(scrCenter, 3.5f, IM_COL32(255, 215, 0, 255));
+                drawList->AddCircleFilled(scrRim, 3.5f, IM_COL32(255, 215, 0, 255));
+                char rBuf[64];
+                snprintf(rBuf, sizeof(rBuf), "R %.2f m (Ø %.2f m)", avgR, avgR * 2.0f);
+                drawList->AddText(ImVec2(scrRim.x + 8.0f, scrRim.y - 14.0f), IM_COL32(255, 230, 80, 255), rBuf);
+            } else if (maxU > minU + 0.01f && maxV > minV + 0.01f) {
+                // Horizontal Width Dimension Line (below shape)
+                float offsetV = (minV - 0.35f);
+                ImVec2 extL0 = ToScreen(minU, minV);
+                ImVec2 extL1 = ToScreen(minU, offsetV - 0.1f);
+                ImVec2 extR0 = ToScreen(maxU, minV);
+                ImVec2 extR1 = ToScreen(maxU, offsetV - 0.1f);
+                drawList->AddLine(extL0, extL1, IM_COL32(180, 200, 220, 160), 1.0f);
+                drawList->AddLine(extR0, extR1, IM_COL32(180, 200, 220, 160), 1.0f);
+
+                ImVec2 dimW0 = ToScreen(minU, offsetV);
+                ImVec2 dimW1 = ToScreen(maxU, offsetV);
+                drawList->AddLine(dimW0, dimW1, IM_COL32(255, 215, 0, 220), 1.5f);
+                // Arrow heads on horizontal dim line
+                drawList->AddLine(dimW0, ImVec2(dimW0.x + 6.0f, dimW0.y - 4.0f), IM_COL32(255, 215, 0, 220), 1.5f);
+                drawList->AddLine(dimW0, ImVec2(dimW0.x + 6.0f, dimW0.y + 4.0f), IM_COL32(255, 215, 0, 220), 1.5f);
+                drawList->AddLine(dimW1, ImVec2(dimW1.x - 6.0f, dimW1.y - 4.0f), IM_COL32(255, 215, 0, 220), 1.5f);
+                drawList->AddLine(dimW1, ImVec2(dimW1.x - 6.0f, dimW1.y + 4.0f), IM_COL32(255, 215, 0, 220), 1.5f);
+                char wBuf[64];
+                snprintf(wBuf, sizeof(wBuf), "W: %.2f m", maxU - minU);
+                ImVec2 wTextSz = ImGui::CalcTextSize(wBuf);
+                drawList->AddRectFilled(ImVec2((dimW0.x + dimW1.x)*0.5f - wTextSz.x*0.5f - 4.0f, dimW0.y - wTextSz.y*0.5f - 2.0f),
+                                        ImVec2((dimW0.x + dimW1.x)*0.5f + wTextSz.x*0.5f + 4.0f, dimW0.y + wTextSz.y*0.5f + 2.0f),
+                                        IM_COL32(20, 24, 30, 220), 3.0f);
+                drawList->AddText(ImVec2((dimW0.x + dimW1.x)*0.5f - wTextSz.x*0.5f, dimW0.y - wTextSz.y*0.5f), IM_COL32(255, 230, 80, 255), wBuf);
+
+                // Vertical Height Dimension Line (to right of shape)
+                float offsetU = (maxU + 0.35f);
+                ImVec2 extB0 = ToScreen(maxU, minV);
+                ImVec2 extB1 = ToScreen(offsetU + 0.1f, minV);
+                ImVec2 extT0 = ToScreen(maxU, maxV);
+                ImVec2 extT1 = ToScreen(offsetU + 0.1f, maxV);
+                drawList->AddLine(extB0, extB1, IM_COL32(180, 200, 220, 160), 1.0f);
+                drawList->AddLine(extT0, extT1, IM_COL32(180, 200, 220, 160), 1.0f);
+
+                ImVec2 dimH0 = ToScreen(offsetU, minV);
+                ImVec2 dimH1 = ToScreen(offsetU, maxV);
+                drawList->AddLine(dimH0, dimH1, IM_COL32(255, 215, 0, 220), 1.5f);
+                // Arrow heads on vertical dim line
+                drawList->AddLine(dimH0, ImVec2(dimH0.x - 4.0f, dimH0.y - 6.0f), IM_COL32(255, 215, 0, 220), 1.5f);
+                drawList->AddLine(dimH0, ImVec2(dimH0.x + 4.0f, dimH0.y - 6.0f), IM_COL32(255, 215, 0, 220), 1.5f);
+                drawList->AddLine(dimH1, ImVec2(dimH1.x - 4.0f, dimH1.y + 6.0f), IM_COL32(255, 215, 0, 220), 1.5f);
+                drawList->AddLine(dimH1, ImVec2(dimH1.x + 4.0f, dimH1.y + 6.0f), IM_COL32(255, 215, 0, 220), 1.5f);
+                char hBuf[64];
+                snprintf(hBuf, sizeof(hBuf), "H: %.2f m", maxV - minV);
+                ImVec2 hTextSz = ImGui::CalcTextSize(hBuf);
+                drawList->AddRectFilled(ImVec2(dimH0.x - hTextSz.x*0.5f - 4.0f, (dimH0.y + dimH1.y)*0.5f - hTextSz.y*0.5f - 2.0f),
+                                        ImVec2(dimH0.x + hTextSz.x*0.5f + 4.0f, (dimH0.y + dimH1.y)*0.5f + hTextSz.y*0.5f + 2.0f),
+                                        IM_COL32(20, 24, 30, 220), 3.0f);
+                drawList->AddText(ImVec2(dimH0.x - hTextSz.x*0.5f, (dimH0.y + dimH1.y)*0.5f - hTextSz.y*0.5f), IM_COL32(255, 230, 80, 255), hBuf);
+            }
+
+        }
+
+        // ---------------------------------------------------------------------
+        // Edge Dimension Annotations & Constraint Badges
+        // ---------------------------------------------------------------------
+        size_t numEdges = shape.isClosed ? shape.points.size() : (shape.points.size() > 1 ? shape.points.size() - 1 : 0);
+        for (size_t e = 0; e < numEdges; ++e) {
+            size_t next = (e + 1) % shape.points.size();
+            bool isConstrained = shape.IsEdgeConstrained(e);
+            bool isEdgeSelected = (isShapeSelected && m_selectedEdgeSegmentIdx == static_cast<int>(e));
+            bool isEdgeHovered = (m_hoveredShapeIdx == static_cast<int>(s) && m_hoveredEdgeIdx == static_cast<int>(e));
+            // Show badge if constrained, selected, hovered, or if shape is selected and small polygon (<= 8 vertices)
+            bool shouldDrawBadge = isConstrained || isEdgeSelected || isEdgeHovered || (isShapeSelected && shape.points.size() <= 8);
+
+            if (!shouldDrawBadge) continue;
+
+            ImVec2 p0Scr = screenPts[e];
+            ImVec2 p1Scr = screenPts[next];
+            float eLen = isConstrained ? shape.GetEdgeConstrainedLength(e)
+                                       : std::hypot(shape.points[next][0] - shape.points[e][0],
+                                                    shape.points[next][1] - shape.points[e][1]);
+
+            // Draw line highlight
+            if (isEdgeSelected) {
+                drawList->AddLine(p0Scr, p1Scr, IM_COL32(255, 230, 0, 255), 4.5f);
+            } else if (isConstrained) {
+                drawList->AddLine(p0Scr, p1Scr, IM_COL32(255, 185, 30, 220), 2.5f);
+            } else if (isEdgeHovered) {
+                drawList->AddLine(p0Scr, p1Scr, IM_COL32(100, 210, 255, 200), 2.5f);
+            }
+
+            // Normal offset for midpoint badge
+            float dx = p1Scr.x - p0Scr.x;
+            float dy = p1Scr.y - p0Scr.y;
+            float segLen = std::hypot(dx, dy);
+            float offX = 0.0f, offY = 0.0f;
+            if (segLen > 1e-3f) {
+                offX = (-dy / segLen) * 14.0f;
+                offY = (dx / segLen) * 14.0f;
+            }
+            ImVec2 midScr = ImVec2((p0Scr.x + p1Scr.x) * 0.5f + offX, (p0Scr.y + p1Scr.y) * 0.5f + offY);
+
+            char badgeBuf[64];
+            if (isConstrained) {
+                snprintf(badgeBuf, sizeof(badgeBuf), "🔒 %.2f m", eLen);
+            } else if (isEdgeSelected) {
+                snprintf(badgeBuf, sizeof(badgeBuf), "Edge #%zu: %.2f m", e, eLen);
+            } else {
+                snprintf(badgeBuf, sizeof(badgeBuf), "%.2f m", eLen);
+            }
+
+            ImVec2 bSz = ImGui::CalcTextSize(badgeBuf);
+            ImVec2 bMin = ImVec2(midScr.x - bSz.x * 0.5f - 4.0f, midScr.y - bSz.y * 0.5f - 2.5f);
+            ImVec2 bMax = ImVec2(midScr.x + bSz.x * 0.5f + 4.0f, midScr.y + bSz.y * 0.5f + 2.5f);
+
+            ImU32 bgCol = isConstrained ? IM_COL32(38, 30, 10, 235) :
+                          isEdgeSelected ? IM_COL32(25, 30, 42, 240) :
+                          isEdgeHovered ? IM_COL32(20, 28, 38, 230) :
+                                          IM_COL32(18, 22, 28, 200);
+
+            ImU32 borderCol = isConstrained ? IM_COL32(255, 185, 30, 255) :
+                              isEdgeSelected ? IM_COL32(255, 230, 0, 255) :
+                              isEdgeHovered ? IM_COL32(100, 200, 255, 220) :
+                                              IM_COL32(75, 95, 120, 180);
+
+            ImU32 txtCol = isConstrained ? IM_COL32(255, 215, 60, 255) :
+                           isEdgeSelected ? IM_COL32(255, 240, 90, 255) :
+                           isEdgeHovered ? IM_COL32(130, 225, 255, 255) :
+                                           IM_COL32(190, 210, 230, 220);
+
+            drawList->AddRectFilled(bMin, bMax, bgCol, 3.0f);
+            drawList->AddRect(bMin, bMax, borderCol, 3.0f, 0, 1.2f);
+            drawList->AddText(ImVec2(midScr.x - bSz.x * 0.5f, midScr.y - bSz.y * 0.5f), txtCol, badgeBuf);
+
+            // Hover tooltip on dimension badge or edge
+            if (isHovered && io.MousePos.x >= bMin.x && io.MousePos.x <= bMax.x &&
+                io.MousePos.y >= bMin.y && io.MousePos.y <= bMax.y) {
+                if (isConstrained) {
+                    ImGui::SetTooltip("🔒 Constrained: %.2f m\n[Double-click to edit length or toggle constraint]\n(Locked: won't change when scaling or dragging)", eLen);
+                } else {
+                    ImGui::SetTooltip("Dimension: %.2f m (Edge #%zu)\n[Double-click to edit & constrain dimension]", eLen, e);
+                }
             }
         }
     }
-    for (const auto& rpt : refSnapPoints) {
-        ImVec2 scr = ToScreen(rpt[0], rpt[1]);
-        float d = std::hypot(io.MousePos.x - scr.x, io.MousePos.y - scr.y);
-        if (d < bestSnapDist) {
-            bestSnapDist = d;
-            snapU = rpt[0];
-            snapV = rpt[1];
-            snappedToVertex = true;
-            snappedToRef = true;
-        }
-    }
-    ImVec2 snapPosScr = ToScreen(snapU, snapV);
 
+    // Snap cursor indicator
     if (isHovered) {
         if (snappedToVertex) {
             ImU32 snapCol = snappedToRef ? IM_COL32(80, 210, 255, 255) : IM_COL32(255, 230, 0, 255);
@@ -3564,67 +5088,33 @@ void CADGui::RenderSketchCanvas(
     // -------------------------------------------------------------------------
     // Tool Interactions
     // -------------------------------------------------------------------------
-    auto DistToSegment = [](const ImVec2& p, const ImVec2& a, const ImVec2& b) -> float {
-        float dx = b.x - a.x;
-        float dy = b.y - a.y;
-        float lenSq = dx * dx + dy * dy;
-        if (lenSq < 1e-6f) return std::hypot(p.x - a.x, p.y - a.y);
-        float t = std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq, 0.0f, 1.0f);
-        float projX = a.x + t * dx;
-        float projY = a.y + t * dy;
-        return std::hypot(p.x - projX, p.y - projY);
-    };
 
     // 1. Select / Move Tool
     if (m_mouseTool == SketchMouseTool::SelectMove) {
         if (m_draggedShapeIdx < 0) {
-            m_hoveredShapeIdx = -1;
-            m_hoveredVertexIdx = -1;
-            float bestDist = 14.0f;
-            for (size_t s = 0; s < m_canvasShapes.size(); ++s) {
-                for (size_t i = 0; i < m_canvasShapes[s].points.size(); ++i) {
-                    ImVec2 ptScr = ToScreen(m_canvasShapes[s].points[i][0], m_canvasShapes[s].points[i][1]);
-                    float dist = std::hypot(io.MousePos.x - ptScr.x, io.MousePos.y - ptScr.y);
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        m_hoveredShapeIdx = static_cast<int>(s);
-                        m_hoveredVertexIdx = static_cast<int>(i);
-                    }
-                }
-            }
-
-            // If no vertex handle is hovered, check if cursor is over a shape body or edge
-            if (m_hoveredVertexIdx < 0) {
-                for (int s = static_cast<int>(m_canvasShapes.size()) - 1; s >= 0; --s) {
-                    const auto& sh = m_canvasShapes[s];
-                    if (sh.points.size() >= 3 && Sketch::PointInPolygon2D({rawU, rawV}, sh.points)) {
-                        m_hoveredShapeIdx = s;
-                        break;
-                    }
-                    for (size_t i = 0; i < sh.points.size(); ++i) {
-                        size_t next = (i + 1) % sh.points.size();
-                        ImVec2 p0 = ToScreen(sh.points[i][0], sh.points[i][1]);
-                        ImVec2 p1 = ToScreen(sh.points[next][0], sh.points[next][1]);
-                        if (DistToSegment(io.MousePos, p0, p1) < 10.0f) {
-                            m_hoveredShapeIdx = s;
-                            break;
-                        }
-                    }
-                    if (m_hoveredShapeIdx >= 0) break;
-                }
-            }
-
             // Left Click: select / start dragging
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered && !m_showDimensionEditPopup) {
                 if (m_hoveredVertexIdx >= 0) {
                     m_selectedShapeIdx = m_hoveredShapeIdx;
                     m_selectedVertexIdx = m_hoveredVertexIdx;
+                    m_selectedEdgeSegmentIdx = -1;
                     m_draggedShapeIdx = m_hoveredShapeIdx;
                     m_draggedVertexIdx = m_hoveredVertexIdx;
-                } else if (m_hoveredShapeIdx >= 0) {
-                    // Pressing on a shape's body or edge selects it and starts dragging the whole shape
+                    m_dragVertexOrigU = m_canvasShapes[m_hoveredShapeIdx].points[m_hoveredVertexIdx][0];
+                    m_dragVertexOrigV = m_canvasShapes[m_hoveredShapeIdx].points[m_hoveredVertexIdx][1];
+                } else if (m_hoveredEdgeIdx >= 0) {
                     m_selectedShapeIdx = m_hoveredShapeIdx;
                     m_selectedVertexIdx = -1;
+                    m_selectedEdgeSegmentIdx = m_hoveredEdgeIdx;
+                    m_draggedShapeIdx = m_hoveredShapeIdx;
+                    m_draggedVertexIdx = -1;
+                    m_dragShapeOrigPoints = m_canvasShapes[m_hoveredShapeIdx].points;
+                    m_dragShapeStartU = rawU;
+                    m_dragShapeStartV = rawV;
+                } else if (m_hoveredShapeIdx >= 0) {
+                    m_selectedShapeIdx = m_hoveredShapeIdx;
+                    m_selectedVertexIdx = -1;
+                    m_selectedEdgeSegmentIdx = -1;
                     m_draggedShapeIdx = m_hoveredShapeIdx;
                     m_draggedVertexIdx = -1;
                     m_dragShapeOrigPoints = m_canvasShapes[m_hoveredShapeIdx].points;
@@ -3633,6 +5123,7 @@ void CADGui::RenderSketchCanvas(
                 } else {
                     m_selectedShapeIdx = -1;
                     m_selectedVertexIdx = -1;
+                    m_selectedEdgeSegmentIdx = -1;
                 }
             }
 
@@ -3642,7 +5133,10 @@ void CADGui::RenderSketchCanvas(
                     auto& shape = m_canvasShapes[m_hoveredShapeIdx];
                     if (m_hoveredVertexIdx >= 0 && m_hoveredVertexIdx < static_cast<int>(shape.points.size())) {
                         shape.points.erase(shape.points.begin() + m_hoveredVertexIdx);
-                        if (m_selectedShapeIdx == m_hoveredShapeIdx) m_selectedVertexIdx = -1;
+                        if (m_selectedShapeIdx == m_hoveredShapeIdx) {
+                            m_selectedVertexIdx = -1;
+                            m_selectedEdgeSegmentIdx = -1;
+                        }
                         if (shape.points.size() < 3) shape.isClosed = false;
                         if (shape.points.empty()) {
                             m_canvasShapes.erase(m_canvasShapes.begin() + m_hoveredShapeIdx);
@@ -3650,38 +5144,45 @@ void CADGui::RenderSketchCanvas(
                         }
                         m_hoveredShapeIdx = -1;
                         m_hoveredVertexIdx = -1;
+                        m_hoveredEdgeIdx = -1;
                     } else {
                         m_canvasShapes.erase(m_canvasShapes.begin() + m_hoveredShapeIdx);
                         m_selectedShapeIdx = -1;
                         m_selectedVertexIdx = -1;
+                        m_selectedEdgeSegmentIdx = -1;
                         m_hoveredShapeIdx = -1;
+                        m_hoveredEdgeIdx = -1;
                     }
                 }
             }
         } else {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && m_draggedShapeIdx < static_cast<int>(m_canvasShapes.size())) {
+                bool isDragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 5.0f);
                 auto& dragShape = m_canvasShapes[m_draggedShapeIdx];
-                if (m_draggedVertexIdx >= 0) {
-                    if (m_draggedVertexIdx < static_cast<int>(dragShape.points.size())) {
-                        dragShape.points[m_draggedVertexIdx] = { snapU, snapV };
-                    }
-                } else if (dragShape.points.size() == m_dragShapeOrigPoints.size()) {
-                    // Whole-shape drag: translate the original outline by the cursor offset. The offset
-                    // snaps to the grid, so a grid-aligned shape stays grid-aligned.
-                    float du = rawU - m_dragShapeStartU;
-                    float dv = rawV - m_dragShapeStartV;
-                    if (m_gridSnapEnable && m_gridSnapSize > 0.0f) {
-                        du = std::round(du / m_gridSnapSize) * m_gridSnapSize;
-                        dv = std::round(dv / m_gridSnapSize) * m_gridSnapSize;
-                    }
-                    for (size_t i = 0; i < dragShape.points.size(); ++i) {
-                        dragShape.points[i] = { m_dragShapeOrigPoints[i][0] + du, m_dragShapeOrigPoints[i][1] + dv };
-                    }
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-                    if (du != 0.0f || dv != 0.0f) {
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "Move (%+.2f, %+.2f) m", du, dv);
-                        drawList->AddText(ImVec2(io.MousePos.x + 14.0f, io.MousePos.y + 10.0f), IM_COL32(255, 230, 120, 255), buf);
+                if (isDragging) {
+                    if (m_draggedVertexIdx >= 0) {
+                        if (m_draggedVertexIdx < static_cast<int>(dragShape.points.size())) {
+                            dragShape.points[m_draggedVertexIdx] = { snapU, snapV };
+                            EnforceShapeConstraints(dragShape, m_draggedVertexIdx);
+                        }
+                    } else if (dragShape.points.size() == m_dragShapeOrigPoints.size()) {
+                        // Whole-shape drag: translate the original outline by the cursor offset. The offset
+                        // snaps to the grid, so a grid-aligned shape stays grid-aligned.
+                        float du = rawU - m_dragShapeStartU;
+                        float dv = rawV - m_dragShapeStartV;
+                        if (m_gridSnapEnable && m_gridSnapSize > 0.0f) {
+                            du = std::round(du / m_gridSnapSize) * m_gridSnapSize;
+                            dv = std::round(dv / m_gridSnapSize) * m_gridSnapSize;
+                        }
+                        for (size_t i = 0; i < dragShape.points.size(); ++i) {
+                            dragShape.points[i] = { m_dragShapeOrigPoints[i][0] + du, m_dragShapeOrigPoints[i][1] + dv };
+                        }
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+                        if (du != 0.0f || dv != 0.0f) {
+                            char buf[64];
+                            snprintf(buf, sizeof(buf), "Move (%+.2f, %+.2f) m", du, dv);
+                            drawList->AddText(ImVec2(io.MousePos.x + 14.0f, io.MousePos.y + 10.0f), IM_COL32(255, 230, 120, 255), buf);
+                        }
                     }
                 }
             } else {

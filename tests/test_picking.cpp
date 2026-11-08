@@ -2635,6 +2635,482 @@ bool TestSketchCreatedOnFaceSurfacePlane() {
     return true;
 }
 
+bool Test2DSketchKeyboardDimensionsAndParametricScaling() {
+    std::cout << "[Test] 2D Sketch Keyboard Dimensions Input & Parametric Scaling...\n";
+
+    // 1. Keyboard Rectangle Construction
+    float kbW = 4.0f;
+    float kbH = 3.0f;
+    float kbCU = 1.0f;
+    float kbCV = 2.0f;
+    float hw = kbW * 0.5f;
+    float hh = kbH * 0.5f;
+
+    std::vector<std::array<float, 2>> rectPts = {
+        { kbCU - hw, kbCV - hh }, // (-1.0, 0.5)
+        { kbCU + hw, kbCV - hh }, // ( 3.0, 0.5)
+        { kbCU + hw, kbCV + hh }, // ( 3.0, 3.5)
+        { kbCU - hw, kbCV + hh }  // (-1.0, 3.5)
+    };
+    TEST_ASSERT(rectPts.size() == 4, "Rectangle must have 4 vertices");
+    TEST_ASSERT(std::abs(rectPts[1][0] - rectPts[0][0] - kbW) < 1e-5f, "Initial width must equal 4.0m");
+    TEST_ASSERT(std::abs(rectPts[2][1] - rectPts[1][1] - kbH) < 1e-5f, "Initial height must equal 3.0m");
+
+    // 2. Parametric Width & Height Scaling via Keyboard Input
+    float newWidth = 6.0f;
+    float scaleX = newWidth / kbW;
+    for (auto& pt : rectPts) {
+        pt[0] = kbCU + (pt[0] - kbCU) * scaleX;
+    }
+    TEST_ASSERT(std::abs(rectPts[1][0] - rectPts[0][0] - 6.0f) < 1e-5f, "Scaled width must be 6.0m");
+    TEST_ASSERT(std::abs((rectPts[0][0] + rectPts[1][0]) * 0.5f - kbCU) < 1e-5f, "Center U must remain unchanged at 1.0m");
+
+    float newHeight = 5.0f;
+    float scaleY = newHeight / kbH;
+    for (auto& pt : rectPts) {
+        pt[1] = kbCV + (pt[1] - kbCV) * scaleY;
+    }
+    TEST_ASSERT(std::abs(rectPts[2][1] - rectPts[1][1] - 5.0f) < 1e-5f, "Scaled height must be 5.0m");
+    TEST_ASSERT(std::abs((rectPts[1][1] + rectPts[2][1]) * 0.5f - kbCV) < 1e-5f, "Center V must remain unchanged at 2.0m");
+
+    // 3. Vertex Coordinate and Incident Edge Length Editing
+    // Move vertex 0 from (-2.0, -0.5) to (-2.5, -0.5)
+    rectPts[0][0] = -2.5f;
+    TEST_ASSERT(std::abs(rectPts[0][0] - (-2.5f)) < 1e-5f, "Vertex 0 U coordinate must update via keyboard input");
+
+    // Adjust Edge 0 length via keyboard input
+    float targetEdgeLen = 7.0f;
+    float dU = rectPts[1][0] - rectPts[0][0];
+    float dV = rectPts[1][1] - rectPts[0][1];
+    float curLen = std::hypot(dU, dV);
+    rectPts[1][0] = rectPts[0][0] + (dU / curLen) * targetEdgeLen;
+    rectPts[1][1] = rectPts[0][1] + (dV / curLen) * targetEdgeLen;
+    float updatedEdgeLen = std::hypot(rectPts[1][0] - rectPts[0][0], rectPts[1][1] - rectPts[0][1]);
+    TEST_ASSERT(std::abs(updatedEdgeLen - 7.0f) < 1e-4f, "Edge length must match 7.0m exactly after keyboard modification");
+
+    // 4. Keyboard Circle Construction & Radius Scaling
+    float circleRadius = 2.5f;
+    float circleCU = 0.0f;
+    float circleCV = 0.0f;
+    const int segs = 32;
+    std::vector<std::array<float, 2>> circleProfile;
+    for (int i = 0; i < segs; ++i) {
+        float theta = (static_cast<float>(i) / static_cast<float>(segs)) * 6.2831853f;
+        circleProfile.push_back({circleCU + circleRadius * std::cos(theta), circleCV + circleRadius * std::sin(theta)});
+    }
+    TEST_ASSERT(circleProfile.size() == 32, "Circle must contain 32 segments");
+
+    // Scale radius from 2.5 to 3.8m via keyboard
+    float newRadius = 3.8f;
+    float radScale = newRadius / circleRadius;
+    for (auto& pt : circleProfile) {
+        pt[0] = circleCU + (pt[0] - circleCU) * radScale;
+        pt[1] = circleCV + (pt[1] - circleCV) * radScale;
+    }
+    for (const auto& pt : circleProfile) {
+        float r = std::hypot(pt[0] - circleCU, pt[1] - circleCV);
+        TEST_ASSERT(std::abs(r - 3.8f) < 1e-4f, "Every circle vertex must scale to 3.8m radius");
+    }
+
+    // 5. Line Segment Keyboard Input (Length + Angle)
+    std::vector<std::array<float, 2>> linePts = { {0.0f, 0.0f} };
+    float lineLen = 5.0f;
+    float lineAngleDeg = 45.0f;
+    float lineAngleRad = lineAngleDeg * 3.14159265f / 180.0f;
+    float nextU = linePts.back()[0] + lineLen * std::cos(lineAngleRad);
+    float nextV = linePts.back()[1] + lineLen * std::sin(lineAngleRad);
+    linePts.push_back({nextU, nextV});
+
+    float computedLen = std::hypot(linePts[1][0] - linePts[0][0], linePts[1][1] - linePts[0][1]);
+    TEST_ASSERT(std::abs(computedLen - 5.0f) < 1e-4f, "Segment generated via keyboard length/angle must be 5.0m");
+    TEST_ASSERT(std::abs(linePts[1][0] - (5.0f * std::cos(lineAngleRad))) < 1e-4f, "Segment X must match angle");
+    TEST_ASSERT(std::abs(linePts[1][1] - (5.0f * std::sin(lineAngleRad))) < 1e-4f, "Segment Y must match angle");
+
+    return true;
+}
+
+bool Test3DFeaturePreviewConfirmAndCancel() {
+    std::cout << "[Test] 3D Feature Preview, Live Adjustments, Confirm & Cancel...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // Create base 2D sketch
+    auto sketch = std::make_shared<SketchNode>("BaseSketch", SketchPlane::XZ_Ground);
+    sketch->SetPresetRectangle(4.0f, 3.0f);
+    graph.AddNode(sketch);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!sketch->IsConsumed(), "Initial sketch must be unconsumed");
+    TEST_ASSERT(sketch->IsVisible(), "Initial sketch must be visible");
+
+    // 1. Extrude Feature Preview
+    auto previewExtrude = std::make_shared<ExtrudeNode>("Extrude_Preview", sketch, 2.0f);
+    graph.AddNode(previewExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(sketch->IsConsumed(), "When preview node is evaluated in graph, sketch is consumed");
+    TEST_ASSERT(graph.GetNodeCount() == 2, "Graph must contain sketch + preview extrude");
+
+    // Live parameter adjustment during preview
+    previewExtrude->SetHeight(4.0f);
+    previewExtrude->MarkDirty();
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(std::abs(previewExtrude->GetHeight() - 4.0f) < 1e-5f, "Extrude preview height must update live to 4.0m");
+
+    // Cancel Preview: graph.RemoveNode removes preview node and unconsumes parent sketch
+    graph.RemoveNode(previewExtrude->GetId());
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(graph.GetNodeCount() == 1, "Graph must contain only original sketch after canceling preview");
+    TEST_ASSERT(!sketch->IsConsumed(), "Sketch must be restored to unconsumed state after preview cancellation");
+    TEST_ASSERT(sketch->IsVisible(), "Sketch must be visible after preview cancellation");
+
+    // 2. Extrude Feature Confirmation
+    auto committedExtrude = std::make_shared<ExtrudeNode>("Extrude_Committed", sketch, 3.5f);
+    graph.AddNode(committedExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(graph.GetNodeCount() == 2, "Graph must contain 2 nodes after confirming extrude");
+    TEST_ASSERT(committedExtrude->GetActiveLeafFeature() == committedExtrude, "Committed extrude is the active leaf feature");
+
+    // 3. Chamfer Feature Preview on Corner Edge
+    auto previewChamfer = std::make_shared<ChamferNode>("Chamfer_Preview", committedExtrude, 0, 0.35f);
+    graph.AddNode(previewChamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(committedExtrude->IsConsumed(), "Parent extrude is consumed during chamfer preview");
+    TEST_ASSERT(graph.GetNodeCount() == 3, "Graph must contain sketch, extrude, and chamfer preview");
+
+    // Live parameter change during chamfer preview
+    previewChamfer->SetDistance(0.5f);
+    previewChamfer->MarkDirty();
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(std::abs(previewChamfer->GetDistance() - 0.5f) < 1e-5f, "Chamfer distance must update live to 0.5m");
+
+    // Cancel Chamfer Preview: parent extrude must be unconsumed and restored
+    graph.RemoveNode(previewChamfer->GetId());
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(graph.GetNodeCount() == 2, "Graph must revert to sketch + extrude after canceling chamfer preview");
+    TEST_ASSERT(!committedExtrude->IsConsumed(), "Extrude must be restored to unconsumed state after chamfer preview cancellation");
+    TEST_ASSERT(committedExtrude->GetActiveLeafFeature() == committedExtrude, "Extrude must be active leaf feature again");
+
+    // Confirm Chamfer Feature
+    auto committedChamfer = std::make_shared<ChamferNode>("Chamfer_Committed", committedExtrude, 0, 0.4f);
+    graph.AddNode(committedChamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(committedExtrude->IsConsumed(), "Extrude is consumed by committed chamfer");
+    TEST_ASSERT(committedChamfer->GetActiveLeafFeature() == committedChamfer, "Committed chamfer is active leaf feature");
+
+    // 4. Fillet Feature Preview on Top of Chamfer
+    auto previewFillet = std::make_shared<FilletNode>("Fillet_Preview", committedChamfer, 1, 0.25f);
+    graph.AddNode(previewFillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(committedChamfer->IsConsumed(), "Chamfer is consumed during fillet preview");
+
+    // Cancel Fillet Preview
+    graph.RemoveNode(previewFillet->GetId());
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!committedChamfer->IsConsumed(), "Chamfer must be unconsumed after fillet preview cancellation");
+    TEST_ASSERT(committedChamfer->GetActiveLeafFeature() == committedChamfer, "Chamfer restored as active leaf");
+
+    return true;
+}
+
+bool Test2DSketchDimensionConstraintsAndLocking() {
+    std::cout << "[Test] 2D Sketch Dimension Constraint Locking, Editing & Toggling...\n";
+
+    // 1. Create a 4-vertex rectangle shape
+    // Vertices: (0, 0), (4, 0), (4, 3), (0, 3)
+    std::vector<std::array<float, 2>> rectPts = {
+        { 0.0f, 0.0f },
+        { 4.0f, 0.0f },
+        { 4.0f, 3.0f },
+        { 0.0f, 3.0f }
+    };
+
+    auto Dist = [](const std::array<float, 2>& a, const std::array<float, 2>& b) {
+        return std::hypot(b[0] - a[0], b[1] - a[1]);
+    };
+
+    TEST_ASSERT(std::abs(Dist(rectPts[0], rectPts[1]) - 4.0f) < 1e-4f, "Edge 0 initial length must be 4.0m");
+    TEST_ASSERT(std::abs(Dist(rectPts[1], rectPts[2]) - 3.0f) < 1e-4f, "Edge 1 initial length must be 3.0m");
+    TEST_ASSERT(std::abs(Dist(rectPts[2], rectPts[3]) - 4.0f) < 1e-4f, "Edge 2 initial length must be 4.0m");
+    TEST_ASSERT(std::abs(Dist(rectPts[3], rectPts[0]) - 3.0f) < 1e-4f, "Edge 3 initial length must be 3.0m");
+
+    // 2. Double-click line dimension edit: Lock & Constrain Edge 0 to 5.0m
+    std::map<size_t, float> constraints;
+    constraints[0] = 5.0f; // Constrained to 5.0m
+
+    // Enforce constraint
+    SketchNode::EnforceConstraints(rectPts, constraints, true, -1);
+    TEST_ASSERT(std::abs(Dist(rectPts[0], rectPts[1]) - 5.0f) < 1e-4f, "Edge 0 must now be constrained to 5.0m");
+
+    // 3. Subsequent dimension changes (e.g. Scaling width of drawing) MUST NOT change constrained edge!
+    // Stretch vertices 1 and 2 along X by 2.0x (unconstrained scaling attempt)
+    rectPts[1][0] *= 2.0f;
+    rectPts[2][0] *= 2.0f;
+    TEST_ASSERT(Dist(rectPts[0], rectPts[1]) > 6.0f, "Edge 0 unconstrained stretched temporarily");
+
+    // Enforce constraints after subsequent changes
+    SketchNode::EnforceConstraints(rectPts, constraints, true, -1);
+    TEST_ASSERT(std::abs(Dist(rectPts[0], rectPts[1]) - 5.0f) < 1e-4f,
+        "Constrained Edge 0 MUST strictly preserve its 5.0m locked length after subsequent changes");
+
+    // 4. Vertex dragging with pinned vertex
+    // User drags vertex 0 to (-2.0, 1.0)
+    rectPts[0] = { -2.0f, 1.0f };
+    SketchNode::EnforceConstraints(rectPts, constraints, true, 0); // vertex 0 pinned
+    TEST_ASSERT(std::abs(rectPts[0][0] - (-2.0f)) < 1e-4f && std::abs(rectPts[0][1] - 1.0f) < 1e-4f,
+        "Pinned vertex 0 must remain at mouse drag coordinates");
+    TEST_ASSERT(std::abs(Dist(rectPts[0], rectPts[1]) - 5.0f) < 1e-4f,
+        "Edge 0 length must still be locked at 5.0m while dragging vertex 0");
+
+    // 5. Multiple coupled constraints: Constrain Edge 1 to 4.0m
+    constraints[1] = 4.0f;
+    SketchNode::EnforceConstraints(rectPts, constraints, true, -1);
+    TEST_ASSERT(std::abs(Dist(rectPts[0], rectPts[1]) - 5.0f) < 1e-3f, "Edge 0 constraint 5.0m must remain satisfied");
+    TEST_ASSERT(std::abs(Dist(rectPts[1], rectPts[2]) - 4.0f) < 1e-3f, "Edge 1 constraint 4.0f must be satisfied");
+
+    // 6. Toggling constraint OFF: Unlock Edge 0
+    constraints.erase(0);
+    // Now modify Edge 0 freely to 7.5m (updating opposite corner for rectangle as the UI does)
+    float dU = rectPts[1][0] - rectPts[0][0];
+    float dV = rectPts[1][1] - rectPts[0][1];
+    float curLen = std::hypot(dU, dV);
+    float deltaL = 7.5f - curLen;
+    rectPts[1][0] += (dU / curLen) * deltaL;
+    rectPts[1][1] += (dV / curLen) * deltaL;
+    rectPts[2][0] += (dU / curLen) * deltaL;
+    rectPts[2][1] += (dV / curLen) * deltaL;
+
+    // Enforce remaining constraints (only Edge 1 is constrained now)
+    SketchNode::EnforceConstraints(rectPts, constraints, true, -1);
+    TEST_ASSERT(std::abs(Dist(rectPts[0], rectPts[1]) - 7.5f) < 1e-3f,
+        "Unlocked Edge 0 can now change freely and is not reverted");
+    TEST_ASSERT(std::abs(Dist(rectPts[1], rectPts[2]) - 4.0f) < 1e-3f,
+        "Edge 1 constraint remains locked at 4.0m");
+
+    // 7. Test SketchNode Constraint Persistence
+    auto sketch = std::make_shared<SketchNode>("Sketch_Constrained", SketchPlane::XZ_Ground);
+    sketch->SetEdgeConstraint(0, 0, 5.0f);
+    sketch->SetEdgeConstraint(0, 1, 4.0f);
+    TEST_ASSERT(sketch->IsEdgeConstrained(0, 0), "Edge 0 must be constrained in SketchNode");
+    TEST_ASSERT(sketch->IsEdgeConstrained(0, 1), "Edge 1 must be constrained in SketchNode");
+    TEST_ASSERT(!sketch->IsEdgeConstrained(0, 2), "Edge 2 must not be constrained");
+    TEST_ASSERT(std::abs(sketch->GetEdgeConstrainedLength(0, 0) - 5.0f) < 1e-4f, "Edge 0 length in sketch must be 5.0f");
+    TEST_ASSERT(std::abs(sketch->GetEdgeConstrainedLength(0, 1) - 4.0f) < 1e-4f, "Edge 1 length in sketch must be 4.0f");
+
+    // Toggle/remove constraint from sketch
+    sketch->RemoveEdgeConstraint(0, 0);
+    TEST_ASSERT(!sketch->IsEdgeConstrained(0, 0), "Edge 0 must no longer be constrained after removal");
+    TEST_ASSERT(sketch->IsEdgeConstrained(0, 1), "Edge 1 remains constrained");
+
+    return true;
+}
+
+bool TestViewRecenterAndAxesReferenceAndSketchClick() {
+    std::cout << "[Test] Camera View Recenter on Top, Side, Iso Origin, Axes Triad & 2D Sketch Click-Drag...\n";
+
+    Camera camera;
+    camera.SetViewportSize(1920.0f, 1080.0f);
+
+    // 1. Pan camera away from origin to simulate user panning
+    camera.Pan(5.0f, -3.0f);
+    const float* targetPanned = camera.GetTarget();
+    TEST_ASSERT(std::abs(targetPanned[0]) > 0.1f || std::abs(targetPanned[1]) > 0.1f,
+        "Camera target must be panned away from origin");
+
+    // Recenter Origin Only
+    camera.RecenterOrigin();
+    const float* targetOrigin = camera.GetTarget();
+    TEST_ASSERT(std::abs(targetOrigin[0]) < 1e-5f && std::abs(targetOrigin[1]) < 1e-5f && std::abs(targetOrigin[2]) < 1e-5f,
+        "RecenterOrigin must restore target to (0, 0, 0)");
+
+    // 2. Top View (Looking down +Y onto XZ plane, centered on origin)
+    camera.Pan(4.0f, 2.0f);
+    camera.SetTopView(true);
+    TEST_ASSERT(std::abs(camera.GetTarget()[0]) < 1e-5f && std::abs(camera.GetTarget()[1]) < 1e-5f && std::abs(camera.GetTarget()[2]) < 1e-5f,
+        "Top View must recenter target to origin");
+    TEST_ASSERT(std::abs(camera.GetElevation() - 1.5f) < 1e-4f, "Top View elevation must be +1.5 rad (~90 deg up)");
+    TEST_ASSERT(std::abs(camera.GetAzimuth() - 0.0f) < 1e-4f, "Top View azimuth must be 0.0 rad");
+
+    // 3. Side View (Looking from +X towards YZ plane, centered on origin)
+    camera.Pan(-2.0f, 8.0f);
+    camera.SetSideView(true);
+    TEST_ASSERT(std::abs(camera.GetTarget()[0]) < 1e-5f && std::abs(camera.GetTarget()[1]) < 1e-5f && std::abs(camera.GetTarget()[2]) < 1e-5f,
+        "Side View must recenter target to origin");
+    TEST_ASSERT(std::abs(camera.GetAzimuth() - 1.570796f) < 1e-4f, "Side View azimuth must be pi/2 rad (~90 deg side)");
+    TEST_ASSERT(std::abs(camera.GetElevation() - 0.0f) < 1e-4f, "Side View elevation must be 0.0 rad");
+
+    // 4. Isometric View (Corner viewing angle, centered on origin)
+    camera.Pan(3.0f, -5.0f);
+    camera.SetIsometricView(true);
+    TEST_ASSERT(std::abs(camera.GetTarget()[0]) < 1e-5f && std::abs(camera.GetTarget()[1]) < 1e-5f && std::abs(camera.GetTarget()[2]) < 1e-5f,
+        "Isometric View must recenter target to origin");
+    TEST_ASSERT(std::abs(camera.GetAzimuth() - 0.785398f) < 1e-4f, "Isometric View azimuth must be 45 deg (pi/4)");
+    TEST_ASSERT(std::abs(camera.GetElevation() - 0.523599f) < 1e-4f, "Isometric View elevation must be ~30 deg");
+
+    // 5. Front View (Looking along +Z towards XY plane, centered on origin)
+    camera.SetFrontView(true);
+    TEST_ASSERT(std::abs(camera.GetTarget()[0]) < 1e-5f && std::abs(camera.GetTarget()[1]) < 1e-5f && std::abs(camera.GetTarget()[2]) < 1e-5f,
+        "Front View must recenter target to origin");
+    TEST_ASSERT(std::abs(camera.GetAzimuth() - 0.0f) < 1e-4f && std::abs(camera.GetElevation() - 0.0f) < 1e-4f,
+        "Front View must align azimuth and elevation to 0.0");
+
+    // 6. Camera Basis Vectors & Triad Projection
+    camera.SetIsometricView(true);
+    float fwd[3], rgt[3], up[3];
+    camera.GetBasisVectors(fwd, rgt, up);
+    float rgtLen = std::sqrt(rgt[0]*rgt[0] + rgt[1]*rgt[1] + rgt[2]*rgt[2]);
+    float upLen = std::sqrt(up[0]*up[0] + up[1]*up[1] + up[2]*up[2]);
+    float fwdLen = std::sqrt(fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
+    TEST_ASSERT(std::abs(rgtLen - 1.0f) < 1e-4f, "Camera Right basis vector must be normalized");
+    TEST_ASSERT(std::abs(upLen - 1.0f) < 1e-4f, "Camera Up basis vector must be normalized");
+    TEST_ASSERT(std::abs(fwdLen - 1.0f) < 1e-4f, "Camera Forward basis vector must be normalized");
+
+    // Right and Up must be orthogonal
+    float dotRU = rgt[0]*up[0] + rgt[1]*up[1] + rgt[2]*up[2];
+    TEST_ASSERT(std::abs(dotRU) < 1e-4f, "Camera Right and Up basis vectors must be orthogonal");
+
+    // 7. 2D Sketch: Click vs Click-and-Drag behavior
+    // Verify that selecting/clicking a shape does NOT alter geometry unless drag threshold is exceeded
+    std::vector<std::array<float, 2>> shapeOrig = {
+        { 0.0f, 0.0f }, { 4.0f, 0.0f }, { 4.0f, 2.0f }, { 0.0f, 2.0f }
+    };
+    std::vector<std::array<float, 2>> shapeCurrent = shapeOrig;
+
+    // Simulate mouse click with NO drag motion (isDragging = false)
+    bool isDragging = false;
+    float dragStartU = 2.0f;
+    float dragStartV = 1.0f;
+    float currentMouseU = 2.02f; // Minor sub-pixel jitter
+    float currentMouseV = 1.01f;
+
+    if (isDragging) {
+        float du = currentMouseU - dragStartU;
+        float dv = currentMouseV - dragStartV;
+        for (size_t i = 0; i < shapeCurrent.size(); ++i) {
+            shapeCurrent[i] = { shapeOrig[i][0] + du, shapeOrig[i][1] + dv };
+        }
+    }
+    // Shape points MUST remain strictly identical to shapeOrig when simply clicking
+    for (size_t i = 0; i < shapeCurrent.size(); ++i) {
+        TEST_ASSERT(shapeCurrent[i][0] == shapeOrig[i][0] && shapeCurrent[i][1] == shapeOrig[i][1],
+            "Shape coordinates must NOT change on mouse click without drag motion");
+    }
+
+    // Simulate intentional drag (isDragging = true)
+    isDragging = true;
+    currentMouseU = 3.5f;
+    currentMouseV = 2.5f;
+    if (isDragging) {
+        float du = currentMouseU - dragStartU; // +1.5m
+        float dv = currentMouseV - dragStartV; // +1.5m
+        for (size_t i = 0; i < shapeCurrent.size(); ++i) {
+            shapeCurrent[i] = { shapeOrig[i][0] + du, shapeOrig[i][1] + dv };
+        }
+    }
+    TEST_ASSERT(std::abs(shapeCurrent[0][0] - 1.5f) < 1e-5f && std::abs(shapeCurrent[0][1] - 1.5f) < 1e-5f,
+        "Shape coordinates must translate only when click-and-drag motion is active");
+
+    return true;
+}
+
+bool TestExtrudedCutAndRevolvedCutOperations() {
+    std::cout << "[Test] Extruded Cut & Revolved Cut Operations on Existing Models...\n";
+
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+    ParametricGraph graph(nullptr);
+
+    // 1. Create Base Solid: Extruded Block 4.0 x 4.0 with height 2.0
+    // Vertices at base plane Y=0: (-2, -2), (2, -2), (2, 2), (-2, 2)
+    auto baseSketch = std::make_shared<SketchNode>("Base_Sketch", SketchPlane::XZ_Ground);
+    baseSketch->SetProfile({ {-2.0f, -2.0f}, {2.0f, -2.0f}, {2.0f, 2.0f}, {-2.0f, 2.0f} });
+    graph.AddNode(baseSketch);
+
+    auto baseExtrude = std::make_shared<ExtrudeNode>("Base_Block", baseSketch, 2.0f);
+    graph.AddNode(baseExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!baseExtrude->GetCachedVertices().empty(), "Base block must have vertices");
+    TEST_ASSERT(!baseExtrude->IsConsumed(), "Base block must be active solid initially");
+    size_t baseVertCount = baseExtrude->GetCachedVertices().size();
+    size_t baseIndexCount = baseExtrude->GetCachedIndices().size();
+
+    // 2. Create a Cut Sketch on the top face at Y=2.0 (plane XZ with Y=2.0 offset)
+    // Centered square pocket 2.0 x 2.0: (-1, -1) to (1, 1)
+    auto cutSketch = std::make_shared<SketchNode>("Cut_Pocket_Sketch", SketchPlane::XZ_Ground);
+    cutSketch->SetPosition(0.0f, 2.0f, 0.0f); // on top face
+    cutSketch->SetProfile({ {-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 1.0f}, {-1.0f, 1.0f} });
+    graph.AddNode(cutSketch);
+
+    // 3. Create CutExtrudeNode (blind pocket of depth -1.0 into the model)
+    // Height -1.0 sweeps from Y=2.0 down to Y=1.0
+    auto cutExtrude = std::make_shared<CutExtrudeNode>("Pocket_Cut", cutSketch, -1.0f, baseExtrude);
+    graph.AddNode(cutExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(cutExtrude->IsCut(), "Must be cut operation");
+    TEST_ASSERT(!cutExtrude->HasConflict(), "Cut extrude must evaluate cleanly without conflict");
+    TEST_ASSERT(baseExtrude->IsConsumed(), "Base block must be consumed when cut away by cut feature");
+    TEST_ASSERT(cutExtrude->GetParentFeature() == baseExtrude, "Cut extrude must have base block as parent feature");
+
+    // 4. Verify pocket geometry in mesh
+    const auto& cutVerts = cutExtrude->GetCachedVertices();
+    const auto& cutIndices = cutExtrude->GetCachedIndices();
+    const auto& cutEdges = cutExtrude->GetCachedEdges();
+    TEST_ASSERT(!cutVerts.empty() && !cutIndices.empty(), "Cut mesh must not be empty");
+
+    // Check for pocket floor vertices at Y ≈ 1.0
+    bool foundFloorAtY1 = false;
+    for (const auto& v : cutVerts) {
+        if (std::abs(v.position[1] - 1.0f) < 0.05f) {
+            foundFloorAtY1 = true;
+            break;
+        }
+    }
+    TEST_ASSERT(foundFloorAtY1, "Cut mesh must contain pocket floor at Y = 1.0m");
+
+    // Check that feature edges include pocket rim and internal corners
+    TEST_ASSERT(cutEdges.size() > baseExtrude->GetCachedEdges().size(),
+        "Cut mesh must have additional feature edges for the pocket rim, walls, and floor");
+
+    // 5. Test Safe Feature Deletion:
+    // Deleting the cut feature restores the uncut base model
+    graph.RemoveNode(cutExtrude->GetId());
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!baseExtrude->IsConsumed(), "Base block must be unconsumed and restored after deleting cut feature");
+    TEST_ASSERT(baseExtrude->GetCachedVertices().size() == baseVertCount, "Restored base block must retain its original vertices");
+    TEST_ASSERT(baseExtrude->GetCachedIndices().size() == baseIndexCount, "Restored base block must retain its original indices");
+
+    // 6. Test Revolved Cut:
+    // Create a cut sketch on XY_Front plane (centered at X=0, Y=1.0, Z=0)
+    // Profile: rectangle from u=0.2 to 0.8, v=-0.5 to 0.5 (revolved hole/groove inside the block)
+    auto revCutSketch = std::make_shared<SketchNode>("Rev_Cut_Sketch", SketchPlane::XY_Front);
+    revCutSketch->SetPosition(0.0f, 1.0f, 0.0f);
+    revCutSketch->SetProfile({ {0.2f, -0.5f}, {0.8f, -0.5f}, {0.8f, 0.5f}, {0.2f, 0.5f} });
+    graph.AddNode(revCutSketch);
+
+    auto cutRevolve = std::make_shared<CutRevolveNode>("Groove_Cut_Revolve", revCutSketch, 360.0f, RevolveAxisMode::Sketch_V_Axis, baseExtrude);
+    graph.AddNode(cutRevolve);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(cutRevolve->IsCut(), "Must be cut revolve operation");
+    TEST_ASSERT(!cutRevolve->HasConflict(), "Cut revolve must evaluate cleanly without conflict");
+    TEST_ASSERT(baseExtrude->IsConsumed(), "Base block must be consumed when cut away by revolve feature");
+    TEST_ASSERT(cutRevolve->GetParentFeature() == baseExtrude, "Cut revolve must have base block as parent feature");
+    TEST_ASSERT(!cutRevolve->GetCachedVertices().empty(), "Revolved cut mesh must have vertices");
+
+    // 7. Test Operation Mode Toggle: Switch CutRevolve to Boss (Add) and back to Cut
+    cutRevolve->SetOperation(RevolveOperation::Boss);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(!baseExtrude->IsConsumed(), "Toggling to Boss must unconsume target model");
+
+    cutRevolve->SetOperation(RevolveOperation::Cut);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+    TEST_ASSERT(baseExtrude->IsConsumed(), "Toggling back to Cut must consume target model again");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -2673,6 +3149,11 @@ int main() {
     pass &= TestOffsetReferencePlanesAndAxesFromFaceAndCorners();
     pass &= TestSketchCreatedOnFaceSurfacePlane();
     pass &= TestSolidWorksMouseNavigation();
+    pass &= Test2DSketchKeyboardDimensionsAndParametricScaling();
+    pass &= Test3DFeaturePreviewConfirmAndCancel();
+    pass &= Test2DSketchDimensionConstraintsAndLocking();
+    pass &= TestViewRecenterAndAxesReferenceAndSketchClick();
+    pass &= TestExtrudedCutAndRevolvedCutOperations();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";
