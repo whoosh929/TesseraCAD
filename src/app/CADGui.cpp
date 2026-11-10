@@ -580,6 +580,75 @@ void CADGui::RenderTopBar(
             ImGui::SetTooltip("5. Create Revolve Feature:\n- Previews 3D revolution (Boss/Cut) live in viewport with confirm/cancel.\n- Cylindrical wall thickness is directly dictated by 2D sketch drawing.");
         }
 
+        // Sweep feature
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.42f, 0.38f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.56f, 0.50f, 1.0f));
+        if (ImGui::Button("〰 Sweep", ImVec2(88, 32))) {
+            CloseMeasurement();
+            m_selectedSweepProfileSketchId = 0;
+            m_selectedSweepPathSketchId = 0;
+
+            std::shared_ptr<SketchNode> selSketch = nullptr;
+            if (selectedNode) {
+                selSketch = std::dynamic_pointer_cast<SketchNode>(selectedNode);
+                if (!selSketch) {
+                    selSketch = std::dynamic_pointer_cast<SketchNode>(selectedNode->GetChildSketch());
+                }
+            }
+
+            if (selSketch && !selSketch->IsConsumed()) {
+                if (selSketch->IsEnclosed()) {
+                    m_selectedSweepProfileSketchId = selSketch->GetId();
+                } else if (selSketch->IsSingleLine() || !selSketch->IsEnclosed()) {
+                    m_selectedSweepPathSketchId = selSketch->GetId();
+                }
+            }
+
+            // Look for available unconsumed enclosed and line/path sketches
+            std::vector<std::shared_ptr<SketchNode>> availableEnclosed;
+            std::vector<std::shared_ptr<SketchNode>> availablePaths;
+            for (const auto& n : graph.GetNodes()) {
+                if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                    if (!s->IsConsumed()) {
+                        if (s->IsEnclosed()) {
+                            availableEnclosed.push_back(s);
+                        } else {
+                            availablePaths.push_back(s);
+                        }
+                    }
+                }
+            }
+
+            if (m_selectedSweepProfileSketchId == 0 && availableEnclosed.size() == 1) {
+                m_selectedSweepProfileSketchId = availableEnclosed[0]->GetId();
+            }
+            if (m_selectedSweepPathSketchId == 0 && availablePaths.size() == 1) {
+                m_selectedSweepPathSketchId = availablePaths[0]->GetId();
+            }
+
+            if (m_selectedSweepProfileSketchId != 0 && m_selectedSweepPathSketchId != 0 &&
+                m_selectedSweepProfileSketchId != m_selectedSweepPathSketchId) {
+                auto prof = std::dynamic_pointer_cast<SketchNode>(graph.GetNode(m_selectedSweepProfileSketchId));
+                auto path = std::dynamic_pointer_cast<SketchNode>(graph.GetNode(m_selectedSweepPathSketchId));
+                if (prof && path) {
+                    std::string name = "Sweep_" + std::to_string(m_shapeCounter++);
+                    auto targetSolid = ResolveTargetSolid(prof, graph);
+                    auto sweep = std::make_shared<SweepNode>(name, prof, path, SweepOperation::Boss, targetSolid);
+                    StartFeaturePreview(PreviewFeatureType::Sweep, sweep, targetSolid, graph, device, exchange);
+                    m_showSweepPrompt = false;
+                } else {
+                    m_showSweepPrompt = true;
+                }
+            } else {
+                m_showSweepPrompt = true;
+            }
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("6. Create Sweep Feature:\n- Sweeps an enclosed 2D sketch profile following a single line 2D sketch path.");
+        }
+
         // Fillet & Chamfer features
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.35f, 0.48f, 1.0f));
@@ -802,11 +871,15 @@ void CADGui::RenderTopBar(
                 }
             }
             bool canConfirm = m_inProgressPoints.empty() && m_inProgressSplineControls.empty();
-            for (const auto& sh : m_canvasShapes) {
-                if (!sh.isClosed || sh.points.size() < 3) {
-                    canConfirm = false;
-                    break;
+            if (canConfirm) {
+                bool hasAnyGeometry = false;
+                for (const auto& sh : m_canvasShapes) {
+                    if (sh.points.size() >= 2) {
+                        hasAnyGeometry = true;
+                        break;
+                    }
                 }
+                canConfirm = hasAnyGeometry;
             }
 
             ImGui::SameLine();
@@ -818,16 +891,24 @@ void CADGui::RenderTopBar(
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.72f, 0.42f, 1.0f));
             if (ImGui::Button("✓ Confirm Sketch##TopBar", ImVec2(128, 32)) && activeSketch) {
                 std::vector<std::vector<std::array<float, 2>>> outShapes;
+                std::vector<bool> outClosed;
+                bool isSketchClosed = true;
                 for (const auto& sh : m_canvasShapes) {
-                    if (sh.isClosed && sh.points.size() >= 3) {
+                    if (sh.points.size() >= 2) {
                         outShapes.push_back(sh.points);
+                        bool isShapeClosed = sh.isClosed && (sh.points.size() >= 3);
+                        outClosed.push_back(isShapeClosed);
+                        if (!isShapeClosed) {
+                            isSketchClosed = false;
+                        }
                     }
                 }
                 if (outShapes.empty()) {
                     m_showEmptySketchExitPrompt = true;
                     m_emptySketchToExitId = activeSketch->GetId();
                 } else {
-                    activeSketch->SetShapes(std::move(outShapes));
+                    activeSketch->SetShapes(std::move(outShapes), std::move(outClosed));
+                    activeSketch->SetClosed(isSketchClosed);
                     graph.EvaluateDirtyNodes(device, exchange);
                     m_sketchModeActive = false;
                 }
@@ -1149,6 +1230,8 @@ const char* CADGui::GetPreviewFeatureTypeName(CADGui::PreviewFeatureType type) n
         case PreviewFeatureType::CutExtrude: return "Cut Extrude";
         case PreviewFeatureType::Revolve:    return "Revolve";
         case PreviewFeatureType::CutRevolve: return "Cut Revolve";
+        case PreviewFeatureType::Sweep:      return "Sweep";
+        case PreviewFeatureType::CutSweep:   return "Cut Sweep";
         case PreviewFeatureType::Fillet:     return "Fillet";
         case PreviewFeatureType::Chamfer:    return "Chamfer";
         case PreviewFeatureType::None:       return "Feature";
@@ -1187,6 +1270,7 @@ void CADGui::StartFeaturePreview(
 
     m_showExtrudePrompt = false;
     m_showRevolvePrompt = false;
+    m_showSweepPrompt = false;
     m_showFilletPrompt = false;
     m_showChamferPrompt = false;
 }
@@ -1444,6 +1528,84 @@ void CADGui::RenderFeaturePreviewDialog(
                         m_showWireframe = wireframe;
                     }
                     if (auto tgt = revolve->GetTargetFeature()) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Cutting from Target: %s", tgt->GetName().c_str());
+                    } else {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "No target model specified to cut from.");
+                    }
+                }
+            }
+        } else if (m_previewFeatureType == PreviewFeatureType::Sweep || m_previewFeatureType == PreviewFeatureType::CutSweep) {
+            auto sweep = std::dynamic_pointer_cast<SweepNode>(m_previewNode);
+            if (sweep) {
+                bool isCut = sweep->IsCut();
+                if (ImGui::RadioButton("Add Material (Boss)##SweepPrev", !isCut)) {
+                    sweep->SetOperation(SweepOperation::Boss);
+                    m_previewFeatureType = PreviewFeatureType::Sweep;
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Cut Material (Subtract)##SweepPrev", isCut)) {
+                    auto tgt = ResolveTargetSolid(m_previewTarget ? m_previewTarget : sweep->GetProfileSketch(), graph);
+                    if (tgt) sweep->SetTargetFeature(tgt);
+                    sweep->SetOperation(SweepOperation::Cut);
+                    m_previewFeatureType = PreviewFeatureType::CutSweep;
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::Spacing();
+
+                if (auto profSk = sweep->GetProfileSketch()) {
+                    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "Profile (Enclosed 2D Sketch): %s (ID %llu)", profSk->GetName().c_str(), profSk->GetId());
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Profile: ⚠ None Selected (Requires enclosed 2D sketch)");
+                }
+                if (auto pathSk = sweep->GetPathSketch()) {
+                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.7f, 1.0f), "Path (Single Line 2D Sketch): %s (ID %llu)", pathSk->GetName().c_str(), pathSk->GetId());
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Path: ⚠ None Selected (Requires single line 2D sketch)");
+                }
+
+                // Allow switching profile or path to any other sketch
+                std::vector<std::shared_ptr<SketchNode>> otherSketches;
+                for (const auto& n : graph.GetNodes()) {
+                    if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                        if (!s->IsConsumed() || s == sweep->GetProfileSketch() || s == sweep->GetPathSketch()) {
+                            otherSketches.push_back(s);
+                        }
+                    }
+                }
+                if (otherSketches.size() > 1) {
+                    ImGui::Spacing();
+                    ImGui::Text("Switch Profile or Path Sketch:");
+                    for (const auto& os : otherSketches) {
+                        bool isProf = (sweep->GetProfileSketch() == os);
+                        bool isPath = (sweep->GetPathSketch() == os);
+                        if (!isProf && os->IsEnclosed()) {
+                            std::string pBtn = "Set Profile: " + os->GetName() + "##Prev";
+                            if (ImGui::Button(pBtn.c_str())) {
+                                sweep->SetProfileSketch(os);
+                                graph.EvaluateDirtyNodes(device, exchange);
+                            }
+                            ImGui::SameLine();
+                        }
+                        if (!isPath && (os->IsSingleLine() || !os->IsEnclosed())) {
+                            std::string pathBtn = "Set Path: " + os->GetName() + "##Prev";
+                            if (ImGui::Button(pathBtn.c_str())) {
+                                sweep->SetPathSketch(os);
+                                graph.EvaluateDirtyNodes(device, exchange);
+                            }
+                            ImGui::SameLine();
+                        }
+                    }
+                    ImGui::NewLine();
+                }
+
+                if (isCut) {
+                    ImGui::SameLine();
+                    bool wireframe = m_showWireframe;
+                    if (ImGui::Checkbox("X-Ray Wireframe (See-through Model)##SweepCutPrev", &wireframe)) {
+                        m_showWireframe = wireframe;
+                    }
+                    if (auto tgt = sweep->GetTargetFeature()) {
                         ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Cutting from Target: %s", tgt->GetName().c_str());
                     } else {
                         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "No target model specified to cut from.");
@@ -1877,6 +2039,164 @@ void CADGui::RenderCutRevolvePromptModal(
         ImGui::Separator();
         if (ImGui::Button("Cancel", ImVec2(-1, 26))) {
             m_showCutRevolvePrompt = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+}
+
+void CADGui::RenderSweepPromptModal(
+    ParametricGraph& graph,
+    RHI::RHIDevice* device,
+    AtomicMeshExchange& exchange,
+    const std::vector<std::shared_ptr<DAGNode>>& nodes
+) {
+    if (!m_showSweepPrompt) return;
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 270.0f, 68.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(540.0f, 0.0f), ImGuiCond_Always);
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.16f, 0.18f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.35f, 0.85f, 0.75f, 1.0f));
+
+    if (ImGui::Begin("Sweep Feature - Select Profile & Guide Path Sketches##Modal", &m_showSweepPrompt, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextColored(ImVec4(0.4f, 0.95f, 0.85f, 1.0f), "〰 Sweep Feature (Enclosed 2D Profile Along 2D Line Path)");
+        ImGui::Separator();
+        ImGui::TextWrapped("A Sweep feature requires two 2D sketches as input:\n 1. An enclosed 2D sketch (Profile)\n 2. A single line 2D sketch (Guide Path)\nThe enclosed sketch will be swept following the 2D line sketch.");
+        ImGui::Spacing();
+
+        // Separate sketches into enclosed vs single-line / path
+        std::vector<std::shared_ptr<SketchNode>> enclosedSketches;
+        std::vector<std::shared_ptr<SketchNode>> pathSketches;
+        for (const auto& n : nodes) {
+            if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                if (!s->IsConsumed()) {
+                    if (s->IsEnclosed()) {
+                        enclosedSketches.push_back(s);
+                    } else {
+                        pathSketches.push_back(s);
+                    }
+                }
+            }
+        }
+
+        std::shared_ptr<SketchNode> selectedProf = nullptr;
+        std::shared_ptr<SketchNode> selectedPath = nullptr;
+        if (m_selectedSweepProfileSketchId != 0) {
+            selectedProf = std::dynamic_pointer_cast<SketchNode>(graph.GetNode(m_selectedSweepProfileSketchId));
+            if (!selectedProf || selectedProf->IsConsumed()) {
+                m_selectedSweepProfileSketchId = 0;
+                selectedProf = nullptr;
+            }
+        }
+        if (m_selectedSweepPathSketchId != 0) {
+            selectedPath = std::dynamic_pointer_cast<SketchNode>(graph.GetNode(m_selectedSweepPathSketchId));
+            if (!selectedPath || selectedPath->IsConsumed()) {
+                m_selectedSweepPathSketchId = 0;
+                selectedPath = nullptr;
+            }
+        }
+
+        // Section 1: Profile Sketch (Enclosed)
+        ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "1. Profile Input (Enclosed 2D Sketch):");
+        if (selectedProf) {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "  ✓ Selected Profile: '%s' (ID %llu, Enclosed)",
+                               selectedProf->GetName().c_str(), selectedProf->GetId());
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "  ⚠ No enclosed profile sketch selected");
+        }
+
+        if (!enclosedSketches.empty()) {
+            ImGui::TextDisabled("Available Enclosed Sketches in Model Tree:");
+            for (const auto& s : enclosedSketches) {
+                bool isCur = (s->GetId() == m_selectedSweepProfileSketchId);
+                size_t ptCount = s->GetShapes().empty() ? s->GetProfile().size() : s->GetShapes()[0].size();
+                std::string btn = (isCur ? "✓ " : "  Select ") + s->GetName() + " (" + std::to_string(ptCount) + " pts)##ProfBtn" + std::to_string(s->GetId());
+                if (ImGui::Button(btn.c_str())) {
+                    m_selectedSweepProfileSketchId = s->GetId();
+                }
+                ImGui::SameLine();
+            }
+            ImGui::NewLine();
+        }
+
+        if (ImGui::Button("+ Draw New Enclosed Profile Sketch (Front Plane)", ImVec2(-1, 26))) {
+            std::string name = "Sketch_Profile_" + std::to_string(m_shapeCounter++);
+            auto sketch = std::make_shared<SketchNode>(name, SketchPlane::XY_Front);
+            sketch->SetPresetRegularPolygon(16, 0.5f); // Circular enclosed profile
+            graph.AddNode(sketch);
+            graph.EvaluateDirtyNodes(device, exchange);
+            m_selectedSweepProfileSketchId = sketch->GetId();
+            SetSelectedNodeId(sketch->GetId());
+            EnterSketchMode(sketch->GetId());
+            m_showSweepPrompt = false;
+            ImGui::End();
+            ImGui::PopStyleColor(2);
+            return;
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Section 2: Path Sketch (Single Line 2D Sketch)
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.7f, 1.0f), "2. Sweep Path Input (Single Line 2D Sketch):");
+        if (selectedPath) {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "  ✓ Selected Path: '%s' (ID %llu, Single Line/Path)",
+                               selectedPath->GetName().c_str(), selectedPath->GetId());
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "  ⚠ No single line path sketch selected");
+        }
+
+        if (!pathSketches.empty()) {
+            ImGui::TextDisabled("Available Single Line / Path Sketches in Model Tree:");
+            for (const auto& s : pathSketches) {
+                bool isCur = (s->GetId() == m_selectedSweepPathSketchId);
+                size_t ptCount = s->GetShapes().empty() ? s->GetProfile().size() : s->GetShapes()[0].size();
+                std::string btn = (isCur ? "✓ " : "  Select ") + s->GetName() + " (" + std::to_string(ptCount) + " pts)##PathBtn" + std::to_string(s->GetId());
+                if (ImGui::Button(btn.c_str())) {
+                    m_selectedSweepPathSketchId = s->GetId();
+                }
+                ImGui::SameLine();
+            }
+            ImGui::NewLine();
+        }
+
+        if (ImGui::Button("+ Draw New Single Line Path Sketch (Ground Plane)", ImVec2(-1, 26))) {
+            std::string name = "Sketch_LinePath_" + std::to_string(m_shapeCounter++);
+            auto sketch = std::make_shared<SketchNode>(name, SketchPlane::XZ_Ground);
+            sketch->SetProfile({ {0.0f, 0.0f}, {0.0f, 3.0f} }); // Straight single line
+            sketch->SetClosed(false);
+            graph.AddNode(sketch);
+            graph.EvaluateDirtyNodes(device, exchange);
+            m_selectedSweepPathSketchId = sketch->GetId();
+            SetSelectedNodeId(sketch->GetId());
+            EnterSketchMode(sketch->GetId());
+            m_showSweepPrompt = false;
+            ImGui::End();
+            ImGui::PopStyleColor(2);
+            return;
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Confirmation / Cancel
+        bool canCreate = (selectedProf != nullptr && selectedPath != nullptr && selectedProf != selectedPath);
+        ImGui::BeginDisabled(!canCreate);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.62f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.72f, 0.42f, 1.0f));
+        if (ImGui::Button("✓ Create Sweep (Sweep Enclosed Sketch Along Line)", ImVec2(-1, 34))) {
+            std::string name = "Sweep_" + std::to_string(m_shapeCounter++);
+            auto targetSolid = ResolveTargetSolid(selectedProf, graph);
+            auto sweep = std::make_shared<SweepNode>(name, selectedProf, selectedPath, SweepOperation::Boss, targetSolid);
+            StartFeaturePreview(PreviewFeatureType::Sweep, sweep, targetSolid, graph, device, exchange);
+            m_showSweepPrompt = false;
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::EndDisabled();
+
+        if (ImGui::Button("Cancel", ImVec2(-1, 26))) {
+            m_showSweepPrompt = false;
         }
     }
     ImGui::End();
@@ -2490,6 +2810,7 @@ void CADGui::RenderUI(
     RenderCutExtrudePromptModal(graph, device, exchange, nodes);
     RenderRevolvePromptModal(graph, device, exchange, nodes);
     RenderCutRevolvePromptModal(graph, device, exchange, nodes);
+    RenderSweepPromptModal(graph, device, exchange, nodes);
     RenderFilletPromptModal(graph, device, exchange, nodes);
     RenderChamferPromptModal(graph, device, exchange, nodes);
     RenderConflictPromptModal(graph, device, exchange, nodes);
@@ -2526,13 +2847,16 @@ void CADGui::RenderUI(
 
 
     // -------------------------------------------------------------------------
-    // PANEL 2: Model Tree & Interactive Property Inspector
+    // PANEL 2: Model Tree & Interactive Property Inspector (Fixed Left Bar)
     // -------------------------------------------------------------------------
     const ImGuiViewport* mainVp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(12.0f, 60.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(380.0f, mainVp->WorkSize.y - 72.0f), ImGuiCond_FirstUseEver);
+    float leftBarWidth = 380.0f;
+    float topBarHeight = 52.0f;
+    ImGui::SetNextWindowPos(ImVec2(mainVp->WorkPos.x, mainVp->WorkPos.y + topBarHeight), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(leftBarWidth, mainVp->WorkSize.y - topBarHeight), ImGuiCond_Always);
 
-    if (ImGui::Begin("Model Tree & Property Inspector", nullptr)) {
+    ImGuiWindowFlags modelTreeFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    if (ImGui::Begin("Model Tree & Property Inspector", nullptr, modelTreeFlags)) {
         ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.0f, 1.0f), "CAD Model Tree (%zu Objects)", graph.GetNodeCount());
         ImGui::Separator();
 
@@ -2548,13 +2872,14 @@ void CADGui::RenderUI(
 
                 // Find all child features whose parent feature is this node (excluding childSketch which is rendered directly above)
                 std::vector<std::shared_ptr<DAGNode>> childFeatures;
+                auto child2Sketch = node->GetSecondaryChildSketch();
                 for (const auto& n : nodes) {
-                    if (n && (!childSketch || n->GetId() != childSketch->GetId()) && n->GetParentFeature() == node) {
+                    if (n && (!childSketch || n->GetId() != childSketch->GetId()) && (!child2Sketch || n->GetId() != child2Sketch->GetId()) && n->GetParentFeature() == node) {
                         childFeatures.push_back(n);
                     }
                 }
 
-                bool hasChildren = (childSketch != nullptr) || !childFeatures.empty();
+                bool hasChildren = (childSketch != nullptr) || (child2Sketch != nullptr) || !childFeatures.empty();
 
                 std::string prefix = (depth > 0) ? "↳ [Solid] " : "[Solid] ";
                 if (m_featurePreviewActive && m_previewNode && node == m_previewNode) {
@@ -2564,6 +2889,9 @@ void CADGui::RenderUI(
                     } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
                         prefix = (depth > 0) ? (r->IsCut() ? "↳ [PREVIEW: Revolve (Cut)] " : "↳ [PREVIEW: Revolve] ") 
                                              : (r->IsCut() ? "[PREVIEW: Revolve (Cut)] " : "[PREVIEW: Revolve] ");
+                    } else if (auto sw = std::dynamic_pointer_cast<SweepNode>(node)) {
+                        prefix = (depth > 0) ? (sw->IsCut() ? "↳ [PREVIEW: Sweep (Cut)] " : "↳ [PREVIEW: Sweep] ") 
+                                             : (sw->IsCut() ? "[PREVIEW: Sweep (Cut)] " : "[PREVIEW: Sweep] ");
                     } else {
                         prefix = (depth > 0) ? "↳ [PREVIEW] " : "[PREVIEW] ";
                     }
@@ -2579,6 +2907,8 @@ void CADGui::RenderUI(
                     prefix = (depth > 0) ? (e->IsCut() ? "↳ [Extrude (Cut)] " : "↳ [Extrude] ") : (e->IsCut() ? "[Extrude (Cut)] " : "[Extrude] ");
                 } else if (auto r = std::dynamic_pointer_cast<RevolveNode>(node)) {
                     prefix = (depth > 0) ? (r->IsCut() ? "↳ [Revolve (Cut)] " : "↳ [Revolve] ") : (r->IsCut() ? "[Revolve (Cut)] " : "[Revolve] ");
+                } else if (auto sw = std::dynamic_pointer_cast<SweepNode>(node)) {
+                    prefix = (depth > 0) ? (sw->IsCut() ? "↳ [Sweep (Cut)] " : "↳ [Sweep] ") : (sw->IsCut() ? "[Sweep (Cut)] " : "[Sweep] ");
                 } else if (auto p = std::dynamic_pointer_cast<DatumPlaneNode>(node)) {
                     if (p->IsFaceAssociative()) prefix = "↳ [DatumPlane (Face Tied)] ";
                     else if (p->IsEdgeAssociative()) prefix = "↳ [DatumPlane (Edge Tied)] ";
@@ -2611,6 +2941,26 @@ void CADGui::RenderUI(
                         graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1, -1);
                     }
                     if (ImGui::BeginPopupContextItem()) {
+                        auto assocSketch = FindAssociatedSketch(node, graph);
+                        if (assocSketch) {
+                            std::string editSketchLabel = "✏ Edit Sketch ('" + assocSketch->GetName() + "')";
+                            if (ImGui::MenuItem(editSketchLabel.c_str())) {
+                                SetSelectedNodeId(assocSketch->GetId());
+                                EnterSketchMode(assocSketch->GetId());
+                            }
+                        }
+                        if (auto sweepNode = std::dynamic_pointer_cast<SweepNode>(node)) {
+                            if (auto pSk = sweepNode->GetPathSketch()) {
+                                std::string editPathLabel = "✏ Edit Path Sketch ('" + pSk->GetName() + "')";
+                                if (ImGui::MenuItem(editPathLabel.c_str())) {
+                                    SetSelectedNodeId(pSk->GetId());
+                                    EnterSketchMode(pSk->GetId());
+                                }
+                            }
+                        }
+                        if (assocSketch || std::dynamic_pointer_cast<SweepNode>(node)) {
+                            ImGui::Separator();
+                        }
                         std::string menuDelText = std::dynamic_pointer_cast<SketchNode>(node) ? "🗑 Delete 2D Sketch" : "🗑 Delete Feature";
                         if (ImGui::MenuItem(menuDelText.c_str())) {
                             uint64_t delId = node->GetId();
@@ -2648,6 +2998,12 @@ void CADGui::RenderUI(
                                 graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1, -1);
                             }
                             if (ImGui::BeginPopupContextItem()) {
+                                std::string editChildLabel = "✏ Edit Sketch ('" + childSketch->GetName() + "')";
+                                if (ImGui::MenuItem(editChildLabel.c_str())) {
+                                    SetSelectedNodeId(childSketch->GetId());
+                                    EnterSketchMode(childSketch->GetId());
+                                }
+                                ImGui::Separator();
                                 if (ImGui::MenuItem("🗑 Delete 2D Sketch")) {
                                     uint64_t delId = childSketch->GetId();
                                     auto parent = childSketch->GetParentFeature();
@@ -2668,6 +3024,44 @@ void CADGui::RenderUI(
                                 ImGui::SetScrollHereY(0.5f);
                             }
                         }
+                        if (child2Sketch) {
+                            bool isChild2Selected = (child2Sketch->GetId() == m_selectedNodeId);
+                            std::string child2Prefix = child2Sketch->HasConflict() ? "↳ [!] CONFLICT: " : "↳ [Path Sketch] ";
+                            std::string child2Label = child2Prefix + child2Sketch->GetName() + " (ID " + std::to_string(child2Sketch->GetId()) + ")";
+
+                            if (ImGui::Selectable(child2Label.c_str(), isChild2Selected)) {
+                                m_selectedNodeId = child2Sketch->GetId();
+                                ClearSubElementSelection();
+                                graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
+                                graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1, -1);
+                            }
+                            if (ImGui::BeginPopupContextItem()) {
+                                std::string editChildLabel = "✏ Edit Sketch ('" + child2Sketch->GetName() + "')";
+                                if (ImGui::MenuItem(editChildLabel.c_str())) {
+                                    SetSelectedNodeId(child2Sketch->GetId());
+                                    EnterSketchMode(child2Sketch->GetId());
+                                }
+                                ImGui::Separator();
+                                if (ImGui::MenuItem("🗑 Delete 2D Sketch")) {
+                                    uint64_t delId = child2Sketch->GetId();
+                                    auto parent = child2Sketch->GetParentFeature();
+                                    if (m_sketchModeActive && m_activeSketchId == delId) m_sketchModeActive = false;
+                                    graph.RemoveNode(delId);
+                                    graph.EvaluateDirtyNodes(device, exchange);
+                                    if (m_selectedNodeId == delId) {
+                                        m_selectedNodeId = (parent && graph.GetNode(parent->GetId())) ? parent->GetId() : 0;
+                                        ClearSubElementSelection();
+                                        graph.SetSubElementSelection(m_selectedNodeId, -1, -1);
+                                        m_lastPublishedSelectedNodeId = m_selectedNodeId;
+                                        graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId);
+                                    }
+                                }
+                                ImGui::EndPopup();
+                            }
+                            if (isChild2Selected && m_selectionScrollPending) {
+                                ImGui::SetScrollHereY(0.5f);
+                            }
+                        }
                         for (const auto& cf : childFeatures) {
                             renderNodeTree(cf, depth + 1);
                         }
@@ -2681,6 +3075,26 @@ void CADGui::RenderUI(
                         graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1, -1);
                     }
                     if (ImGui::BeginPopupContextItem()) {
+                        auto assocSketch = FindAssociatedSketch(node, graph);
+                        if (assocSketch) {
+                            std::string editSketchLabel = "✏ Edit Sketch ('" + assocSketch->GetName() + "')";
+                            if (ImGui::MenuItem(editSketchLabel.c_str())) {
+                                SetSelectedNodeId(assocSketch->GetId());
+                                EnterSketchMode(assocSketch->GetId());
+                            }
+                        }
+                        if (auto sweepNode = std::dynamic_pointer_cast<SweepNode>(node)) {
+                            if (auto pSk = sweepNode->GetPathSketch()) {
+                                std::string editPathLabel = "✏ Edit Path Sketch ('" + pSk->GetName() + "')";
+                                if (ImGui::MenuItem(editPathLabel.c_str())) {
+                                    SetSelectedNodeId(pSk->GetId());
+                                    EnterSketchMode(pSk->GetId());
+                                }
+                            }
+                        }
+                        if (assocSketch || std::dynamic_pointer_cast<SweepNode>(node)) {
+                            ImGui::Separator();
+                        }
                         std::string menuDelText = std::dynamic_pointer_cast<SketchNode>(node) ? "🗑 Delete 2D Sketch" : "🗑 Delete Feature";
                         if (ImGui::MenuItem(menuDelText.c_str())) {
                             uint64_t delId = node->GetId();
@@ -3268,6 +3682,65 @@ void CADGui::RenderUI(
                 if (ImGui::Checkbox("Solid Body (Caps)", &solid)) {
                     revolve->SetSolid(solid);
                     graph.EvaluateDirtyNodes(device, exchange);
+                }
+            }
+            // -----------------------------------------------------------------
+            // B3. Sweep Node Inspector
+            // -----------------------------------------------------------------
+            else if (auto sweep = std::dynamic_pointer_cast<SweepNode>(selectedNode)) {
+                bool isCut = sweep->IsCut();
+                ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "%s Feature Properties:", isCut ? "Sweep (Cut)" : "Sweep");
+
+                ImGui::Text("Operation:");
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Boss (Add)##SweepInsp", !isCut)) {
+                    sweep->SetOperation(SweepOperation::Boss);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Cut (Subtract)##SweepInsp", isCut)) {
+                    if (!sweep->GetTargetFeature()) {
+                        std::shared_ptr<DAGNode> tgt = nullptr;
+                        if (auto sk = sweep->GetProfileSketch()) {
+                            if (auto p = sk->GetParentFeature()) tgt = p;
+                            else if (auto dp = sk->GetDatumPlaneReference()) tgt = dp->GetTargetFeature();
+                        }
+                        if (!tgt) {
+                            for (const auto& n : graph.GetNodes()) {
+                                if (n && n != sweep && n != sweep->GetProfileSketch() && n != sweep->GetPathSketch() && !n->IsConsumed()) {
+                                    if (!std::dynamic_pointer_cast<SketchNode>(n) && !std::dynamic_pointer_cast<DatumPlaneNode>(n) && !std::dynamic_pointer_cast<DatumAxisNode>(n)) {
+                                        tgt = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (tgt) sweep->SetTargetFeature(tgt);
+                    }
+                    sweep->SetOperation(SweepOperation::Cut);
+                    graph.EvaluateDirtyNodes(device, exchange);
+                }
+                ImGui::Spacing();
+
+                if (auto profSk = sweep->GetProfileSketch()) {
+                    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "Profile Sketch: %s (ID %llu)", profSk->GetName().c_str(), profSk->GetId());
+                    if (ImGui::Button("Jump to Profile Sketch##SweepInsp", ImVec2(-1, 24))) {
+                        m_selectedNodeId = profSk->GetId();
+                    }
+                }
+                if (auto pathSk = sweep->GetPathSketch()) {
+                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.7f, 1.0f), "Path Sketch: %s (ID %llu)", pathSk->GetName().c_str(), pathSk->GetId());
+                    if (ImGui::Button("Jump to Path Sketch##SweepInsp", ImVec2(-1, 24))) {
+                        m_selectedNodeId = pathSk->GetId();
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.4f, 1.0f), "Path: Curvature-continuous 3D trajectory");
+                }
+
+                if (isCut) {
+                    if (auto tgt = sweep->GetTargetFeature()) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Cutting from Target: %s", tgt->GetName().c_str());
+                    }
                 }
             }
             // -----------------------------------------------------------------
@@ -4984,38 +5457,77 @@ void CADGui::RenderExportStepModal(
 // -----------------------------------------------------------------------------
 static std::vector<std::array<float, 2>> EvaluateCatmullRomSpline(
     const std::vector<std::array<float, 2>>& controls, 
-    int samplesPerSegment = 12
+    int samplesPerSegment = 12,
+    bool isClosed = false
 ) {
-    if (controls.size() < 3) return controls;
+    if (controls.size() < 2) return controls;
+    if (controls.size() == 2) {
+        return controls;
+    }
     std::vector<std::array<float, 2>> result;
     size_t n = controls.size();
-    result.reserve(n * samplesPerSegment);
 
-    for (size_t i = 0; i < n; ++i) {
-        const auto& p0 = controls[(i + n - 1) % n];
-        const auto& p1 = controls[i];
-        const auto& p2 = controls[(i + 1) % n];
-        const auto& p3 = controls[(i + 2) % n];
+    if (isClosed) {
+        result.reserve(n * samplesPerSegment);
+        for (size_t i = 0; i < n; ++i) {
+            const auto& p0 = controls[(i + n - 1) % n];
+            const auto& p1 = controls[i];
+            const auto& p2 = controls[(i + 1) % n];
+            const auto& p3 = controls[(i + 2) % n];
 
-        for (int s = 0; s < samplesPerSegment; ++s) {
-            float t = static_cast<float>(s) / static_cast<float>(samplesPerSegment);
-            float t2 = t * t;
-            float t3 = t2 * t;
+            for (int s = 0; s < samplesPerSegment; ++s) {
+                float t = static_cast<float>(s) / static_cast<float>(samplesPerSegment);
+                float t2 = t * t;
+                float t3 = t2 * t;
 
-            float u = 0.5f * (
-                (2.0f * p1[0]) +
-                (-p0[0] + p2[0]) * t +
-                (2.0f * p0[0] - 5.0f * p1[0] + 4.0f * p2[0] - p3[0]) * t2 +
-                (-p0[0] + 3.0f * p1[0] - 3.0f * p2[0] + p3[0]) * t3
-            );
-            float v = 0.5f * (
-                (2.0f * p1[1]) +
-                (-p0[1] + p2[1]) * t +
-                (2.0f * p0[1] - 5.0f * p1[1] + 4.0f * p2[1] - p3[1]) * t2 +
-                (-p0[1] + 3.0f * p1[1] - 3.0f * p2[1] + p3[1]) * t3
-            );
-            result.push_back({u, v});
+                float u = 0.5f * (
+                    (2.0f * p1[0]) +
+                    (-p0[0] + p2[0]) * t +
+                    (2.0f * p0[0] - 5.0f * p1[0] + 4.0f * p2[0] - p3[0]) * t2 +
+                    (-p0[0] + 3.0f * p1[0] - 3.0f * p2[0] + p3[0]) * t3
+                );
+                float v = 0.5f * (
+                    (2.0f * p1[1]) +
+                    (-p0[1] + p2[1]) * t +
+                    (2.0f * p0[1] - 5.0f * p1[1] + 4.0f * p2[1] - p3[1]) * t2 +
+                    (-p0[1] + 3.0f * p1[1] - 3.0f * p2[1] + p3[1]) * t3
+                );
+                result.push_back({u, v});
+            }
         }
+    } else {
+        result.reserve((n - 1) * samplesPerSegment + 1);
+        for (size_t i = 0; i + 1 < n; ++i) {
+            std::array<float, 2> p0 = (i == 0)
+                ? std::array<float, 2>{2.0f * controls[0][0] - controls[1][0], 2.0f * controls[0][1] - controls[1][1]}
+                : controls[i - 1];
+            const auto& p1 = controls[i];
+            const auto& p2 = controls[i + 1];
+            std::array<float, 2> p3 = (i + 2 >= n)
+                ? std::array<float, 2>{2.0f * controls[n - 1][0] - controls[n - 2][0], 2.0f * controls[n - 1][1] - controls[n - 2][1]}
+                : controls[i + 2];
+
+            for (int s = 0; s < samplesPerSegment; ++s) {
+                float t = static_cast<float>(s) / static_cast<float>(samplesPerSegment);
+                float t2 = t * t;
+                float t3 = t2 * t;
+
+                float u = 0.5f * (
+                    (2.0f * p1[0]) +
+                    (-p0[0] + p2[0]) * t +
+                    (2.0f * p0[0] - 5.0f * p1[0] + 4.0f * p2[0] - p3[0]) * t2 +
+                    (-p0[0] + 3.0f * p1[0] - 3.0f * p2[0] + p3[0]) * t3
+                );
+                float v = 0.5f * (
+                    (2.0f * p1[1]) +
+                    (-p0[1] + p2[1]) * t +
+                    (2.0f * p0[1] - 5.0f * p1[1] + 4.0f * p2[1] - p3[1]) * t2 +
+                    (-p0[1] + 3.0f * p1[1] - 3.0f * p2[1] + p3[1]) * t3
+                );
+                result.push_back({u, v});
+            }
+        }
+        result.push_back(controls.back());
     }
     return result;
 }
@@ -5050,9 +5562,9 @@ void CADGui::RenderSketchCanvas(
         if (!shapes.empty()) {
             for (size_t i = 0; i < shapes.size(); ++i) {
                 CanvasShape cs;
-                cs.name = "Shape " + std::to_string(i + 1);
+                cs.name = (shapes[i].size() == 2 ? "Line " : "Shape ") + std::to_string(i + 1);
                 cs.points = shapes[i];
-                cs.isClosed = true;
+                cs.isClosed = activeSketch->IsShapeClosed(i) && (cs.points.size() >= 3);
                 auto it = savedConstraints.find(i);
                 if (it != savedConstraints.end()) {
                     cs.edgeConstraints = it->second;
@@ -5061,9 +5573,9 @@ void CADGui::RenderSketchCanvas(
             }
         } else if (!activeSketch->GetProfile().empty()) {
             CanvasShape cs;
-            cs.name = "Shape 1";
+            cs.name = (activeSketch->GetProfile().size() == 2 ? "Line 1" : "Shape 1");
             cs.points = activeSketch->GetProfile();
-            cs.isClosed = true;
+            cs.isClosed = activeSketch->IsShapeClosed(0) && (cs.points.size() >= 3);
             auto it = savedConstraints.find(0);
             if (it != savedConstraints.end()) {
                 cs.edgeConstraints = it->second;
@@ -5073,29 +5585,24 @@ void CADGui::RenderSketchCanvas(
     }
 
     // -------------------------------------------------------------------------
-    // Evaluate Sketch Closure
+    // Evaluate Sketch Closure & Shape State
     // -------------------------------------------------------------------------
+    bool hasDrawingInProgress = !m_inProgressPoints.empty() || !m_inProgressSplineControls.empty();
+    bool hasAnyShapes = false;
     bool isSketchClosed = true;
-    std::string unclosedReason;
 
-    if (!m_inProgressPoints.empty()) {
-        isSketchClosed = false;
-        unclosedReason = "Line/Polyline drawing in progress is not closed.";
-    } else if (!m_inProgressSplineControls.empty()) {
-        isSketchClosed = false;
-        unclosedReason = "Spline drawing in progress is not closed.";
-    } else if (m_canvasShapes.empty()) {
-        isSketchClosed = false;
-        unclosedReason = "Sketch has no shapes yet. Draw an enclosed shape to confirm.";
-    } else {
-        for (size_t i = 0; i < m_canvasShapes.size(); ++i) {
-            if (!m_canvasShapes[i].isClosed || m_canvasShapes[i].points.size() < 3) {
-                isSketchClosed = false;
-                unclosedReason = m_canvasShapes[i].name + " is open (not a closed loop).";
-                break;
-            }
+    for (const auto& sh : m_canvasShapes) {
+        if (sh.points.size() >= 2) {
+            hasAnyShapes = true;
+        }
+        if (!sh.isClosed || sh.points.size() < 3) {
+            isSketchClosed = false;
         }
     }
+    if (m_canvasShapes.empty()) {
+        isSketchClosed = false;
+    }
+    bool canConfirmSketch = !hasDrawingInProgress && hasAnyShapes;
 
     ImGui::SetNextWindowPos(ImVec2(390.0f, 60.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(840.0f, 640.0f), ImGuiCond_FirstUseEver);
@@ -5132,17 +5639,24 @@ void CADGui::RenderSketchCanvas(
     // Top Tool Ribbon (Row 1: Confirm/Cancel + Drawing Tools + Loop Status)
     // -------------------------------------------------------------------------
     // Keep Confirm & Cancel pinned at the start of Row 1 so they are always on display and never cut off
-    ImGui::BeginDisabled(!isSketchClosed);
+    ImGui::BeginDisabled(!canConfirmSketch);
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.62f, 0.35f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.72f, 0.42f, 1.0f));
     if (ImGui::Button("✓ Confirm Changes", ImVec2(128, 28))) {
         std::vector<std::vector<std::array<float, 2>>> outShapes;
+        std::vector<bool> outClosed;
         std::map<size_t, std::map<size_t, float>> outConstraints;
+        bool confirmClosed = true;
         for (const auto& sh : m_canvasShapes) {
-            if (sh.isClosed && sh.points.size() >= 3) {
+            if (sh.points.size() >= 2) {
                 outShapes.push_back(sh.points);
+                bool isShapeClosed = sh.isClosed && (sh.points.size() >= 3);
+                outClosed.push_back(isShapeClosed);
                 if (!sh.edgeConstraints.empty()) {
                     outConstraints[outShapes.size() - 1] = sh.edgeConstraints;
+                }
+                if (!isShapeClosed) {
+                    confirmClosed = false;
                 }
             }
         }
@@ -5150,8 +5664,9 @@ void CADGui::RenderSketchCanvas(
             m_showEmptySketchExitPrompt = true;
             m_emptySketchToExitId = activeSketch->GetId();
         } else {
-            activeSketch->SetShapes(std::move(outShapes));
+            activeSketch->SetShapes(std::move(outShapes), std::move(outClosed));
             activeSketch->SetEdgeConstraints(std::move(outConstraints));
+            activeSketch->SetClosed(confirmClosed);
             graph.EvaluateDirtyNodes(device, exchange);
             m_sketchModeActive = false;
         }
@@ -5159,8 +5674,12 @@ void CADGui::RenderSketchCanvas(
     ImGui::PopStyleColor(2);
     ImGui::EndDisabled();
 
-    if (!isSketchClosed && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("Cannot confirm sketch:\n%s\nAll shapes must be closed loops to apply.", unclosedReason.c_str());
+    if (!canConfirmSketch && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        if (hasDrawingInProgress) {
+            ImGui::SetTooltip("Drawing in progress: double-click or right-click to place/finish line segment before confirming.");
+        } else {
+            ImGui::SetTooltip("Sketch has no geometry yet. Draw a line, curve, or shape to confirm.");
+        }
     }
     ImGui::SameLine();
 
@@ -5213,7 +5732,7 @@ void CADGui::RenderSketchCanvas(
     ImGui::SameLine();
     ToolBtn(SketchMouseTool::Circle, "Circle", 58.0f, "Click center and drag outward to draw circle (C)");
     ImGui::SameLine();
-    ToolBtn(SketchMouseTool::Line, "Line/Poly", 72.0f, "Click vertices to draw polyline, click first point / double click to close (L)");
+    ToolBtn(SketchMouseTool::Line, "Line/Poly", 72.0f, "Click vertices to draw line/polyline, double-click to finish/place line (L)");
     ImGui::SameLine();
     ToolBtn(SketchMouseTool::Spline, "Spline", 58.0f, "Click control points for smooth spline, click first / double click to close (S)");
     ImGui::SameLine();
@@ -5229,24 +5748,36 @@ void CADGui::RenderSketchCanvas(
             m_inProgressPoints.clear();
         }
         ImGui::SameLine();
-    } else if (!m_inProgressSplineControls.empty() && m_inProgressSplineControls.size() >= 3) {
-        if (ImGui::Button("Close Spline", ImVec2(80, 28))) {
-            auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 12);
+    } else if (!m_inProgressSplineControls.empty() && m_inProgressSplineControls.size() >= 2) {
+        if (ImGui::Button("Finish Open Spline", ImVec2(130, 28))) {
+            auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 12, false);
             m_canvasShapes.push_back({
-                "Spline " + std::to_string(m_canvasShapes.size() + 1),
+                "Open Spline " + std::to_string(m_canvasShapes.size() + 1),
                 std::move(denseSpline),
-                true
+                false
             });
             m_inProgressSplineControls.clear();
         }
         ImGui::SameLine();
+        if (m_inProgressSplineControls.size() >= 3) {
+            if (ImGui::Button("Close Spline", ImVec2(90, 28))) {
+                auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 12, true);
+                m_canvasShapes.push_back({
+                    "Spline " + std::to_string(m_canvasShapes.size() + 1),
+                    std::move(denseSpline),
+                    true
+                });
+                m_inProgressSplineControls.clear();
+            }
+            ImGui::SameLine();
+        }
     }
 
     // Closure Status Badge
     if (isSketchClosed) {
-        ImGui::TextColored(ImVec4(0.2f, 0.95f, 0.4f, 1.0f), "● Closed Loop(s)");
+        ImGui::TextColored(ImVec4(0.2f, 0.95f, 0.4f, 1.0f), "● Enclosed Loop(s)");
     } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.25f, 1.0f), "▲ Unclosed");
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "〰 Open Path / Wire");
     }
 
     // -------------------------------------------------------------------------
@@ -5736,6 +6267,17 @@ void CADGui::RenderSketchCanvas(
                         m_inProgressPoints.push_back({nextU, nextV});
                         m_kbLineTargetU = nextU;
                         m_kbLineTargetV = nextV;
+                    }
+                }
+                if (m_inProgressPoints.size() >= 2) {
+                    ImGui::SameLine();
+                    if (ImGui::Button("Confirm Line (Done)", ImVec2(130, 22))) {
+                        m_canvasShapes.push_back({
+                            (m_inProgressPoints.size() == 2 ? "Line " : "Polyline ") + std::to_string(m_canvasShapes.size() + 1),
+                            m_inProgressPoints,
+                            false
+                        });
+                        m_inProgressPoints.clear();
                     }
                 }
                 if (m_inProgressPoints.size() >= 3) {
@@ -6610,12 +7152,31 @@ void CADGui::RenderSketchCanvas(
             if (distToFirst < 16.0f) isCloseHovered = true;
         }
 
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
+        bool isDoubleClicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+        if (isDoubleClicked && isHovered && !m_inProgressPoints.empty()) {
+            // Confirm creation/placement of just the line/polyline (open or closed) on double-click
+            auto last = m_inProgressPoints.back();
+            if (std::hypot(snapU - last[0], snapV - last[1]) > 0.01f) {
+                m_inProgressPoints.push_back({snapU, snapV});
+            }
+            if (m_inProgressPoints.size() >= 2) {
+                bool isClosed = false;
+                if (isCloseHovered && m_inProgressPoints.size() >= 3) {
+                    isClosed = true;
+                }
+                m_canvasShapes.push_back({
+                    (m_inProgressPoints.size() == 2 ? "Line " : "Polyline ") + std::to_string(m_canvasShapes.size() + 1),
+                    m_inProgressPoints,
+                    isClosed
+                });
+                m_inProgressPoints.clear();
+            }
+        } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
             if (m_inProgressPoints.empty()) {
                 m_inProgressPoints.push_back({snapU, snapV});
             } else {
-                if ((isCloseHovered || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) && m_inProgressPoints.size() >= 3) {
-                    // Loop is enclosed and closed!
+                if (isCloseHovered && m_inProgressPoints.size() >= 3) {
+                    // Click on start point: close loop
                     m_canvasShapes.push_back({
                         "Polyline " + std::to_string(m_canvasShapes.size() + 1),
                         m_inProgressPoints,
@@ -6682,12 +7243,28 @@ void CADGui::RenderSketchCanvas(
             if (distToFirst < 16.0f) isCloseHovered = true;
         }
 
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
+        bool isDoubleClicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+        if (isDoubleClicked && isHovered && !m_inProgressSplineControls.empty()) {
+            auto last = m_inProgressSplineControls.back();
+            if (std::hypot(snapU - last[0], snapV - last[1]) > 0.01f) {
+                m_inProgressSplineControls.push_back({snapU, snapV});
+            }
+            if (m_inProgressSplineControls.size() >= 2) {
+                bool shouldClose = isCloseHovered && (m_inProgressSplineControls.size() >= 3);
+                auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 12, shouldClose);
+                m_canvasShapes.push_back({
+                    shouldClose ? ("Spline " + std::to_string(m_canvasShapes.size() + 1)) : ("Open Spline " + std::to_string(m_canvasShapes.size() + 1)),
+                    std::move(denseSpline),
+                    shouldClose
+                });
+                m_inProgressSplineControls.clear();
+            }
+        } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && isHovered) {
             if (m_inProgressSplineControls.empty()) {
                 m_inProgressSplineControls.push_back({snapU, snapV});
             } else {
-                if ((isCloseHovered || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) && m_inProgressSplineControls.size() >= 3) {
-                    auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 12);
+                if (isCloseHovered && m_inProgressSplineControls.size() >= 3) {
+                    auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 12, true);
                     m_canvasShapes.push_back({
                         "Spline " + std::to_string(m_canvasShapes.size() + 1),
                         std::move(denseSpline),
@@ -6705,7 +7282,7 @@ void CADGui::RenderSketchCanvas(
 
         if (!m_inProgressSplineControls.empty()) {
             if (isCloseHovered && m_inProgressSplineControls.size() >= 3) {
-                auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 8);
+                auto denseSpline = EvaluateCatmullRomSpline(m_inProgressSplineControls, 8, true);
                 auto triIndices = TessellationUtils::TriangulatePolygon2D(denseSpline);
                 for (size_t t = 0; t + 2 < triIndices.size(); t += 3) {
                     drawList->AddTriangleFilled(
@@ -6737,26 +7314,21 @@ void CADGui::RenderSketchCanvas(
             }
 
             std::vector<std::array<float, 2>> previewControls = m_inProgressSplineControls;
-            previewControls.push_back({snapU, snapV});
+            if (!isCloseHovered) {
+                previewControls.push_back({snapU, snapV});
+            }
             if (previewControls.size() >= 2) {
-                size_t n = previewControls.size();
+                bool previewClosed = isCloseHovered && (m_inProgressSplineControls.size() >= 3);
+                auto denseSpline = EvaluateCatmullRomSpline(previewControls, 10, previewClosed);
                 std::vector<ImVec2> splineCurvePts;
-                for (size_t i = 0; i + 1 < n; ++i) {
-                    const auto& p0 = (i == 0) ? previewControls[0] : previewControls[i - 1];
-                    const auto& p1 = previewControls[i];
-                    const auto& p2 = previewControls[i + 1];
-                    const auto& p3 = (i + 2 >= n) ? previewControls[i + 1] : previewControls[i + 2];
-                    for (int s = 0; s < 10; ++s) {
-                        float t = static_cast<float>(s) / 10.0f;
-                        float t2 = t * t;
-                        float t3 = t2 * t;
-                        float u = 0.5f * ((2.0f * p1[0]) + (-p0[0] + p2[0]) * t + (2.0f * p0[0] - 5.0f * p1[0] + 4.0f * p2[0] - p3[0]) * t2 + (-p0[0] + 3.0f * p1[0] - 3.0f * p2[0] + p3[0]) * t3);
-                        float v = 0.5f * ((2.0f * p1[1]) + (-p0[1] + p2[1]) * t + (2.0f * p0[1] - 5.0f * p1[1] + 4.0f * p2[1] - p3[1]) * t2 + (-p0[1] + 3.0f * p1[1] - 3.0f * p2[1] + p3[1]) * t3);
-                        splineCurvePts.push_back(ToScreen(u, v));
-                    }
+                splineCurvePts.reserve(denseSpline.size());
+                for (const auto& pt : denseSpline) {
+                    splineCurvePts.push_back(ToScreen(pt[0], pt[1]));
                 }
-                splineCurvePts.push_back(snapPosScr);
-                drawList->AddPolyline(splineCurvePts.data(), static_cast<int>(splineCurvePts.size()), IM_COL32(255, 215, 0, 255), 0, 2.5f);
+                drawList->AddPolyline(splineCurvePts.data(), static_cast<int>(splineCurvePts.size()), 
+                                      IM_COL32(255, 215, 0, 255), 
+                                      previewClosed ? ImDrawFlags_Closed : 0, 
+                                      2.5f);
             }
         }
     }
@@ -6776,8 +7348,8 @@ void CADGui::RenderSketchCanvas(
         case SketchMouseTool::SelectMove: toolTipText = "[Select/Move] Click vertex/shape to select. Drag a vertex or a whole shape to move. Del/RMB: Delete"; break;
         case SketchMouseTool::Rectangle:  toolTipText = "[Rectangle] Click & drag diagonally to draw rectangle (R). Esc: Select"; break;
         case SketchMouseTool::Circle:     toolTipText = "[Circle] Click center & drag outward to draw circle (C). Esc: Select"; break;
-        case SketchMouseTool::Line:       toolTipText = "[Line/Poly] Click vertices. Click first / double-click to close (RMB: Cancel, Esc: Select)"; break;
-        case SketchMouseTool::Spline:     toolTipText = "[Spline] Click control points. Click first / double-click to close (RMB: Cancel, Esc: Select)"; break;
+        case SketchMouseTool::Line:       toolTipText = "[Line/Poly] Click vertices. Double-click to place line/wire (RMB: Cancel, Esc: Select)"; break;
+        case SketchMouseTool::Spline:     toolTipText = "[Spline] Click control points. Double-click to place open spline (Click first pt to close, RMB: Cancel, Esc: Select)"; break;
     }
     ImVec2 tipSz = ImGui::CalcTextSize(toolTipText);
     drawList->AddRectFilled(ImVec2(canvasP1.x - tipSz.x - 20.0f, canvasP0.y + 8.0f), ImVec2(canvasP1.x - 8.0f, canvasP0.y + 28.0f), IM_COL32(15, 17, 20, 190), 4.0f);

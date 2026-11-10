@@ -7,6 +7,8 @@
 #include "engine/graph/DatumAxisNode.hpp"
 #include "engine/graph/FilletNode.hpp"
 #include "engine/graph/ChamferNode.hpp"
+#include "engine/graph/SweepNode.hpp"
+#include "app/CADGui.hpp"
 #include <iostream>
 #include <memory>
 #include <cmath>
@@ -3861,6 +3863,76 @@ bool TestCircularLoopDetectionAndMeasureAndFaceSketchExtrusion() {
     return true;
 }
 
+bool TestSweepNodeAndModelTreeEditSketchOption() {
+    std::cout << "[Test] SweepNode Evaluation and Model Tree Edit Sketch Option...\n";
+
+    ParametricGraph graph(nullptr);
+    AtomicMeshExchange exchange;
+
+    // 1. Profile sketch (circle/polygon on XY plane)
+    auto profSketch = std::make_shared<SketchNode>("Profile_Sketch", SketchPlane::XY_Front);
+    profSketch->SetPresetRegularPolygon(16, 0.5f);
+    profSketch->Evaluate(nullptr, exchange);
+    graph.AddNode(profSketch);
+    TEST_ASSERT(profSketch->IsEnclosed(), "Polygon profile sketch must be marked enclosed");
+    TEST_ASSERT(!profSketch->IsSingleLine(), "Polygon profile sketch must not be marked single line");
+
+    // 2. Guide path sketch (single line 2D sketch on XZ plane)
+    auto singleLineSketch = std::make_shared<SketchNode>("Single_Line_Sketch", SketchPlane::XZ_Ground);
+    singleLineSketch->SetProfile({ {0.0f, 0.0f}, {0.0f, 5.0f} });
+    singleLineSketch->Evaluate(nullptr, exchange);
+    graph.AddNode(singleLineSketch);
+    TEST_ASSERT(singleLineSketch->IsSingleLine(), "2-point sketch must be recognized as single line sketch");
+    TEST_ASSERT(!singleLineSketch->IsEnclosed(), "Single line sketch must not be recognized as enclosed");
+
+    // 3. Create SweepNode using single line 2D sketch and enclosed 2D sketch as input
+    auto sweep = std::make_shared<SweepNode>("Sweep_Pipe", profSketch, singleLineSketch, SweepOperation::Boss);
+    sweep->Evaluate(nullptr, exchange);
+    graph.AddNode(sweep);
+
+    TEST_ASSERT(!sweep->GetCachedVertices().empty(), "SweepNode must generate vertices when sweeping enclosed profile along single line");
+    TEST_ASSERT(!sweep->GetCachedIndices().empty(), "SweepNode must generate triangles when sweeping enclosed profile along single line");
+    TEST_ASSERT(!sweep->GetCachedEdges().empty(), "SweepNode must generate feature edges");
+    TEST_ASSERT(sweep->GetProfileSketch() == profSketch, "SweepNode must retain profile sketch reference");
+    TEST_ASSERT(sweep->GetPathSketch() == singleLineSketch, "SweepNode must retain single line guide path sketch reference");
+    TEST_ASSERT(profSketch->IsConsumed(), "Profile sketch must be marked consumed by sweep");
+    TEST_ASSERT(singleLineSketch->IsConsumed(), "Single line path sketch must be marked consumed by sweep");
+
+    // 4. Test Auto-Swap resilience: passing single line first and enclosed second
+    auto sweepRev = std::make_shared<SweepNode>("Sweep_AutoSwapped", singleLineSketch, profSketch, SweepOperation::Boss);
+    TEST_ASSERT(sweepRev->GetProfileSketch() == profSketch, "SweepNode constructor must auto-swap enclosed sketch as profile");
+    TEST_ASSERT(sweepRev->GetPathSketch() == singleLineSketch, "SweepNode constructor must auto-swap single line sketch as guide path");
+
+    // 4. Test Model Tree Edit Sketch resolution
+    auto foundSketch = CADGui::FindAssociatedSketch(sweep, graph);
+    TEST_ASSERT(foundSketch != nullptr, "FindAssociatedSketch must find profile sketch from sweep feature");
+    TEST_ASSERT(foundSketch->GetId() == profSketch->GetId(), "Found sketch must match profile sketch ID");
+
+    // 5. Test FindAssociatedSketch on Extrude and downstream Fillet
+    auto baseSketch = std::make_shared<SketchNode>("Extrude_Base_Sketch", SketchPlane::XZ_Ground);
+    baseSketch->SetPresetRectangle(2.0f, 2.0f);
+    baseSketch->Evaluate(nullptr, exchange);
+    graph.AddNode(baseSketch);
+
+    auto extrude = std::make_shared<ExtrudeNode>("Extrude_Block", baseSketch, 2.0f);
+    extrude->Evaluate(nullptr, exchange);
+    graph.AddNode(extrude);
+
+    auto foundFromExtrude = CADGui::FindAssociatedSketch(extrude, graph);
+    TEST_ASSERT(foundFromExtrude != nullptr && foundFromExtrude->GetId() == baseSketch->GetId(),
+                "FindAssociatedSketch must find driving sketch from ExtrudeNode");
+
+    auto fillet = std::make_shared<FilletNode>("Fillet_TopEdge", extrude, 0, 0.2f);
+    fillet->Evaluate(nullptr, exchange);
+    graph.AddNode(fillet);
+
+    auto foundFromFillet = CADGui::FindAssociatedSketch(fillet, graph);
+    TEST_ASSERT(foundFromFillet != nullptr && foundFromFillet->GetId() == baseSketch->GetId(),
+                "FindAssociatedSketch must find root driving sketch through FilletNode hierarchy");
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -3914,6 +3986,7 @@ int main() {
     pass &= Test2DSketchDeletionDefaultToolAndEmptySketchWorkflow();
     pass &= TestActiveLeafSubElementPickingAndEndModelState();
     pass &= TestCircularLoopDetectionAndMeasureAndFaceSketchExtrusion();
+    pass &= TestSweepNodeAndModelTreeEditSketchOption();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

@@ -64,6 +64,7 @@ public:
         m_profile(std::move(initialProfile)) {
         if (!m_profile.empty()) {
             m_shapes = { m_profile };
+            m_isClosed = (m_profile.size() >= 3);
             m_preset = SketchPreset::Custom;
         } else {
             m_preset = SketchPreset::Custom;
@@ -79,6 +80,7 @@ public:
         SetDatumPlaneReference(datumPlane);
         if (!m_profile.empty()) {
             m_shapes = { m_profile };
+            m_isClosed = (m_profile.size() >= 3);
             m_preset = SketchPreset::Custom;
         } else {
             m_preset = SketchPreset::Custom;
@@ -137,9 +139,11 @@ public:
         }
         return m_profile;
     }
-    void SetProfile(std::vector<std::array<float, 2>> profile) {
+    void SetProfile(std::vector<std::array<float, 2>> profile, bool isClosed = true) {
         m_profile = std::move(profile);
         m_shapes = { m_profile };
+        m_isClosed = isClosed && (m_profile.size() >= 3);
+        m_shapeClosed = { m_isClosed };
         m_preset = SketchPreset::Custom;
         MarkDirty();
     }
@@ -151,8 +155,12 @@ public:
         return m_shapes;
     }
 
-    void SetShapes(std::vector<std::vector<std::array<float, 2>>> shapes) {
+    void SetShapes(std::vector<std::vector<std::array<float, 2>>> shapes, std::vector<bool> shapeClosed = {}) {
         m_shapes = std::move(shapes);
+        m_shapeClosed = std::move(shapeClosed);
+        if (m_shapeClosed.size() < m_shapes.size()) {
+            m_shapeClosed.resize(m_shapes.size(), m_isClosed);
+        }
         if (!m_shapes.empty()) {
             if (m_shapes.size() == 1) {
                 m_profile = m_shapes[0];
@@ -160,9 +168,62 @@ public:
                 auto stitched = Sketch::StitchMultipleShapes(m_shapes);
                 m_profile = stitched.empty() ? m_shapes[0] : stitched;
             }
+            m_isClosed = true;
+            for (bool c : m_shapeClosed) {
+                if (!c) {
+                    m_isClosed = false;
+                    break;
+                }
+            }
         }
         m_preset = SketchPreset::Custom;
         MarkDirty();
+    }
+
+    [[nodiscard]] const std::vector<bool>& GetShapeClosed() const noexcept {
+        return m_shapeClosed;
+    }
+    [[nodiscard]] bool IsShapeClosed(size_t index) const noexcept {
+        if (index < m_shapeClosed.size()) {
+            return m_shapeClosed[index];
+        }
+        return m_isClosed;
+    }
+
+    [[nodiscard]] bool IsClosed() const noexcept { return m_isClosed; }
+    void SetClosed(bool closed) noexcept {
+        m_isClosed = closed;
+        for (size_t i = 0; i < m_shapeClosed.size(); ++i) {
+            m_shapeClosed[i] = closed;
+        }
+        if (m_shapeClosed.empty()) {
+            m_shapeClosed = { closed };
+        }
+        MarkDirty();
+    }
+
+    [[nodiscard]] bool IsEnclosed() const noexcept {
+        if (!m_isClosed) return false;
+        for (bool c : m_shapeClosed) {
+            if (!c) return false;
+        }
+        const auto& shs = GetShapes();
+        if (!shs.empty()) {
+            return shs[0].size() >= 3;
+        }
+        return m_profile.size() >= 3;
+    }
+
+    [[nodiscard]] bool IsSingleLine() const noexcept {
+        const auto& shs = GetShapes();
+        if (!shs.empty()) {
+            return shs.size() == 1 && shs[0].size() == 2;
+        }
+        return m_profile.size() == 2;
+    }
+
+    [[nodiscard]] bool IsPathSketch() const noexcept {
+        return IsSingleLine() || !IsEnclosed();
     }
 
     [[nodiscard]] const std::map<size_t, std::map<size_t, float>>& GetEdgeConstraints() const noexcept {
@@ -431,6 +492,8 @@ public:
             {-hw,  hh}
         };
         m_shapes = { m_profile };
+        m_isClosed = true;
+        m_shapeClosed = { true };
         MarkDirty();
     }
 
@@ -443,6 +506,8 @@ public:
             m_profile.push_back({radius * std::cos(angle), radius * std::sin(angle)});
         }
         m_shapes = { m_profile };
+        m_isClosed = true;
+        m_shapeClosed = { true };
         MarkDirty();
     }
 
@@ -460,6 +525,8 @@ public:
             {-hx,  hy}
         };
         m_shapes = { m_profile };
+        m_isClosed = true;
+        m_shapeClosed = { true };
         MarkDirty();
     }
 
@@ -473,6 +540,8 @@ public:
             m_profile.push_back({r * std::cos(angle), r * std::sin(angle)});
         }
         m_shapes = { m_profile };
+        m_isClosed = true;
+        m_shapeClosed = { true };
         MarkDirty();
     }
 
@@ -492,6 +561,8 @@ public:
             {-hx,  hy - thickness}
         };
         m_shapes = { m_profile };
+        m_isClosed = true;
+        m_shapeClosed = { true };
         MarkDirty();
     }
 
@@ -514,6 +585,9 @@ public:
     void RemoveShape(size_t shapeIndex) {
         if (shapeIndex < m_shapes.size()) {
             m_shapes.erase(m_shapes.begin() + shapeIndex);
+            if (shapeIndex < m_shapeClosed.size()) {
+                m_shapeClosed.erase(m_shapeClosed.begin() + shapeIndex);
+            }
             if (!m_shapes.empty()) {
                 m_profile = m_shapes[0];
             } else {
@@ -590,7 +664,7 @@ public:
         }
 
         const auto& shapesToRender = GetShapes();
-        if (m_profile.size() < 3 && shapesToRender.empty()) {
+        if (m_profile.size() < 2 && shapesToRender.empty()) {
             m_cachedVertices.clear();
             m_cachedIndices.clear();
             m_cachedEdges.clear();
@@ -608,8 +682,11 @@ public:
         std::vector<uint32_t> indices;
         std::vector<uint32_t> featureEdges;
 
-        for (const auto& poly : shapesToRender) {
-            if (poly.size() < 3) continue;
+        for (size_t sIdx = 0; sIdx < shapesToRender.size(); ++sIdx) {
+            const auto& poly = shapesToRender[sIdx];
+            if (poly.size() < 2) continue;
+
+            bool isPolyClosed = (sIdx < m_shapeClosed.size()) ? m_shapeClosed[sIdx] : (m_isClosed && poly.size() >= 3);
 
             uint32_t baseIdx = static_cast<uint32_t>(vertices.size());
             const size_t ptCount = poly.size();
@@ -656,14 +733,19 @@ public:
                     }
                 }
                 vertices.push_back(vert);
+            }
 
+            size_t edgeSegments = isPolyClosed ? ptCount : (ptCount - 1);
+            for (size_t i = 0; i < edgeSegments; ++i) {
                 featureEdges.push_back(baseIdx + static_cast<uint32_t>(i));
                 featureEdges.push_back(baseIdx + static_cast<uint32_t>((i + 1) % ptCount));
             }
 
-            auto polyIndices = TessellationUtils::TriangulatePolygon2D(poly);
-            for (uint32_t idx : polyIndices) {
-                indices.push_back(baseIdx + idx);
+            if (isPolyClosed && ptCount >= 3) {
+                auto polyIndices = TessellationUtils::TriangulatePolygon2D(poly);
+                for (uint32_t idx : polyIndices) {
+                    indices.push_back(baseIdx + idx);
+                }
             }
         }
 
@@ -679,8 +761,10 @@ private:
     SketchPreset m_preset{SketchPreset::Custom};
     std::vector<std::array<float, 2>> m_profile;
     std::vector<std::vector<std::array<float, 2>>> m_shapes;
+    std::vector<bool> m_shapeClosed;
     std::map<size_t, std::map<size_t, float>> m_shapeEdgeConstraints;
     std::map<size_t, std::map<size_t, VertexAxisConstraint>> m_shapeVertexAxisConstraints;
+    bool m_isClosed{true};
     bool m_visible{true};
     std::weak_ptr<DAGNode> m_parentFeature;
 

@@ -414,6 +414,14 @@ public:
                     node->AddInput(sketch);
                 }
             }
+            if (auto child2 = node->GetSecondaryChildSketch()) {
+                if (auto sketch = std::dynamic_pointer_cast<SketchNode>(child2)) {
+                    sketch->SetParentFeature(node);
+                    sketch->SetVisible(false);
+                    sketch->SetConsumed(true);
+                    node->AddInput(sketch);
+                }
+            }
         }
         m_nodes.push_back(node);
     }
@@ -1129,6 +1137,46 @@ public:
             }
         }
         return curr;
+    }
+
+    /// Finds any upstream or associated SketchNode driving or attached to a given feature
+    [[nodiscard]] std::shared_ptr<DAGNode> FindAssociatedSketch(const std::shared_ptr<DAGNode>& feature) const {
+        if (!feature) return nullptr;
+
+        // 1. Direct sketch node
+        if (std::dynamic_pointer_cast<SketchNode>(feature)) {
+            return feature;
+        }
+
+        // 2. Child sketch attached to this feature (ExtrudeNode, RevolveNode, SweepNode)
+        if (auto child = feature->GetChildSketch()) {
+            return child;
+        }
+
+        // 3. Upstream input sketches or parent features (e.g. for Fillet, Chamfer, Cut)
+        for (const auto& in : feature->GetInputs()) {
+            if (in) {
+                if (std::dynamic_pointer_cast<SketchNode>(in)) return in;
+                if (auto pSk = FindAssociatedSketch(in)) return pSk;
+            }
+        }
+        if (auto parent = feature->GetParentFeature()) {
+            if (parent != feature) {
+                if (auto pSk = FindAssociatedSketch(parent)) return pSk;
+            }
+        }
+
+        // 4. Graph search for sketch referencing this feature as parent or datum plane target
+        for (const auto& n : m_nodes) {
+            if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                if (s->GetParentFeature() == feature) return s;
+                if (auto dp = s->GetDatumPlaneReference()) {
+                    if (dp == feature || dp->GetTargetFeature() == feature) return s;
+                }
+            }
+        }
+
+        return nullptr;
     }
 
     /// Casts a ray through all DAG nodes and returns the ID of the closest intersected node (0 if none hit)

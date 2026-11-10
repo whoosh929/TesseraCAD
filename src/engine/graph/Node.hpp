@@ -56,6 +56,7 @@ public:
     /// Child sketch association for feature nodes (Extrude, Revolve)
     [[nodiscard]] virtual std::shared_ptr<DAGNode> GetParentFeature() const noexcept { return nullptr; }
     [[nodiscard]] virtual std::shared_ptr<DAGNode> GetChildSketch() const noexcept { return nullptr; }
+    [[nodiscard]] virtual std::shared_ptr<DAGNode> GetSecondaryChildSketch() const noexcept { return nullptr; }
     [[nodiscard]] virtual bool HasParentFeature() const noexcept { return false; }
     virtual void DetachChildSketch() noexcept {}
 

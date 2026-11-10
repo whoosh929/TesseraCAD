@@ -53,3 +53,14 @@ Default Mouse Wheel Controls
 - [x] feature: for round, circular/cylindriocal objects, can you make it so the entire circle can be selected. For example, if you had a cylinder and you wanted to fillet the entire circular outer or inner edge.
 - [x] feature: propogate circular selections to the measure tool, which should measure the diameter (and can toggle between radius). Also make it displace circumference and area.
 - [x] bug: when trying to select an edge or point, I should only be able to select edges or points that are facing the view to avoid ambiguous selections.
+- [x] feature: when I right click a feature on a model tree, give the option to edit sketch.
+- [x] feature: user interface should have the model tree should be on the left bar, not floating.
+- [x] feature: add a 3d modeling technique called sweep, which will propogate a 2d sketch along a path to create a 3d model.
+- [] feature: add a 3d modeling technique called shell, which hollows out a 3d model with a specified thickness.
+- [] feature: add a 3d modeling technique called rib, which creates a thin wall along a path to reinforce a model.
+- [x] feature: 2d sketches don't have to always be enclosed. Remove that logic. For example, a sweep might require just a line.
+- [x] feature: when creating a line in a 2d sketch, double click to confirm the creation/placement of just the line. Don't force that the line has to create an enclosed space.
+- [x] feature: When doing a sweep feature, use a single line 2d sketch and an enclosed 2d sketch as input, sweeping the enclosed 2d sketch following the 2d line sketch.
+- [x] bug: allow splines to be open in 2d sketches also
+- [x] bug: when a 2d sketch is created as an open line/spline, when confirming, it automatically encloses the line as shown in the 3d view. The 2d sketch is still correct, but the sketch as shown in the 3d view is falsely represented as enclosed.
+- [] bug: sometimes, an independent 2d sketch shows up as a child of a feature. It is okay for a 2d sketch to be parentless until it is turned into a feature.

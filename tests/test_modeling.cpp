@@ -4,6 +4,7 @@
 #include "engine/modeling/Topology.hpp"
 #include "engine/modeling/ExtrudeOp.hpp"
 #include "engine/modeling/RevolveOp.hpp"
+#include "engine/modeling/SweepOp.hpp"
 #include "engine/modeling/Tessellator.hpp"
 #include "engine/modeling/BlendGeometry.hpp"
 #include "engine/modeling/CornerBlend.hpp"
@@ -622,6 +623,43 @@ bool TestFilletSpineAnd3CornerBlend() {
     return true;
 }
 
+bool TestSweepOpExecution() {
+    std::cout << "[Test] SweepOp 2D-Profile Propagation Along 3D Guide Path...\n";
+
+    // 1. Create a 2D rectangular profile on XY plane
+    Sketch2D sketch(Plane::XY());
+    sketch.add_rectangle(1.0, 1.0, Point2D(0.0, 0.0));
+    auto profiles = sketch.extract_profiles();
+    TEST_ASSERT(!profiles.empty(), "Must extract profile for sweep");
+
+    // 2. Define a 3D curved trajectory path
+    std::vector<Point3D> path = {
+        Point3D(0.0, 0.0, 0.0),
+        Point3D(0.0, 1.0, 1.0),
+        Point3D(1.0, 2.0, 2.5),
+        Point3D(2.0, 3.5, 4.0),
+        Point3D(3.0, 5.0, 5.0)
+    };
+
+    SweepOp::Params params;
+    params.path_points = path;
+    params.is_solid = true;
+
+    auto body = SweepOp::Execute(profiles[0], Plane::XY(), params);
+    TEST_ASSERT(body != nullptr, "Sweep body must not be null");
+    TEST_ASSERT(!body->shells.empty(), "Sweep body must have at least one shell");
+    TEST_ASSERT(body->shells[0]->is_closed, "Solid sweep must produce closed shell");
+    TEST_ASSERT(body->shells[0]->faces.size() >= 4, "Sweep shell must have start/end caps and side swept faces");
+
+    // Tessellate into triangles and feature edges
+    auto mesh = Tessellator::Tessellate(*body);
+    TEST_ASSERT(!mesh.vertices.empty(), "Tessellated sweep mesh must have vertices");
+    TEST_ASSERT(!mesh.indices.empty() && mesh.indices.size() % 3 == 0, "Tessellated sweep mesh must have valid triangle indices");
+    TEST_ASSERT(!mesh.featureEdgeIndices.empty(), "Tessellated sweep mesh must produce feature edges");
+
+    return true;
+}
+
 int main() {
     std::cout << "=========================================================\n";
     std::cout << "     TesseraCAD Modeling Operators Unit Tests            \n";
@@ -642,6 +680,7 @@ int main() {
     passed &= TestQuadricIntersection();
     passed &= TestHalfEdgeTopologyAndEulerOperators();
     passed &= TestFilletSpineAnd3CornerBlend();
+    passed &= TestSweepOpExecution();
 
     std::cout << "=========================================================\n";
     if (passed) {

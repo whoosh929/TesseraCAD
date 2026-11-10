@@ -453,6 +453,78 @@ bool TestExtrudeFromFaceSketch() {
     return true;
 }
 
+bool TestOpenSketch3DRepresentation() {
+    std::cout << "[Test] Open Line & Open Spline 3D Representation in SketchNode...\n";
+
+    Tessera::AtomicMeshExchange exchange;
+
+    // 1. Single 2-point line
+    auto skLine = std::make_shared<Tessera::SketchNode>("OpenLineSketch", Tessera::SketchPlane::XZ_Ground);
+    skLine->SetShapes({ { {0.0f, 0.0f}, {5.0f, 0.0f} } }, { false });
+    skLine->Evaluate(nullptr, exchange);
+
+    TEST_ASSERT(!skLine->IsEnclosed(), "Open line sketch should NOT be enclosed");
+    TEST_ASSERT(skLine->IsSingleLine(), "Open line sketch with 2 points should be single line");
+    TEST_ASSERT(skLine->IsPathSketch(), "Open line sketch should be path sketch");
+    TEST_ASSERT(skLine->GetCachedIndices().empty(), "Open line sketch must NOT have any triangulated polygon faces in 3D");
+    TEST_ASSERT(skLine->GetCachedVertices().size() == 2, "Open line sketch should have 2 vertices");
+    TEST_ASSERT(skLine->GetCachedEdges().size() == 2, "Open line sketch should have exactly 1 segment (2 edge indices)");
+
+    // 2. Open multi-point spline / polyline (e.g. 5 points)
+    auto skOpenSpline = std::make_shared<Tessera::SketchNode>("OpenSplineSketch", Tessera::SketchPlane::XZ_Ground);
+    std::vector<std::array<float, 2>> splinePts = {
+        {0.0f, 0.0f},
+        {1.0f, 2.0f},
+        {3.0f, 3.0f},
+        {5.0f, 2.0f},
+        {6.0f, 0.0f}
+    };
+    skOpenSpline->SetShapes({ splinePts }, { false });
+    skOpenSpline->Evaluate(nullptr, exchange);
+
+    TEST_ASSERT(!skOpenSpline->IsEnclosed(), "Open spline sketch should NOT be enclosed");
+    TEST_ASSERT(!skOpenSpline->IsSingleLine(), "5-point spline is not a 2-point single line");
+    TEST_ASSERT(skOpenSpline->IsPathSketch(), "Open spline sketch must qualify as path sketch");
+    TEST_ASSERT(skOpenSpline->GetCachedIndices().empty(), "Open spline sketch must NOT have triangulated polygon faces in 3D");
+    TEST_ASSERT(skOpenSpline->GetCachedVertices().size() == 5, "Open spline sketch should have 5 vertices");
+    TEST_ASSERT(skOpenSpline->GetCachedEdges().size() == 8, "Open spline sketch should have 4 segments (8 edge indices), no closing segment");
+
+    const auto& edges = skOpenSpline->GetCachedEdges();
+    for (size_t i = 0; i + 1 < edges.size(); i += 2) {
+        bool isClosingLoopEdge = (edges[i] == 4 && edges[i + 1] == 0) || (edges[i] == 0 && edges[i + 1] == 4);
+        TEST_ASSERT(!isClosingLoopEdge, "Open spline must NOT connect end point back to start point");
+    }
+
+    // 3. Closed shape (e.g. 4-point rectangle)
+    auto skClosed = std::make_shared<Tessera::SketchNode>("ClosedRectSketch", Tessera::SketchPlane::XZ_Ground);
+    std::vector<std::array<float, 2>> rectPts = {
+        {0.0f, 0.0f},
+        {4.0f, 0.0f},
+        {4.0f, 3.0f},
+        {0.0f, 3.0f}
+    };
+    skClosed->SetShapes({ rectPts }, { true });
+    skClosed->Evaluate(nullptr, exchange);
+
+    TEST_ASSERT(skClosed->IsEnclosed(), "Closed rectangle sketch must be enclosed");
+    TEST_ASSERT(!skClosed->IsPathSketch(), "Closed rectangle sketch must not be path sketch");
+    TEST_ASSERT(!skClosed->GetCachedIndices().empty(), "Closed rectangle sketch must have triangulated polygon faces in 3D");
+    TEST_ASSERT(skClosed->GetCachedVertices().size() == 4, "Closed rect should have 4 vertices");
+    TEST_ASSERT(skClosed->GetCachedEdges().size() == 8, "Closed rect should have 4 segments (8 edge indices)");
+
+    bool hasClosingLoopEdge = false;
+    const auto& closedEdges = skClosed->GetCachedEdges();
+    for (size_t i = 0; i + 1 < closedEdges.size(); i += 2) {
+        if ((closedEdges[i] == 3 && closedEdges[i + 1] == 0) || (closedEdges[i] == 0 && closedEdges[i + 1] == 3)) {
+            hasClosingLoopEdge = true;
+            break;
+        }
+    }
+    TEST_ASSERT(hasClosingLoopEdge, "Closed polygon must have closing edge connecting last point to first point");
+
+    return true;
+}
+
 int main() {
     std::cout << "=========================================================\n";
     std::cout << "     TesseraCAD 2D Sketch & Profile Unit Tests          \n";
@@ -469,6 +541,7 @@ int main() {
     passed &= TestSketch2DFilletAndChamfer();
     passed &= TestSketchAxisAndOriginConstraints();
     passed &= TestExtrudeFromFaceSketch();
+    passed &= TestOpenSketch3DRepresentation();
 
     std::cout << "=========================================================\n";
     if (passed) {

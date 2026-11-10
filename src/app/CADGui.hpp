@@ -6,6 +6,7 @@
 #include "engine/graph/SketchNode.hpp"
 #include "engine/graph/ExtrudeNode.hpp"
 #include "engine/graph/RevolveNode.hpp"
+#include "engine/graph/SweepNode.hpp"
 #include "engine/graph/DatumPlaneNode.hpp"
 #include "engine/graph/DatumAxisNode.hpp"
 #include "engine/graph/FilletNode.hpp"
@@ -230,7 +231,7 @@ public:
     [[nodiscard]] bool IsSketchPlanePromptActive() const noexcept { return m_showSketchPlanePrompt; }
 
     // 3D Feature Preview & Pending Confirmation
-    enum class PreviewFeatureType { None, Extrude, Revolve, Fillet, Chamfer, CutExtrude, CutRevolve };
+    enum class PreviewFeatureType { None, Extrude, Revolve, Sweep, Fillet, Chamfer, CutExtrude, CutRevolve, CutSweep };
     [[nodiscard]] bool IsFeaturePreviewActive() const noexcept { return m_featurePreviewActive; }
     [[nodiscard]] PreviewFeatureType GetPreviewFeatureType() const noexcept { return m_previewFeatureType; }
     [[nodiscard]] std::shared_ptr<DAGNode> GetPreviewNode() const noexcept { return m_previewNode; }
@@ -262,6 +263,14 @@ public:
     [[nodiscard]] SketchMouseTool GetSketchMouseTool() const noexcept { return m_mouseTool; }
     void SetSketchMouseTool(SketchMouseTool tool) noexcept { m_mouseTool = tool; }
     [[nodiscard]] uint64_t GetActiveSketchId() const noexcept { return m_activeSketchId; }
+
+    [[nodiscard]] static std::shared_ptr<SketchNode> FindAssociatedSketch(
+        const std::shared_ptr<DAGNode>& feature,
+        const ParametricGraph& graph
+    ) {
+        auto res = graph.FindAssociatedSketch(feature);
+        return std::dynamic_pointer_cast<SketchNode>(res);
+    }
 
     // 3D Measurement Tool
     [[nodiscard]] bool IsMeasureToolActive() const noexcept { return m_measureToolActive; }
@@ -582,6 +591,13 @@ private:
         AtomicMeshExchange& exchange
     );
 
+    void RenderSweepPromptModal(
+        ParametricGraph& graph,
+        RHI::RHIDevice* device,
+        AtomicMeshExchange& exchange,
+        const std::vector<std::shared_ptr<DAGNode>>& nodes
+    );
+
     void RenderDimensionEditModal();
     static void EnforceShapeConstraints(CanvasShape& shape, int pinnedVertexIdx = -1);
 
@@ -603,6 +619,9 @@ private:
     bool m_showCutExtrudePrompt{false};
     bool m_showRevolvePrompt{false};
     bool m_showCutRevolvePrompt{false};
+    bool m_showSweepPrompt{false};
+    uint64_t m_selectedSweepProfileSketchId{0};
+    uint64_t m_selectedSweepPathSketchId{0};
     uint64_t m_promptInitialSelectedId{0};
 
     // UI Navigation Mode
