@@ -11,6 +11,7 @@
 #include "engine/graph/FilletNode.hpp"
 #include "engine/graph/ChamferNode.hpp"
 #include "engine/sketch/SketchFilletChamfer.hpp"
+#include "engine/export/StepExporter.hpp"
 #include "engine/hal/RHI.hpp"
 #include "engine/render/Camera.hpp"
 #include "engine/render/ViewportRenderer.hpp"
@@ -37,6 +38,7 @@ struct CanvasShape {
     std::vector<std::array<float, 2>> points;
     bool isClosed{true};
     std::map<size_t, float> edgeConstraints; // edge index -> target length
+    std::map<size_t, VertexAxisConstraint> vertexConstraints; // vertex index -> axis/origin constraints
 
     [[nodiscard]] bool IsEdgeConstrained(size_t edgeIdx) const {
         return edgeConstraints.find(edgeIdx) != edgeConstraints.end();
@@ -64,6 +66,136 @@ struct CanvasShape {
             SetEdgeConstraint(edgeIdx, currentLen);
         }
     }
+
+    // Origin (0, 0) Constraints
+    [[nodiscard]] bool IsVertexOriginConstrained(size_t vIdx) const {
+        auto it = vertexConstraints.find(vIdx);
+        return it != vertexConstraints.end() && it->second.lockOriginDist;
+    }
+
+    [[nodiscard]] float GetVertexOriginDistance(size_t vIdx) const {
+        auto it = vertexConstraints.find(vIdx);
+        return (it != vertexConstraints.end() && it->second.lockOriginDist) ? it->second.originDist : 0.0f;
+    }
+
+    void SetVertexOriginConstraint(size_t vIdx, float dist) {
+        if (dist > 0.0001f) {
+            vertexConstraints[vIdx].lockOriginDist = true;
+            vertexConstraints[vIdx].originDist = dist;
+        }
+    }
+
+    void RemoveVertexOriginConstraint(size_t vIdx) {
+        auto it = vertexConstraints.find(vIdx);
+        if (it != vertexConstraints.end()) {
+            it->second.lockOriginDist = false;
+            it->second.originDist = 0.0f;
+            if (!it->second.HasAnyConstraint()) {
+                vertexConstraints.erase(it);
+            }
+        }
+    }
+
+    void ToggleVertexOriginConstraint(size_t vIdx, float curDist) {
+        if (IsVertexOriginConstrained(vIdx)) {
+            RemoveVertexOriginConstraint(vIdx);
+        } else {
+            SetVertexOriginConstraint(vIdx, curDist);
+        }
+    }
+
+    // U-Axis (V=0, |V| = dist) Constraints
+    [[nodiscard]] bool IsVertexUAxisConstrained(size_t vIdx) const {
+        auto it = vertexConstraints.find(vIdx);
+        return it != vertexConstraints.end() && it->second.lockUAxisDist;
+    }
+
+    [[nodiscard]] float GetVertexUAxisDistance(size_t vIdx) const {
+        auto it = vertexConstraints.find(vIdx);
+        return (it != vertexConstraints.end() && it->second.lockUAxisDist) ? it->second.uAxisDist : 0.0f;
+    }
+
+    void SetVertexUAxisConstraint(size_t vIdx, float dist) {
+        vertexConstraints[vIdx].lockUAxisDist = true;
+        vertexConstraints[vIdx].uAxisDist = dist;
+    }
+
+    void RemoveVertexUAxisConstraint(size_t vIdx) {
+        auto it = vertexConstraints.find(vIdx);
+        if (it != vertexConstraints.end()) {
+            it->second.lockUAxisDist = false;
+            it->second.uAxisDist = 0.0f;
+            if (!it->second.HasAnyConstraint()) {
+                vertexConstraints.erase(it);
+            }
+        }
+    }
+
+    // V-Axis (U=0, |U| = dist) Constraints
+    [[nodiscard]] bool IsVertexVAxisConstrained(size_t vIdx) const {
+        auto it = vertexConstraints.find(vIdx);
+        return it != vertexConstraints.end() && it->second.lockVAxisDist;
+    }
+
+    [[nodiscard]] float GetVertexVAxisDistance(size_t vIdx) const {
+        auto it = vertexConstraints.find(vIdx);
+        return (it != vertexConstraints.end() && it->second.lockVAxisDist) ? it->second.vAxisDist : 0.0f;
+    }
+
+    void SetVertexVAxisConstraint(size_t vIdx, float dist) {
+        vertexConstraints[vIdx].lockVAxisDist = true;
+        vertexConstraints[vIdx].vAxisDist = dist;
+    }
+
+    void RemoveVertexVAxisConstraint(size_t vIdx) {
+        auto it = vertexConstraints.find(vIdx);
+        if (it != vertexConstraints.end()) {
+            it->second.lockVAxisDist = false;
+            it->second.vAxisDist = 0.0f;
+            if (!it->second.HasAnyConstraint()) {
+                vertexConstraints.erase(it);
+            }
+        }
+    }
+
+    // Datum Axis Line Constraints
+    [[nodiscard]] bool IsVertexDatumAxisConstrained(size_t vIdx) const {
+        auto it = vertexConstraints.find(vIdx);
+        return it != vertexConstraints.end() && it->second.lockDatumAxisDist;
+    }
+
+    [[nodiscard]] float GetVertexDatumAxisDistance(size_t vIdx) const {
+        auto it = vertexConstraints.find(vIdx);
+        return (it != vertexConstraints.end() && it->second.lockDatumAxisDist) ? it->second.datumAxisDist : 0.0f;
+    }
+
+    void SetVertexDatumAxisConstraint(size_t vIdx, float dist, uint64_t axisId, std::string axisName) {
+        vertexConstraints[vIdx].lockDatumAxisDist = true;
+        vertexConstraints[vIdx].datumAxisDist = dist;
+        vertexConstraints[vIdx].datumAxisId = axisId;
+        vertexConstraints[vIdx].datumAxisName = std::move(axisName);
+    }
+
+    void RemoveVertexDatumAxisConstraint(size_t vIdx) {
+        auto it = vertexConstraints.find(vIdx);
+        if (it != vertexConstraints.end()) {
+            it->second.lockDatumAxisDist = false;
+            it->second.datumAxisDist = 0.0f;
+            it->second.datumAxisId = 0;
+            it->second.datumAxisName.clear();
+            if (!it->second.HasAnyConstraint()) {
+                vertexConstraints.erase(it);
+            }
+        }
+    }
+};
+
+enum class DimEditTarget : uint8_t {
+    Edge = 0,
+    VertexOrigin = 1,
+    VertexUAxis = 2,
+    VertexVAxis = 3,
+    VertexDatumAxis = 4
 };
 
 class CADGui {
@@ -138,6 +270,7 @@ public:
         m_measureToolActive = false;
         m_showMeasureDialog = false;
         ClearMeasurePoints();
+        ClearMeasureCircle();
     }
     void SetMeasureToolActive(bool active) noexcept { 
         m_measureToolActive = active; 
@@ -154,7 +287,7 @@ public:
         }
     }
     void ToggleMeasureTool() noexcept { 
-        if (m_measureToolActive || m_showMeasureDialog || m_measureHasP1) {
+        if (m_measureToolActive || m_showMeasureDialog || m_measureHasP1 || m_measureHasCircle) {
             CloseMeasurement();
         } else {
             SetMeasureToolActive(true);
@@ -187,6 +320,25 @@ public:
         }
         return {};
     }
+
+    [[nodiscard]] bool HasMeasureCircle() const noexcept { return m_measureHasCircle; }
+    [[nodiscard]] const CircularEdgeInfo& GetMeasureCircle() const noexcept { return m_measuredCircle; }
+    void SetMeasureCircle(const CircularEdgeInfo& c) noexcept {
+        m_measuredCircle = c;
+        m_measureHasCircle = c.isCircle;
+        if (c.isCircle) {
+            m_showMeasureDialog = true;
+            m_measureToolActive = true;
+        }
+    }
+    void ClearMeasureCircle() noexcept {
+        m_measureHasCircle = false;
+        m_measuredCircle = {};
+    }
+    void ToggleMeasureCircleRadiusMode() noexcept {
+        m_measureDisplayRadius = !m_measureDisplayRadius;
+    }
+    [[nodiscard]] bool IsMeasureCircleRadiusMode() const noexcept { return m_measureDisplayRadius; }
 
     [[nodiscard]] uint64_t GetSelectedNodeId() const noexcept { return m_selectedNodeId; }
     void SetSelectedNodeId(uint64_t id) noexcept {
@@ -269,10 +421,12 @@ public:
         m_selectedEdgeIndex = -1;
     }
 
-    void SetSelectedEdge(int eIdx, Geom::Point3D p0, Geom::Point3D p1) noexcept {
+    void SetSelectedEdge(int eIdx, Geom::Point3D p0, Geom::Point3D p1, const CircularEdgeInfo& circle = {}) noexcept {
         m_selectedEdgeIndex = eIdx;
         m_selectedEdgeP0 = p0;
         m_selectedEdgeP1 = p1;
+        m_selectedCircle = circle;
+        m_selectedEdgeIndices = circle.isCircle ? circle.segments : (eIdx >= 0 ? std::vector<int>{eIdx} : std::vector<int>{});
         m_selectedFaceIndex = -1;
         m_selectedFaceIndices.clear();
         m_selectedFacePlanes.clear();
@@ -289,6 +443,15 @@ public:
         m_selectedFacePlanes.clear();
         m_selectedVertexIndices.clear();
         m_selectedVertexPositions.clear();
+        m_selectedCircle = {};
+        m_selectedEdgeIndices.clear();
+    }
+
+    [[nodiscard]] const CircularEdgeInfo& GetSelectedCircle() const noexcept { return m_selectedCircle; }
+    [[nodiscard]] const std::vector<int>& GetSelectedEdgeIndices() const noexcept { return m_selectedEdgeIndices; }
+    void SetSelectedCircle(const CircularEdgeInfo& circle) noexcept {
+        m_selectedCircle = circle;
+        m_selectedEdgeIndices = circle.isCircle ? circle.segments : (m_selectedEdgeIndex >= 0 ? std::vector<int>{m_selectedEdgeIndex} : std::vector<int>{});
     }
 
     [[nodiscard]] int GetSelectedFaceIndex() const noexcept { return m_selectedFaceIndex; }
@@ -425,6 +588,8 @@ private:
     void RenderMeasureToolDialog();
     void RenderMeasureVisualOverlay(Camera& camera, ViewportRenderer& renderer);
 
+    void RenderExportStepModal(ParametricGraph& graph, std::shared_ptr<DAGNode> selectedNode);
+
     // Target Solid Resolution & Cut Preview Overlay
     [[nodiscard]] std::shared_ptr<DAGNode> ResolveTargetSolid(const std::shared_ptr<DAGNode>& featureOrSketch, const ParametricGraph& graph) const;
     void RenderCutPreviewVisualOverlay(Camera& camera, ViewportRenderer& renderer);
@@ -488,13 +653,18 @@ private:
     float m_kbLineTargetV{0.0f};
     int m_selectedEdgeSegmentIdx{-1};
 
-    // 2D Sketch Edge Dimension Constraint & In-Place Editing
+    // 2D Sketch Edge / Axis Dimension Constraint & In-Place Editing
     bool m_showDimensionEditPopup{false};
+    DimEditTarget m_dimEditTarget{DimEditTarget::Edge};
     int m_dimEditShapeIdx{-1};
     int m_dimEditEdgeIdx{-1};
+    int m_dimEditVertexIdx{-1};
+    uint64_t m_dimEditDatumAxisId{0};
+    std::string m_dimEditDatumAxisName;
     float m_dimEditValue{0.0f};
     bool m_dimEditConstrained{true};
     std::array<float, 2> m_dimEditPopupPos{0.0f, 0.0f};
+    std::vector<ProjectedDatumAxis> m_cachedDatumAxes;
 
     // 3D Feature Preview & Pending Confirmation State
     bool m_featurePreviewActive{false};
@@ -543,6 +713,8 @@ private:
     Geom::Point3D m_selectedVertexPos{0.0, 0.0, 0.0};
     Geom::Point3D m_selectedEdgeP0{0.0, 0.0, 0.0};
     Geom::Point3D m_selectedEdgeP1{0.0, 0.0, 0.0};
+    CircularEdgeInfo m_selectedCircle;
+    std::vector<int> m_selectedEdgeIndices;
     std::vector<int> m_selectedFaceIndices;
     std::vector<Geom::Plane> m_selectedFacePlanes;
     std::vector<int> m_selectedVertexIndices;
@@ -587,8 +759,19 @@ private:
     bool m_showMeasureDialog{false};
     bool m_measureHasP1{false};
     bool m_measureHasP2{false};
+    bool m_measureHasCircle{false};
+    CircularEdgeInfo m_measuredCircle;
+    bool m_measureDisplayRadius{false};
     Geom::Point3D m_measureP1{0.0, 0.0, 0.0};
     Geom::Point3D m_measureP2{0.0, 0.0, 0.0};
+
+    // STEP Export Modal & State
+    bool m_showExportStepModal{false};
+    char m_exportStepPath[260]{"model.stp"};
+    int m_exportStepScope{0}; // 0: Entire Model (All Solids), 1: Selected Solid Only
+    std::string m_exportStepStatus;
+    std::string m_lastExportedStepFullPath;
+    bool m_exportStepSuccess{false};
 
     // Viewport display toggles
     bool m_showWireframe{true};

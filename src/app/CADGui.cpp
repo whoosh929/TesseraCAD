@@ -9,6 +9,19 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <commdlg.h>
+#include <shellapi.h>
+#endif
 
 namespace Tessera {
 
@@ -491,6 +504,25 @@ void CADGui::RenderTopBar(
             if (!sketchNode && m_selectedNodeId != 0) {
                 sketchNode = std::dynamic_pointer_cast<SketchNode>(graph.GetNode(m_selectedNodeId));
             }
+            if (!sketchNode && selectedNode) {
+                // If a solid model or face datum plane is selected, find any unconsumed sketch associated with it
+                for (const auto& n : nodes) {
+                    if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                        if (!s->IsConsumed()) {
+                            if (s->GetParentFeature() == selectedNode) {
+                                sketchNode = s;
+                                break;
+                            }
+                            if (auto dp = s->GetDatumPlaneReference()) {
+                                if (dp == selectedNode || dp->GetTargetFeature() == selectedNode) {
+                                    sketchNode = s;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if (sketchNode && !sketchNode->IsConsumed()) {
                 std::string name = "Extrude_" + std::to_string(m_shapeCounter++);
                 auto targetSolid = ResolveTargetSolid(sketchNode, graph);
@@ -514,6 +546,24 @@ void CADGui::RenderTopBar(
             auto sketchNode = std::dynamic_pointer_cast<SketchNode>(selectedNode);
             if (!sketchNode && m_selectedNodeId != 0) {
                 sketchNode = std::dynamic_pointer_cast<SketchNode>(graph.GetNode(m_selectedNodeId));
+            }
+            if (!sketchNode && selectedNode) {
+                for (const auto& n : nodes) {
+                    if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
+                        if (!s->IsConsumed()) {
+                            if (s->GetParentFeature() == selectedNode) {
+                                sketchNode = s;
+                                break;
+                            }
+                            if (auto dp = s->GetDatumPlaneReference()) {
+                                if (dp == selectedNode || dp->GetTargetFeature() == selectedNode) {
+                                    sketchNode = s;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if (sketchNode && !sketchNode->IsConsumed()) {
                 std::string name = "Revolve_" + std::to_string(m_shapeCounter++);
@@ -543,6 +593,26 @@ void CADGui::RenderTopBar(
                     ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
                     : m_newFilletRadius;
                 auto fillet = std::make_shared<FilletNode>(name, target, m_selectedEdgeIndex, effRadius);
+                if (m_selectedCircle.isCircle && m_selectedCircle.segments.size() > 1) {
+                    const auto& verts = target->GetCachedVertices();
+                    const auto& edges = target->GetCachedEdges();
+                    std::vector<std::pair<Geom::Point3D, Geom::Point3D>> addEdges;
+                    for (int segIdx : m_selectedCircle.segments) {
+                        if (segIdx == m_selectedEdgeIndex) continue;
+                        size_t e = static_cast<size_t>(segIdx * 2);
+                        if (e + 1 < edges.size()) {
+                            uint32_t i0 = edges[e];
+                            uint32_t i1 = edges[e + 1];
+                            if (i0 < verts.size() && i1 < verts.size()) {
+                                addEdges.push_back({
+                                    Geom::Point3D(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]),
+                                    Geom::Point3D(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2])
+                                });
+                            }
+                        }
+                    }
+                    fillet->SetAdditionalEdges(addEdges);
+                }
                 if (m_filletChoice == FilletDimensionChoice::Angle) {
                     fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                     fillet->SetAngle(m_newFilletAngle);
@@ -600,6 +670,26 @@ void CADGui::RenderTopBar(
                 auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
                 std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
                 auto chamfer = std::make_shared<ChamferNode>(name, target, m_selectedEdgeIndex, m_newChamferDistance);
+                if (m_selectedCircle.isCircle && m_selectedCircle.segments.size() > 1) {
+                    const auto& verts = target->GetCachedVertices();
+                    const auto& edges = target->GetCachedEdges();
+                    std::vector<std::pair<Geom::Point3D, Geom::Point3D>> addEdges;
+                    for (int segIdx : m_selectedCircle.segments) {
+                        if (segIdx == m_selectedEdgeIndex) continue;
+                        size_t e = static_cast<size_t>(segIdx * 2);
+                        if (e + 1 < edges.size()) {
+                            uint32_t i0 = edges[e];
+                            uint32_t i1 = edges[e + 1];
+                            if (i0 < verts.size() && i1 < verts.size()) {
+                                addEdges.push_back({
+                                    Geom::Point3D(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]),
+                                    Geom::Point3D(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2])
+                                });
+                            }
+                        }
+                    }
+                    chamfer->SetAdditionalEdges(addEdges);
+                }
                 StartFeaturePreview(PreviewFeatureType::Chamfer, chamfer, target, graph, device, exchange);
             } else if (m_selectedVertexIndex >= 0 && selectedNode) {
                 auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
@@ -653,6 +743,29 @@ void CADGui::RenderTopBar(
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("3D Measure Tool (Shortcut: M):\n- Click any two points/vertices on 3D models to calculate\n  direct 3D distance, orthogonal X/Y/Z deltas, and angles.");
+        }
+
+        // ---------------------------------------------------------------------
+        // Export Model to STP (STEP ISO 10303-21 AP214) Button
+        // ---------------------------------------------------------------------
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.24f, 0.35f, 0.46f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.32f, 0.46f, 0.60f, 1.0f));
+        if (ImGui::Button("💾 Export STP", ImVec2(110, 32))) {
+            CloseMeasurement();
+            m_showExportStepModal = true;
+            m_exportStepStatus.clear();
+            std::string defFile = (selectedNode && selectedNode->IsSolidFeature()) ? (selectedNode->GetName() + ".stp") : "model.stp";
+            try {
+                std::string absPath = std::filesystem::absolute(defFile).string();
+                std::snprintf(m_exportStepPath, sizeof(m_exportStepPath), "%s", absPath.c_str());
+            } catch (...) {
+                std::snprintf(m_exportStepPath, sizeof(m_exportStepPath), "%s", defFile.c_str());
+            }
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Export CAD Model to STEP (.stp / .step):\n- Generates industry-standard ISO 10303-21 AP214 B-Rep solid file.\n- Fully compatible with SolidWorks, Fusion 360, FreeCAD, and Siemens NX.");
         }
 
         // If a 3D feature preview is active, show Confirm & Cancel buttons right in the topbar!
@@ -1375,8 +1488,8 @@ void CADGui::RenderExtrudePromptModal(
 ) {
     if (!m_showExtrudePrompt) return;
 
-    // Check if user selected an available sketch from the Model Tree while prompt was open
-    if (m_selectedNodeId != 0 && m_selectedNodeId != m_promptInitialSelectedId) {
+    // Check if user selected an available sketch from the Model Tree or viewport while prompt was open
+    if (m_selectedNodeId != 0) {
         for (const auto& n : nodes) {
             if (n->GetId() == m_selectedNodeId) {
                 if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
@@ -1385,6 +1498,7 @@ void CADGui::RenderExtrudePromptModal(
                         auto targetSolid = ResolveTargetSolid(s, graph);
                         auto extrude = std::make_shared<ExtrudeNode>(name, s, m_newExtrudeHeight, ExtrudeOperation::Boss, targetSolid);
                         StartFeaturePreview(PreviewFeatureType::Extrude, extrude, targetSolid, graph, device, exchange);
+                        m_showExtrudePrompt = false;
                         return;
                     }
                 }
@@ -1505,7 +1619,7 @@ void CADGui::RenderCutExtrudePromptModal(
 
     std::shared_ptr<DAGNode> target = ResolveTargetSolid(nullptr, graph);
 
-    if (m_selectedNodeId != 0 && m_selectedNodeId != m_promptInitialSelectedId) {
+    if (m_selectedNodeId != 0) {
         for (const auto& n : nodes) {
             if (n->GetId() == m_selectedNodeId) {
                 if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
@@ -1597,7 +1711,7 @@ void CADGui::RenderRevolvePromptModal(
 ) {
     if (!m_showRevolvePrompt) return;
 
-    if (m_selectedNodeId != 0 && m_selectedNodeId != m_promptInitialSelectedId) {
+    if (m_selectedNodeId != 0) {
         for (const auto& n : nodes) {
             if (n->GetId() == m_selectedNodeId) {
                 if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
@@ -1694,7 +1808,7 @@ void CADGui::RenderCutRevolvePromptModal(
 
     std::shared_ptr<DAGNode> target = ResolveTargetSolid(nullptr, graph);
 
-    if (m_selectedNodeId != 0 && m_selectedNodeId != m_promptInitialSelectedId) {
+    if (m_selectedNodeId != 0) {
         for (const auto& n : nodes) {
             if (n->GetId() == m_selectedNodeId) {
                 if (auto s = std::dynamic_pointer_cast<SketchNode>(n)) {
@@ -1786,6 +1900,26 @@ void CADGui::RenderFilletPromptModal(
                     ? (0.25f * std::tan(m_newFilletAngle * 3.14159265f / 360.0f))
                     : m_newFilletRadius;
                 auto fillet = std::make_shared<FilletNode>(name, target, m_selectedEdgeIndex, effRadius);
+                if (m_selectedCircle.isCircle && m_selectedCircle.segments.size() > 1) {
+                    const auto& verts = target->GetCachedVertices();
+                    const auto& edges = target->GetCachedEdges();
+                    std::vector<std::pair<Geom::Point3D, Geom::Point3D>> addEdges;
+                    for (int segIdx : m_selectedCircle.segments) {
+                        if (segIdx == m_selectedEdgeIndex) continue;
+                        size_t e = static_cast<size_t>(segIdx * 2);
+                        if (e + 1 < edges.size()) {
+                            uint32_t i0 = edges[e];
+                            uint32_t i1 = edges[e + 1];
+                            if (i0 < verts.size() && i1 < verts.size()) {
+                                addEdges.push_back({
+                                    Geom::Point3D(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]),
+                                    Geom::Point3D(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2])
+                                });
+                            }
+                        }
+                    }
+                    fillet->SetAdditionalEdges(addEdges);
+                }
                 if (m_filletChoice == FilletDimensionChoice::Angle) {
                     fillet->SetDimensionChoice(FilletNode::DimensionChoice::Angle);
                     fillet->SetAngle(m_newFilletAngle);
@@ -1877,6 +2011,26 @@ void CADGui::RenderChamferPromptModal(
                 auto target = n->IsConsumed() ? n->GetActiveLeafFeature() : n;
                 std::string name = "Chamfer_" + std::to_string(m_shapeCounter++);
                 auto chamfer = std::make_shared<ChamferNode>(name, target, m_selectedEdgeIndex, m_newChamferDistance);
+                if (m_selectedCircle.isCircle && m_selectedCircle.segments.size() > 1) {
+                    const auto& verts = target->GetCachedVertices();
+                    const auto& edges = target->GetCachedEdges();
+                    std::vector<std::pair<Geom::Point3D, Geom::Point3D>> addEdges;
+                    for (int segIdx : m_selectedCircle.segments) {
+                        if (segIdx == m_selectedEdgeIndex) continue;
+                        size_t e = static_cast<size_t>(segIdx * 2);
+                        if (e + 1 < edges.size()) {
+                            uint32_t i0 = edges[e];
+                            uint32_t i1 = edges[e + 1];
+                            if (i0 < verts.size() && i1 < verts.size()) {
+                                addEdges.push_back({
+                                    Geom::Point3D(verts[i0].position[0], verts[i0].position[1], verts[i0].position[2]),
+                                    Geom::Point3D(verts[i1].position[0], verts[i1].position[1], verts[i1].position[2])
+                                });
+                            }
+                        }
+                    }
+                    chamfer->SetAdditionalEdges(addEdges);
+                }
                 StartFeaturePreview(PreviewFeatureType::Chamfer, chamfer, target, graph, device, exchange);
                 m_showChamferPrompt = false;
                 return;
@@ -2343,6 +2497,7 @@ void CADGui::RenderUI(
     RenderFeaturePreviewDialog(graph, device, exchange);
     RenderDimensionEditModal();
     RenderMeasureToolDialog();
+    RenderExportStepModal(graph, selectedNode);
 
     // Close measurement on ESC if active/open and not in feature preview or text input
     {
@@ -2394,7 +2549,7 @@ void CADGui::RenderUI(
                 // Find all child features whose parent feature is this node (excluding childSketch which is rendered directly above)
                 std::vector<std::shared_ptr<DAGNode>> childFeatures;
                 for (const auto& n : nodes) {
-                    if (n && n != childSketch && n->GetParentFeature() == node) {
+                    if (n && (!childSketch || n->GetId() != childSketch->GetId()) && n->GetParentFeature() == node) {
                         childFeatures.push_back(n);
                     }
                 }
@@ -2726,23 +2881,45 @@ void CADGui::RenderUI(
                 ImGui::Spacing();
             } else if (m_selectedEdgeIndex >= 0) {
                 ImGui::Spacing();
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.22f, 0.17f, 0.05f, 0.9f));
-                ImGui::BeginChild("EdgeSubElementCard", ImVec2(0, 112), true);
-                ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.3f, 1.0f), "● Sub-Element Selected: Corner Edge #%d", m_selectedEdgeIndex);
-                float edgeLen = static_cast<float>(m_selectedEdgeP0.distance_to(m_selectedEdgeP1));
-                ImGui::Text("Length: %.2f m", edgeLen);
-                ImGui::Text("From: (%.2f, %.2f, %.2f)", m_selectedEdgeP0.x, m_selectedEdgeP0.y, m_selectedEdgeP0.z);
-                ImGui::Text("To:   (%.2f, %.2f, %.2f)", m_selectedEdgeP1.x, m_selectedEdgeP1.y, m_selectedEdgeP1.z);
-                ImGui::Spacing();
+                if (m_selectedCircle.isCircle) {
+                    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.2f, 0.85f, 1.0f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.20f, 0.28f, 0.95f));
+                    ImGui::BeginChild("CircleEdgeSubElementCard", ImVec2(0, 168), true);
+                    ImGui::TextColored(ImVec4(0.25f, 0.95f, 1.0f, 1.0f), "◯ Circular Edge Loop Selected (%zu Segments)", m_selectedCircle.segments.size());
+                    ImGui::Separator();
+                    ImGui::Text("Diameter:      Ø %.3f m", m_selectedCircle.diameter);
+                    ImGui::Text("Radius:        R %.3f m", m_selectedCircle.radius);
+                    ImGui::Text("Circumference: %.3f m", m_selectedCircle.circumference);
+                    ImGui::Text("Enclosed Area: %.3f m²", m_selectedCircle.area);
+                    ImGui::Text("Center:        (%.2f, %.2f, %.2f)", m_selectedCircle.center.x, m_selectedCircle.center.y, m_selectedCircle.center.z);
+                    ImGui::Spacing();
 
-                if (ImGui::Button("✕ Deselect Edge (Select Whole Model)", ImVec2(-1, 22))) {
-                    ClearSubElementSelection();
-                    graph.SetSubElementSelection(m_selectedNodeId, -1, -1, -1);
-                    graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1, -1);
+                    if (ImGui::Button("✕ Deselect Circle (Select Whole Model)", ImVec2(-1, 22))) {
+                        ClearSubElementSelection();
+                        graph.SetSubElementSelection(m_selectedNodeId, -1, -1, -1);
+                        graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1, -1);
+                    }
+                    ImGui::EndChild();
+                    ImGui::PopStyleColor(2);
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.22f, 0.17f, 0.05f, 0.9f));
+                    ImGui::BeginChild("EdgeSubElementCard", ImVec2(0, 112), true);
+                    ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.3f, 1.0f), "● Sub-Element Selected: Corner Edge #%d", m_selectedEdgeIndex);
+                    float edgeLen = static_cast<float>(m_selectedEdgeP0.distance_to(m_selectedEdgeP1));
+                    ImGui::Text("Length: %.2f m", edgeLen);
+                    ImGui::Text("From: (%.2f, %.2f, %.2f)", m_selectedEdgeP0.x, m_selectedEdgeP0.y, m_selectedEdgeP0.z);
+                    ImGui::Text("To:   (%.2f, %.2f, %.2f)", m_selectedEdgeP1.x, m_selectedEdgeP1.y, m_selectedEdgeP1.z);
+                    ImGui::Spacing();
+
+                    if (ImGui::Button("✕ Deselect Edge (Select Whole Model)", ImVec2(-1, 22))) {
+                        ClearSubElementSelection();
+                        graph.SetSubElementSelection(m_selectedNodeId, -1, -1, -1);
+                        graph.PublishCombinedSceneMesh(device, exchange, m_selectedNodeId, -1, -1, -1);
+                    }
+                    ImGui::EndChild();
+                    ImGui::PopStyleColor(2);
                 }
-                ImGui::EndChild();
-                ImGui::PopStyleColor(2);
                 ImGui::Spacing();
             }
 
@@ -3402,6 +3579,25 @@ void CADGui::RenderUI(
                 }
             }
 
+            if (selectedNode->IsSolidFeature() && !selectedNode->GetCachedVertices().empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.40f, 0.55f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.52f, 0.70f, 1.0f));
+                if (ImGui::Button("💾 Export Feature as .STP", ImVec2(-1, 28))) {
+                    m_showExportStepModal = true;
+                    m_exportStepStatus.clear();
+                    std::string defFile = selectedNode->GetName() + ".stp";
+                    try {
+                        std::string absPath = std::filesystem::absolute(defFile).string();
+                        std::snprintf(m_exportStepPath, sizeof(m_exportStepPath), "%s", absPath.c_str());
+                    } catch (...) {
+                        std::snprintf(m_exportStepPath, sizeof(m_exportStepPath), "%s", defFile.c_str());
+                    }
+                    m_exportStepScope = 1; // Selected solid only
+                }
+                ImGui::PopStyleColor(2);
+                ImGui::Spacing();
+            }
+
             std::string delBtnText = "Delete Selected Object";
             if (std::dynamic_pointer_cast<SketchNode>(selectedNode)) {
                 delBtnText = "🗑 Delete 2D Sketch";
@@ -3677,11 +3873,38 @@ void CADGui::RenderUI(
             fg->AddCircleFilled(pt1, 5.0f, IM_COL32(0, 230, 255, 255), 16);
             fg->AddCircleFilled(pt1, 2.5f, IM_COL32(255, 255, 255, 255), 16);
 
+            // If a circular loop was detected, draw all other connected segments around the loop
+            if (m_selectedCircle.isCircle) {
+                for (int segIdx : m_selectedCircle.segments) {
+                    if (segIdx == m_selectedEdgeIndex) continue;
+                    size_t se = static_cast<size_t>(segIdx * 2);
+                    if (se + 1 < edges.size()) {
+                        uint32_t si0 = edges[se];
+                        uint32_t si1 = edges[se + 1];
+                        if (si0 < verts.size() && si1 < verts.size()) {
+                            Geom::Point3D sp0(verts[si0].position[0], verts[si0].position[1], verts[si0].position[2]);
+                            Geom::Point3D sp1(verts[si1].position[0], verts[si1].position[1], verts[si1].position[2]);
+                            float ssx0, ssy0, ssx1, ssy1;
+                            if (camera.WorldToScreenPoint(sp0, vpW, vpH, ssx0, ssy0) &&
+                                camera.WorldToScreenPoint(sp1, vpW, vpH, ssx1, ssy1)) {
+                                fg->AddLine(ImVec2(ssx0, ssy0), ImVec2(ssx1, ssy1), IM_COL32(0, 0, 0, 200), 5.0f);
+                                fg->AddLine(ImVec2(ssx0, ssy0), ImVec2(ssx1, ssy1), IM_COL32(0, 230, 255, 255), 3.0f);
+                            }
+                        }
+                    }
+                }
+            }
+
             // 5. Edge Callout Badge at midpoint
             ImVec2 midPt((pt0.x + pt1.x) * 0.5f, (pt0.y + pt1.y) * 0.5f);
-            float length = static_cast<float>(p0.distance_to(p1));
-            char edgeBadge[64];
-            std::snprintf(edgeBadge, sizeof(edgeBadge), "Edge #%d  |  L = %.2f m", m_selectedEdgeIndex, length);
+            char edgeBadge[128];
+            if (m_selectedCircle.isCircle) {
+                std::snprintf(edgeBadge, sizeof(edgeBadge), "◯ Circle Loop (Ø %.2fm, R %.2fm | %zu segs)",
+                              m_selectedCircle.diameter, m_selectedCircle.radius, m_selectedCircle.segments.size());
+            } else {
+                float length = static_cast<float>(p0.distance_to(p1));
+                std::snprintf(edgeBadge, sizeof(edgeBadge), "Edge #%d  |  L = %.2f m", m_selectedEdgeIndex, length);
+            }
             ImVec2 badgeSz = ImGui::CalcTextSize(edgeBadge);
             float padX = 7.0f;
             float padY = 3.0f;
@@ -4100,7 +4323,43 @@ void CADGui::RenderMeasureToolDialog() {
         ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "CAD 3D Spatial Measurement");
         ImGui::Separator();
 
-        if (!m_measureHasP1 && !m_measureHasP2) {
+        if (m_measureHasCircle && m_measuredCircle.isCircle) {
+            // Circular Loop Geometry Display
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.06f, 0.20f, 0.26f, 0.92f));
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.15f, 0.85f, 0.95f, 1.0f));
+            ImGui::BeginChild("CircleMeasurementBanner", ImVec2(0, 56), true);
+            ImGui::TextColored(ImVec4(0.35f, 0.95f, 1.0f, 1.0f), "● Circular Loop Geometry Detected");
+            if (m_measureDisplayRadius) {
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.25f, 1.0f), "Radius (R): %.4f m", m_measuredCircle.radius);
+                ImGui::SameLine();
+                ImGui::TextDisabled("(Diameter Ø: %.4f m)", m_measuredCircle.diameter);
+            } else {
+                ImGui::TextColored(ImVec4(0.35f, 0.95f, 1.0f, 1.0f), "Diameter (Ø): %.4f m", m_measuredCircle.diameter);
+                ImGui::SameLine();
+                ImGui::TextDisabled("(Radius R: %.4f m)", m_measuredCircle.radius);
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor(2);
+            ImGui::Spacing();
+
+            // Toggle Button between Diameter and Radius
+            if (ImGui::Button(m_measureDisplayRadius ? "⇄ Switch to Diameter (Ø)" : "⇄ Switch to Radius (R)", ImVec2(-1, 26))) {
+                ToggleMeasureCircleRadiusMode();
+            }
+            ImGui::Spacing();
+
+            // Additional circular dimensions
+            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "Circular Metrics:");
+            ImGui::TextColored(ImVec4(0.40f, 0.95f, 0.65f, 1.0f), "  Circumference (2πR): %.4f m", m_measuredCircle.circumference);
+            ImGui::TextColored(ImVec4(1.0f, 0.70f, 0.35f, 1.0f), "  Enclosed Area (πR²):  %.4f m²", m_measuredCircle.area);
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "Spatial Orientation:");
+            ImGui::Text("  Center: (%.3f, %.3f, %.3f)", m_measuredCircle.center.x, m_measuredCircle.center.y, m_measuredCircle.center.z);
+            ImGui::Text("  Normal: (%.3f, %.3f, %.3f)", m_measuredCircle.normal.x, m_measuredCircle.normal.y, m_measuredCircle.normal.z);
+            ImGui::Text("  Fitted Segments: %zu edges (%zu loop points)", m_measuredCircle.segments.size(), m_measuredCircle.points.size());
+            ImGui::Spacing();
+        } else if (!m_measureHasP1 && !m_measureHasP2) {
             ImGui::TextDisabled("Status: Waiting for points...");
             ImGui::Spacing();
             ImGui::TextWrapped("Click any two points or vertices on 3D models in the viewport to measure distances and spatial angles.");
@@ -4179,7 +4438,7 @@ void CADGui::RenderMeasureToolDialog() {
 void CADGui::RenderMeasureVisualOverlay(Camera& camera, ViewportRenderer& renderer) {
     if (m_sketchModeActive) return;
     if (!m_measureToolActive && !m_showMeasureDialog) return;
-    if (!m_measureHasP1) return;
+    if (!m_measureHasP1 && !m_measureHasCircle) return;
 
     float vpW = static_cast<float>(renderer.GetWidth());
     float vpH = static_cast<float>(renderer.GetHeight());
@@ -4190,6 +4449,43 @@ void CADGui::RenderMeasureVisualOverlay(Camera& camera, ViewportRenderer& render
     }
 
     ImDrawList* fg = ImGui::GetForegroundDrawList();
+
+    // 0. Circular Edge Overlay
+    if (m_measureHasCircle && m_measuredCircle.isCircle) {
+        const auto& pts = m_measuredCircle.points;
+        for (size_t i = 0; i < pts.size(); ++i) {
+            size_t j = (i + 1) % pts.size();
+            float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+            if (camera.WorldToScreenPoint(pts[i], vpW, vpH, x0, y0) &&
+                camera.WorldToScreenPoint(pts[j], vpW, vpH, x1, y1)) {
+                fg->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(0, 240, 255, 255), 3.0f);
+            }
+        }
+
+        float cx = 0.0f, cy = 0.0f;
+        if (camera.WorldToScreenPoint(m_measuredCircle.center, vpW, vpH, cx, cy)) {
+            fg->AddCircleFilled(ImVec2(cx, cy), 5.0f, IM_COL32(255, 200, 50, 255), 16);
+            fg->AddLine(ImVec2(cx - 10.0f, cy), ImVec2(cx + 10.0f, cy), IM_COL32(255, 200, 50, 240), 1.5f);
+            fg->AddLine(ImVec2(cx, cy - 10.0f), ImVec2(cx, cy + 10.0f), IM_COL32(255, 200, 50, 240), 1.5f);
+
+            char badge[128];
+            if (m_measureDisplayRadius) {
+                std::snprintf(badge, sizeof(badge), "R: %.3f m  |  Circ: %.3f m  |  Area: %.3f m²",
+                    m_measuredCircle.radius, m_measuredCircle.circumference, m_measuredCircle.area);
+            } else {
+                std::snprintf(badge, sizeof(badge), "Ø: %.3f m  |  Circ: %.3f m  |  Area: %.3f m²",
+                    m_measuredCircle.diameter, m_measuredCircle.circumference, m_measuredCircle.area);
+            }
+            ImVec2 bSz = ImGui::CalcTextSize(badge);
+            ImVec2 b0(cx + 14.0f, cy - 12.0f);
+            ImVec2 b1(b0.x + bSz.x + 16.0f, b0.y + bSz.y + 8.0f);
+            fg->AddRectFilled(b0, b1, IM_COL32(10, 20, 28, 235), 4.0f);
+            fg->AddRect(b0, b1, IM_COL32(0, 230, 255, 230), 4.0f, 0, 1.5f);
+            fg->AddText(ImVec2(b0.x + 8.0f, b0.y + 4.0f), IM_COL32(180, 245, 255, 255), badge);
+        }
+    }
+
+    if (!m_measureHasP1) return;
 
     // 1. Point 1 (P1)
     float sx1 = 0.0f, sy1 = 0.0f;
@@ -4506,6 +4802,180 @@ void CADGui::RenderCutPreviewVisualOverlay(Camera& camera, ViewportRenderer& ren
                 fg->AddText(ImVec2(b0.x + 8.0f, b0.y + 4.0f), IM_COL32(255, 220, 150, 255), revBuf);
             }
         }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// STEP ISO 10303-21 AP214 Exporter Modal
+// -----------------------------------------------------------------------------
+void CADGui::RenderExportStepModal(
+    ParametricGraph& graph,
+    std::shared_ptr<DAGNode> selectedNode
+) {
+    if (!m_showExportStepModal) return;
+
+    ImGui::OpenPopup("Export Model to STEP (.stp)##Modal");
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Always);
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse;
+    if (ImGui::BeginPopupModal("Export Model to STEP (.stp)##Modal", &m_showExportStepModal, flags)) {
+        ImGui::TextColored(ImVec4(0.35f, 0.82f, 1.0f, 1.0f), "⬡ Save / Export Model as STEP (.stp)");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::TextWrapped("Exports 3D solid model geometry to an industry-standard ISO 10303-21 AP214 clear text file (.stp / .step). Compatible with SolidWorks, Fusion 360, FreeCAD, and Siemens NX.");
+        ImGui::Spacing();
+
+        // Export Scope Selection
+        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "Export Scope:");
+        ImGui::RadioButton("Entire Model (All Active Solids in Scene)##ExportScope", &m_exportStepScope, 0);
+
+        bool hasSelectedSolid = (selectedNode && selectedNode->IsSolidFeature() && !selectedNode->GetCachedVertices().empty());
+        if (!hasSelectedSolid) {
+            ImGui::BeginDisabled();
+        }
+        std::string selLabel = "Selected Solid Only";
+        if (hasSelectedSolid) {
+            selLabel += " (" + selectedNode->GetName() + ")";
+        }
+        selLabel += "##ExportScope";
+        ImGui::RadioButton(selLabel.c_str(), &m_exportStepScope, 1);
+        if (!hasSelectedSolid) {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "Output File Destination (.stp / .step):");
+        float browseBtnWidth = 92.0f;
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - browseBtnWidth - 8.0f);
+        ImGui::InputText("##ExportStepPath", m_exportStepPath, sizeof(m_exportStepPath));
+        ImGui::SameLine();
+        if (ImGui::Button("📂 Browse...", ImVec2(browseBtnWidth, 0))) {
+#ifdef _WIN32
+            OPENFILENAMEA ofn;
+            char szFile[MAX_PATH] = "";
+            if (m_exportStepPath[0] != '\0') {
+                std::strncpy(szFile, m_exportStepPath, sizeof(szFile) - 1);
+            } else {
+                std::strncpy(szFile, "model.stp", sizeof(szFile) - 1);
+            }
+
+            ZeroMemory(&ofn, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = NULL;
+            ofn.lpstrFile = szFile;
+            ofn.nMaxFile = sizeof(szFile);
+            ofn.lpstrFilter = "STEP Files (*.stp;*.step)\0*.stp;*.step\0All Files (*.*)\0*.*\0";
+            ofn.nFilterIndex = 1;
+            ofn.lpstrDefExt = "stp";
+            ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+
+            if (GetSaveFileNameA(&ofn) == TRUE) {
+                std::strncpy(m_exportStepPath, szFile, sizeof(m_exportStepPath) - 1);
+                m_exportStepPath[sizeof(m_exportStepPath) - 1] = '\0';
+                m_exportStepStatus.clear();
+            }
+#endif
+        }
+
+        // Geometry Summary Preview
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Model Geometry Summary:");
+        if (m_exportStepScope == 0) {
+            size_t totalSolids = 0;
+            size_t totalFaces = 0;
+            size_t totalVerts = 0;
+            for (const auto& n : graph.GetNodes()) {
+                if (n && n->IsSolidFeature() && !n->IsConsumed() && !n->HasConflict() && !n->GetCachedVertices().empty()) {
+                    totalSolids++;
+                    totalFaces += n->GetCachedIndices().size() / 3;
+                    totalVerts += n->GetCachedVertices().size();
+                }
+            }
+            ImGui::BulletText("Solids to Export: %zu", totalSolids);
+            ImGui::BulletText("Total Facets:     %zu", totalFaces);
+            ImGui::BulletText("Total Vertices:   %zu", totalVerts);
+        } else if (hasSelectedSolid) {
+            auto target = selectedNode->IsConsumed() ? selectedNode->GetActiveLeafFeature() : selectedNode;
+            ImGui::BulletText("Solid:          %s", target->GetName().c_str());
+            ImGui::BulletText("Total Facets:   %zu", target->GetCachedIndices().size() / 3);
+            ImGui::BulletText("Total Vertices: %zu", target->GetCachedVertices().size());
+        }
+
+        // Status banner
+        if (!m_exportStepStatus.empty()) {
+            ImGui::Spacing();
+            if (m_exportStepSuccess) {
+                ImGui::TextColored(ImVec4(0.3f, 0.95f, 0.5f, 1.0f), "%s", m_exportStepStatus.c_str());
+#ifdef _WIN32
+                ImGui::Spacing();
+                if (ImGui::Button("📁 Show in File Explorer", ImVec2(180, 26))) {
+                    std::string selectArg = "/select,\"" + m_lastExportedStepFullPath + "\"";
+                    ShellExecuteA(NULL, "open", "explorer.exe", selectArg.c_str(), NULL, SW_SHOWNORMAL);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("📂 Open Folder", ImVec2(120, 26))) {
+                    try {
+                        std::filesystem::path p(m_lastExportedStepFullPath);
+                        std::string parentDir = p.parent_path().string();
+                        ShellExecuteA(NULL, "open", parentDir.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                    } catch (...) {}
+                }
+#endif
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", m_exportStepStatus.c_str());
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.55f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.68f, 0.42f, 1.0f));
+        if (ImGui::Button("💾 Export to .STP", ImVec2(140, 32))) {
+            std::string outPath = m_exportStepPath;
+            if (outPath.empty()) {
+                outPath = "model.stp";
+            }
+            if (outPath.length() < 4 || (outPath.substr(outPath.length() - 4) != ".stp" && outPath.substr(outPath.length() - 5) != ".step")) {
+                outPath += ".stp";
+                std::snprintf(m_exportStepPath, sizeof(m_exportStepPath), "%s", outPath.c_str());
+            }
+
+            Tessera::Export::StepExportResult res;
+            if (m_exportStepScope == 1 && hasSelectedSolid) {
+                res = Tessera::Export::StepExporter::ExportSolid(outPath, selectedNode);
+            } else {
+                res = Tessera::Export::StepExporter::ExportModel(outPath, graph);
+            }
+
+            if (res.success) {
+                m_exportStepSuccess = true;
+                m_lastExportedStepFullPath = res.filePath;
+                char msg[512];
+                std::snprintf(msg, sizeof(msg), "✓ Successfully exported %zu solid(s), %zu faces (%zu bytes)\nLocation: %s",
+                              res.solidCount, res.faceCount, res.fileSizeBytes, res.filePath.c_str());
+                m_exportStepStatus = msg;
+            } else {
+                m_exportStepSuccess = false;
+                m_lastExportedStepFullPath.clear();
+                m_exportStepStatus = "✕ Export failed: " + res.errorMessage;
+            }
+        }
+        ImGui::PopStyleColor(2);
+
+        ImGui::SameLine();
+        if (ImGui::Button("Close", ImVec2(90, 32))) {
+            m_showExportStepModal = false;
+            m_exportStepStatus.clear();
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
     }
 }
 

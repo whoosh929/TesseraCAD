@@ -28,6 +28,7 @@ public:
         m_edgeIndex(edgeIndex),
         m_distance(std::max(0.01f, distance)) {
         if (m_targetNode) {
+            AddInput(m_targetNode);
             m_targetNode->SetConsumed(true);
         }
     }
@@ -39,6 +40,7 @@ public:
     }
 
     [[nodiscard]] std::shared_ptr<DAGNode> GetTargetFeature() const noexcept { return m_targetNode; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetTargetSolid() const noexcept override { return m_targetNode; }
     [[nodiscard]] std::shared_ptr<DAGNode> GetParentFeature() const noexcept override { return m_targetNode; }
     [[nodiscard]] bool HasParentFeature() const noexcept override { return m_targetNode != nullptr; }
     [[nodiscard]] int GetReferencedEdgeIndex() const noexcept { return m_edgeIndex; }
@@ -269,11 +271,71 @@ public:
         m_cachedVertices = std::move(vertices);
         m_cachedIndices = std::move(indices);
         m_cachedEdges = TessellationUtils::ExtractFeatureEdges(m_cachedVertices, m_cachedIndices, 30.0f);
+        ApplyAdditionalEdges();
         ComputeFaces();
         ClearDirty();
     }
 
+    void SetAdditionalEdges(std::vector<std::pair<Geom::Point3D, Geom::Point3D>> edges) {
+        m_extraEdges = std::move(edges);
+        MarkDirty();
+    }
+    [[nodiscard]] const std::vector<std::pair<Geom::Point3D, Geom::Point3D>>& GetAdditionalEdges() const noexcept {
+        return m_extraEdges;
+    }
+
 private:
+    static int FindEdgeOnSegment(const std::vector<CADVertex>& verts, const std::vector<uint32_t>& edges,
+                                 const Geom::Point3D& a, const Geom::Point3D& b) {
+        Geom::Vector3D axis = b - a;
+        double len = axis.length();
+        if (len < 1e-6) return -1;
+        axis = axis / len;
+        int best = -1;
+        double bestLen = 1e-4;
+        for (size_t e = 0; e + 1 < edges.size(); e += 2) {
+            Geom::Point3D p(verts[edges[e]].position[0], verts[edges[e]].position[1], verts[edges[e]].position[2]);
+            Geom::Point3D q(verts[edges[e + 1]].position[0], verts[edges[e + 1]].position[1], verts[edges[e + 1]].position[2]);
+            bool onLine = true;
+            for (const auto& x : {p, q}) {
+                Geom::Vector3D d = x - a;
+                double t = d.dot(axis);
+                if (t < -1e-3 || t > len + 1e-3 || (d - axis * t).length() > 1e-3) onLine = false;
+            }
+            double el = p.distance_to(q);
+            if (onLine && el > bestLen) {
+                bestLen = el;
+                best = static_cast<int>(e / 2);
+            }
+        }
+        return best;
+    }
+
+    void ApplyAdditionalEdges() {
+        if (m_extraEdges.empty()) return;
+        bool applied = false;
+        for (const auto& [a, b] : m_extraEdges) {
+            auto edges = TessellationUtils::ExtractFeatureEdges(m_cachedVertices, m_cachedIndices, 30.0f);
+            int idx = FindEdgeOnSegment(m_cachedVertices, edges, a, b);
+            if (idx < 0) continue;
+            const auto& v0 = m_cachedVertices[edges[idx * 2]].position;
+            const auto& v1 = m_cachedVertices[edges[idx * 2 + 1]].position;
+            Geom::Point3D p0(v0[0], v0[1], v0[2]);
+            Geom::Point3D p1(v1[0], v1[1], v1[2]);
+            std::vector<CADVertex> vertices;
+            std::vector<uint32_t> indices;
+            if (BuildEdgeBlend(m_cachedVertices, m_cachedIndices, edges, idx, p0, p1,
+                               m_distance, EdgeBlendKind::Bevel, vertices, indices)) {
+                m_cachedVertices = std::move(vertices);
+                m_cachedIndices = std::move(indices);
+                applied = true;
+            }
+        }
+        m_cachedEdges = TessellationUtils::ExtractFeatureEdges(m_cachedVertices, m_cachedIndices, 30.0f);
+        if (applied) m_profile.clear();
+    }
+
+    std::vector<std::pair<Geom::Point3D, Geom::Point3D>> m_extraEdges;
     std::shared_ptr<DAGNode> m_targetNode{nullptr};
     uint64_t m_targetNodeId{0};
     int m_edgeIndex{0};

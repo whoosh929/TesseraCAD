@@ -306,6 +306,7 @@ public:
     [[nodiscard]] bool IsVertexAssociative() const noexcept { return m_type == DatumPlaneType::VertexAssociative; }
     [[nodiscard]] bool IsEdgeAssociative() const noexcept { return m_type == DatumPlaneType::EdgeAssociative; }
 
+    [[nodiscard]] bool IsSolidFeature() const noexcept override { return false; }
     [[nodiscard]] bool HasConflict() const noexcept override { return m_hasConflict; }
     [[nodiscard]] std::string GetConflictMessage() const noexcept override { return m_conflictMessage; }
     void ClearConflict() noexcept { m_hasConflict = false; m_conflictMessage.clear(); }

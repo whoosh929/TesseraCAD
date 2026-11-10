@@ -3,6 +3,12 @@
 #include "engine/sketch/SketchProfile.hpp"
 #include "engine/sketch/ProfileTessellator.hpp"
 #include "engine/sketch/SketchFilletChamfer.hpp"
+#include "engine/graph/SketchNode.hpp"
+#include "engine/graph/ParametricGraph.hpp"
+#include "engine/graph/ExtrudeNode.hpp"
+#include "engine/graph/DatumPlaneNode.hpp"
+#include "engine/concurrency/AtomicMeshExchange.hpp"
+#include "engine/concurrency/ThreadPool.hpp"
 #include <iostream>
 #include <cmath>
 #include <cassert>
@@ -276,6 +282,177 @@ bool TestSketch2DFilletAndChamfer() {
     return true;
 }
 
+bool TestSketchAxisAndOriginConstraints() {
+    std::cout << "[Test] 2D Sketch Axis and Origin Dimension Constraints...\n";
+
+    // 1. Rectangle profile with 4 corners
+    // Corner 0: (1.0, 1.0), Corner 1: (5.0, 1.0), Corner 2: (5.0, 4.0), Corner 3: (1.0, 4.0)
+    std::vector<std::array<float, 2>> rect = {
+        {1.0f, 1.0f},
+        {5.0f, 1.0f},
+        {5.0f, 4.0f},
+        {1.0f, 4.0f}
+    };
+
+    // Constrain Corner 0 to Origin distance = 5.0m
+    std::map<size_t, float> edgeConstraints; // no edge constraints initially
+    std::map<size_t, Tessera::VertexAxisConstraint> vertexConstraints;
+    Tessera::VertexAxisConstraint c0;
+    c0.lockOriginDist = true;
+    c0.originDist = 5.0f;
+    vertexConstraints[0] = c0;
+
+    Tessera::SketchNode::EnforceConstraints(rect, edgeConstraints, vertexConstraints, true);
+
+    float dOrig = std::hypot(rect[0][0], rect[0][1]);
+    TEST_ASSERT(std::abs(dOrig - 5.0f) < 1e-4f, "Corner 0 origin distance must be constrained to 5.0m");
+    // Initially (1, 1), normalized is (1/sqrt(2), 1/sqrt(2)), scaled by 5 is ~3.5355m
+    TEST_ASSERT(std::abs(rect[0][0] - (5.0f / std::sqrt(2.0f))) < 1e-3f, "Corner 0 U coordinate must lie on radial vector");
+    TEST_ASSERT(std::abs(rect[0][1] - (5.0f / std::sqrt(2.0f))) < 1e-3f, "Corner 0 V coordinate must lie on radial vector");
+
+    // 2. Constrain Corner 0 to U-Axis (distance |V| = 2.0) and V-Axis (distance |U| = 3.0)
+    vertexConstraints.clear();
+    Tessera::VertexAxisConstraint cAxes;
+    cAxes.lockUAxisDist = true;
+    cAxes.uAxisDist = 2.0f;
+    cAxes.lockVAxisDist = true;
+    cAxes.vAxisDist = 3.0f;
+    vertexConstraints[0] = cAxes;
+
+    rect[0] = {1.0f, 1.0f};
+    Tessera::SketchNode::EnforceConstraints(rect, edgeConstraints, vertexConstraints, true);
+
+    TEST_ASSERT(std::abs(rect[0][0] - 3.0f) < 1e-4f, "Corner 0 V-Axis distance (|U|) must be constrained to 3.0m");
+    TEST_ASSERT(std::abs(rect[0][1] - 2.0f) < 1e-4f, "Corner 0 U-Axis distance (|V|) must be constrained to 2.0m");
+
+    // 3. Combined edge length constraint and origin constraint
+    // Edge 0 (from Corner 0 to Corner 1) has target length = 4.0m
+    // Corner 0 is locked to (3.0, 2.0) via U/V axis constraints
+    edgeConstraints[0] = 4.0f;
+    rect[1] = {10.0f, 2.0f}; // distorted
+    Tessera::SketchNode::EnforceConstraints(rect, edgeConstraints, vertexConstraints, true);
+
+    float edge0Len = std::hypot(rect[1][0] - rect[0][0], rect[1][1] - rect[0][1]);
+    TEST_ASSERT(std::abs(edge0Len - 4.0f) < 1e-4f, "Edge 0 length must satisfy 4.0m constraint");
+    TEST_ASSERT(std::abs(rect[0][0] - 3.0f) < 1e-4f, "Corner 0 must remain locked to V-axis distance 3.0m");
+    TEST_ASSERT(std::abs(rect[0][1] - 2.0f) < 1e-4f, "Corner 0 must remain locked to U-axis distance 2.0m");
+
+    // 4. Projected Datum Axis Line Constraint
+    // Define a datum axis line passing through (0, 0) along direction (1, 0) [horizontal line]
+    Tessera::ProjectedDatumAxis dAx;
+    dAx.id = 101;
+    dAx.name = "RefAxis_X";
+    dAx.p0 = {0.0f, 0.0f};
+    dAx.dir = {1.0f, 0.0f};
+    dAx.valid = true;
+
+    vertexConstraints.clear();
+    edgeConstraints.clear();
+    Tessera::VertexAxisConstraint cDAx;
+    cDAx.lockDatumAxisDist = true;
+    cDAx.datumAxisDist = 6.5f;
+    cDAx.datumAxisId = 101;
+    vertexConstraints[0] = cDAx;
+
+    rect[0] = {2.0f, 1.0f};
+    Tessera::SketchNode::EnforceConstraints(rect, edgeConstraints, vertexConstraints, true, -1, {dAx});
+
+    // Distance to horizontal line Y=0 is |V|
+    TEST_ASSERT(std::abs(std::abs(rect[0][1]) - 6.5f) < 1e-4f, "Corner 0 perpendicular distance to datum axis must be 6.5m");
+
+    // 5. SketchNode integration: set and get vertex axis constraints
+    Tessera::SketchNode sketchNode("TestSketch", Tessera::SketchPlane::XY_Front);
+    sketchNode.SetShapes({ rect });
+    sketchNode.SetVertexOriginConstraint(0, 0, 5.0f);
+    TEST_ASSERT(sketchNode.IsVertexOriginConstrained(0, 0), "SketchNode must register vertex origin constraint");
+    TEST_ASSERT(std::abs(sketchNode.GetVertexOriginDistance(0, 0) - 5.0f) < 1e-4f, "SketchNode must store origin distance 5.0m");
+
+    sketchNode.RemoveVertexOriginConstraint(0, 0);
+    TEST_ASSERT(!sketchNode.IsVertexOriginConstrained(0, 0), "SketchNode must allow removing vertex origin constraint");
+
+    return true;
+}
+
+bool TestExtrudeFromFaceSketch() {
+    std::cout << "[Test] Extrude Feature From 2D Sketch on Model Face...\n";
+
+    auto pool = std::make_shared<Tessera::ThreadPool>(2);
+    Tessera::ParametricGraph graph(pool);
+    Tessera::AtomicMeshExchange exchange;
+
+    // 1. Base sketch and extrude
+    std::vector<std::array<float, 2>> rect = {
+        {-2.0f, -2.0f}, {2.0f, -2.0f}, {2.0f, 2.0f}, {-2.0f, 2.0f}
+    };
+    auto sk1 = std::make_shared<Tessera::SketchNode>("Sketch_Base", Tessera::SketchPlane::XZ_Ground, rect);
+    graph.AddNode(sk1);
+
+    auto ext1 = std::make_shared<Tessera::ExtrudeNode>("Extrude_Base", sk1, 3.0f, Tessera::ExtrudeOperation::Boss, nullptr);
+    graph.AddNode(ext1);
+
+    ext1->Evaluate(nullptr, exchange);
+
+    TEST_ASSERT(sk1->IsConsumed(), "Base sketch must be consumed by ext1");
+    TEST_ASSERT(!ext1->IsConsumed(), "Base extrude must NOT be consumed");
+    TEST_ASSERT(!ext1->GetCachedVertices().empty(), "Base extrude must have mesh vertices");
+
+    // 2. Create DatumPlane on top face (normal = +Y, origin = (0, 3, 0))
+    Tessera::FaceInfo topFace;
+    bool foundFace = ext1->GetFace(0, topFace);
+    TEST_ASSERT(foundFace, "Must find top face on ext1");
+
+    auto planeNode = std::make_shared<Tessera::DatumPlaneNode>("Plane_Face_1", ext1, 0, topFace.plane, 0.0);
+    planeNode->Evaluate(nullptr, exchange);
+    graph.AddNode(planeNode);
+
+    Tessera::Geom::Plane effPl = planeNode->GetPlane();
+    auto skFace = std::make_shared<Tessera::SketchNode>("Sketch_Face_1", planeNode);
+    skFace->SetParentFeature(ext1);
+    skFace->SetPosition(static_cast<float>(effPl.origin.x), static_cast<float>(effPl.origin.y), static_cast<float>(effPl.origin.z));
+
+    // Draw circle profile on face sketch
+    std::vector<std::array<float, 2>> circlePts;
+    for (int i = 0; i < 16; ++i) {
+        float angle = static_cast<float>(i) * (6.2831853f / 16.0f);
+        circlePts.push_back({ std::cos(angle) * 1.0f, std::sin(angle) * 1.0f });
+    }
+    skFace->SetShapes({ circlePts });
+    skFace->Evaluate(nullptr, exchange);
+    graph.AddNode(skFace);
+
+    std::cout << "skFace->IsConsumed(): " << skFace->IsConsumed() << "\n";
+    std::cout << "skFace->GetCachedVertices().size(): " << skFace->GetCachedVertices().size() << "\n";
+    std::cout << "skFace->HasCustomPlane(): " << skFace->HasCustomPlane() << "\n";
+
+    // 3. Test available sketches in graph
+    const auto& nodes = graph.GetNodes();
+    std::vector<std::shared_ptr<Tessera::SketchNode>> availableSketches;
+    for (const auto& n : nodes) {
+        if (auto s = std::dynamic_pointer_cast<Tessera::SketchNode>(n)) {
+            if (!s->IsConsumed()) {
+                availableSketches.push_back(s);
+            }
+        }
+    }
+    std::cout << "availableSketches count: " << availableSketches.size() << "\n";
+    for (const auto& s : availableSketches) {
+        std::cout << "  - Available sketch: " << s->GetName() << "\n";
+    }
+
+    // 4. Create Extrude off skFace
+    auto extFace = std::make_shared<Tessera::ExtrudeNode>("Extrude_Face_1", skFace, 1.5f, Tessera::ExtrudeOperation::Boss, ext1);
+    graph.AddNode(extFace);
+    extFace->Evaluate(nullptr, exchange);
+
+    std::cout << "extFace->GetCachedVertices().size(): " << extFace->GetCachedVertices().size() << "\n";
+    std::cout << "extFace->GetCachedIndices().size(): " << extFace->GetCachedIndices().size() << "\n";
+
+    TEST_ASSERT(skFace->IsConsumed(), "skFace must now be consumed by extFace");
+    TEST_ASSERT(!extFace->GetCachedVertices().empty(), "Extrude off face sketch must produce vertices");
+
+    return true;
+}
+
 int main() {
     std::cout << "=========================================================\n";
     std::cout << "     TesseraCAD 2D Sketch & Profile Unit Tests          \n";
@@ -290,6 +467,8 @@ int main() {
     passed &= TestMultipleDisjointProfiles();
     passed &= TestProfileTessellation();
     passed &= TestSketch2DFilletAndChamfer();
+    passed &= TestSketchAxisAndOriginConstraints();
+    passed &= TestExtrudeFromFaceSketch();
 
     std::cout << "=========================================================\n";
     if (passed) {

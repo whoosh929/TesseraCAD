@@ -237,6 +237,7 @@ public:
     [[nodiscard]] bool IsFaceAssociative() const noexcept { return m_type == DatumAxisType::FaceAssociative; }
     [[nodiscard]] bool IsEdgeAssociative() const noexcept { return m_type == DatumAxisType::EdgeAssociative; }
 
+    [[nodiscard]] bool IsSolidFeature() const noexcept override { return false; }
     [[nodiscard]] bool HasConflict() const noexcept override { return m_hasConflict; }
     [[nodiscard]] std::string GetConflictMessage() const noexcept override { return m_conflictMessage; }
     void ClearConflict() noexcept { m_hasConflict = false; m_conflictMessage.clear(); }

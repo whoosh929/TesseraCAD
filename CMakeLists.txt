@@ -101,6 +101,10 @@ target_sources(tessera_engine
         src/engine/render/CADShaders.hpp
         src/engine/render/ViewportRenderer.hpp
         src/engine/render/ViewportRenderer.cpp
+
+        # Import & Export Kernels
+        src/engine/export/StepExporter.hpp
+        src/engine/export/StepExporter.cpp
 )
 
 # Configure platform-specific HAL sources
@@ -170,6 +174,10 @@ target_link_libraries(tessera_cad
         volk
         Vulkan-Headers
 )
+
+if(WIN32)
+    target_link_libraries(tessera_cad PRIVATE comdlg32 shell32)
+endif()
 
 target_compile_features(tessera_cad PUBLIC cxx_std_20)
 
@@ -270,3 +278,25 @@ set_target_properties(test_picking PROPERTIES
 )
 
 add_test(NAME PickingTests COMMAND test_picking)
+
+add_executable(test_step_export
+    tests/test_step_export.cpp
+)
+
+target_include_directories(test_step_export
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(test_step_export
+    PRIVATE
+        tessera_engine
+)
+
+target_compile_features(test_step_export PUBLIC cxx_std_20)
+
+set_target_properties(test_step_export PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_test(NAME StepExportTests COMMAND test_step_export)

@@ -3688,6 +3688,179 @@ bool Test2DSketchDeletionDefaultToolAndEmptySketchWorkflow() {
     return true;
 }
 
+bool TestActiveLeafSubElementPickingAndEndModelState() {
+    std::cout << "[Test] Active Leaf Sub-Element Picking and End-Model State Reflectivity...\n";
+
+    ParametricGraph graph(nullptr);
+    MockTestDevice mockDevice;
+    AtomicMeshExchange exchange;
+
+    // 1. Create a base box feature
+    auto boxSketch = std::make_shared<SketchNode>("BoxSketch", SketchPlane::XZ_Ground);
+    boxSketch->SetPresetRectangle(2.0f, 2.0f);
+    graph.AddNode(boxSketch);
+
+    auto baseBox = std::make_shared<ExtrudeNode>("BaseBox", boxSketch, 2.0f);
+    graph.AddNode(baseBox);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!baseBox->IsConsumed(), "Initial box feature must not be consumed");
+    TEST_ASSERT(graph.GetActiveLeafForNode(baseBox) == baseBox, "Active leaf of unconsumed box must be itself");
+
+    // 2. Apply a Fillet to edge #0 of baseBox
+    auto fillet = std::make_shared<FilletNode>("BoxEdgeFillet", baseBox, 0, 0.3f);
+    graph.AddNode(fillet);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(baseBox->IsConsumed(), "Base box must now be marked consumed after applying Fillet");
+    TEST_ASSERT(!fillet->IsConsumed(), "Fillet must not be consumed as it is the active leaf");
+    TEST_ASSERT(graph.GetActiveLeafForNode(baseBox) == fillet, "Active leaf for baseBox must resolve to fillet");
+
+    // 3. Sub-element picking: pick sub-elements using targetNodeId = baseBox->GetId() (as when clicking upstream feature in tree)
+    Geom::Point3D rayOrigin(0.0, 5.0, 0.0);
+    Geom::Vector3D rayDir(0.0, -1.0, 0.0);
+    auto pickResult = graph.PickSubElement(rayOrigin, rayDir, baseBox->GetId());
+
+    // Result nodeId MUST be the fillet (active leaf / end-model state), not the consumed baseBox
+    TEST_ASSERT(pickResult.nodeId == fillet->GetId(), "Sub-element picking on consumed node must resolve to active leaf feature ID");
+    TEST_ASSERT(pickResult.edgeIndex >= 0 || pickResult.faceIndex >= 0 || pickResult.vertexIndex >= 0, "Pick on active leaf must hit sub-element");
+
+    // 4. Apply Chamfer on top of the Fillet (forming a 2-deep DAG chain: Box -> Fillet -> Chamfer)
+    auto chamfer = std::make_shared<ChamferNode>("BoxEdgeChamfer", fillet, 1, 0.15f);
+    graph.AddNode(chamfer);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(fillet->IsConsumed(), "Fillet must now be consumed after downstream Chamfer applied");
+    TEST_ASSERT(!chamfer->IsConsumed(), "Chamfer must be unconsumed leaf");
+    TEST_ASSERT(graph.GetActiveLeafForNode(baseBox) == chamfer, "Active leaf for baseBox must resolve all the way down to Chamfer");
+    TEST_ASSERT(graph.GetActiveLeafForNode(fillet) == chamfer, "Active leaf for Fillet must resolve to Chamfer");
+
+    auto pickResult2 = graph.PickSubElement(rayOrigin, rayDir, baseBox->GetId());
+    TEST_ASSERT(pickResult2.nodeId == chamfer->GetId(), "Sub-element picking on root box must resolve to ultimate leaf chamfer");
+
+    // 5. Test 2D sketch on face: must NOT be consumed and must be available for downstream extrusion
+    int topFaceIdx = -1;
+    for (const auto& f : chamfer->GetFaces()) {
+        if (f.plane.normal.y > 0.9) { topFaceIdx = f.faceIndex; break; }
+    }
+    TEST_ASSERT(topFaceIdx >= 0, "Top face must exist on chamfered model");
+    FaceInfo topFace;
+    chamfer->GetFace(topFaceIdx, topFace);
+
+    auto planeNode = std::make_shared<DatumPlaneNode>("Plane_ChamferTop", chamfer, topFaceIdx, topFace.plane, 0.0);
+    graph.AddNode(planeNode);
+    planeNode->Evaluate(&mockDevice, exchange);
+
+    auto faceSketch = std::make_shared<SketchNode>("Sketch_ChamferTop", planeNode);
+    faceSketch->SetPresetRegularPolygon(16, 0.5f);
+    graph.AddNode(faceSketch);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(!faceSketch->IsConsumed(), "Face sketch on chamfered model must not be consumed");
+    TEST_ASSERT(graph.GetActiveLeafForNode(chamfer) == chamfer, "Chamfer active leaf must remain chamfer (not the sketch or datum plane)");
+
+    // Extrude off the face sketch
+    auto bossExtrude = std::make_shared<ExtrudeNode>("Boss_From_FaceSketch", faceSketch, 1.0f, ExtrudeOperation::Boss, chamfer);
+    graph.AddNode(bossExtrude);
+    graph.EvaluateDirtyNodes(&mockDevice, exchange);
+
+    TEST_ASSERT(faceSketch->IsConsumed(), "Face sketch must now be consumed by the new boss extrude");
+    TEST_ASSERT(!bossExtrude->GetFaces().empty(), "Boss extrude must have generated valid 3D faces");
+
+    return true;
+}
+
+bool TestCircularLoopDetectionAndMeasureAndFaceSketchExtrusion() {
+    std::cout << "[Test] Circular Loop Detection, Measure Tool Propagation, and View-Facing Picking...\n";
+
+    AtomicMeshExchange exchange;
+    auto pool = std::make_shared<ThreadPool>(2);
+    ParametricGraph graph(pool);
+
+    // 1. Create Cylinder via Revolve
+    auto revSketch = std::make_shared<SketchNode>("CylinderProfile", SketchPlane::XY_Front);
+    std::vector<std::array<float, 2>> rectProfile = {
+        {0.0f, 0.0f},
+        {1.0f, 0.0f}, // Radius 1.0m
+        {1.0f, 3.0f}, // Height 3.0m
+        {0.0f, 3.0f}
+    };
+    revSketch->SetShapes({ rectProfile });
+    revSketch->Evaluate(nullptr, exchange);
+    graph.AddNode(revSketch);
+
+    auto cylinder = std::make_shared<RevolveNode>("CylinderSolid", revSketch, 360.0f, RevolveAxisMode::Sketch_V_Axis, RevolveOperation::Boss);
+    graph.AddNode(cylinder);
+    cylinder->Evaluate(nullptr, exchange);
+
+    const auto& verts = cylinder->GetCachedVertices();
+    const auto& edges = cylinder->GetCachedEdges();
+    TEST_ASSERT(!verts.empty(), "Cylinder must produce vertices");
+    TEST_ASSERT(!edges.empty(), "Cylinder must produce edges");
+
+    // 2. Cast ray at the top circular rim of the cylinder
+    // Top rim is at Y = 3.0m, radius = 1.0m
+    // Find an edge on the top rim (Y approx 3.0)
+    int topEdgeIdx = -1;
+    Point3D rimMidPt;
+    for (size_t e = 0; e < edges.size() / 2; ++e) {
+        auto p0 = verts[edges[e * 2]].position;
+        auto p1 = verts[edges[e * 2 + 1]].position;
+        if (std::abs(p0[1] - 3.0f) < 0.01f && std::abs(p1[1] - 3.0f) < 0.01f) {
+            topEdgeIdx = static_cast<int>(e);
+            rimMidPt = Point3D(0.5 * (p0[0] + p1[0]), 3.0, 0.5 * (p0[2] + p1[2]));
+            break;
+        }
+    }
+    TEST_ASSERT(topEdgeIdx >= 0, "Must have top rim edges in cylinder mesh");
+
+    auto directCirc = DetectCircularLoop(verts, edges, topEdgeIdx);
+    TEST_ASSERT(directCirc.isCircle, "Circular rim loop must be detected as a circle");
+    TEST_ASSERT(std::abs(directCirc.radius - 1.0) < 0.05, "Detected radius must be approx 1.0m");
+    TEST_ASSERT(std::abs(directCirc.diameter - 2.0) < 0.10, "Detected diameter must be approx 2.0m");
+    TEST_ASSERT(std::abs(directCirc.circumference - 2.0 * 3.14159265) < 0.25, "Circumference must be approx 2*pi*R");
+    TEST_ASSERT(std::abs(directCirc.area - 3.14159265) < 0.25, "Area must be approx pi*R^2");
+    TEST_ASSERT(directCirc.segments.size() >= 16, "Cylinder circular loop must contain all facet segments around rim");
+
+    // Cast ray at the circular rim edge midpoint
+    Point3D rayOrigin(rimMidPt.x, 5.0, rimMidPt.z);
+    Vector3D rayDir(0.0, -1.0, 0.0);
+    auto subRes = graph.PickSubElement(rayOrigin, rayDir, cylinder->GetId(), 0.35, 0.35, SelectionFilter::All);
+
+    TEST_ASSERT(subRes.edgeIndex >= 0, "Must hit an edge on top circular rim");
+    TEST_ASSERT(subRes.circularEdge.isCircle, "Circular rim loop must be detected as a circle");
+    TEST_ASSERT(std::abs(subRes.circularEdge.radius - 1.0) < 0.05, "Detected radius must be approx 1.0m");
+    TEST_ASSERT(subRes.circularEdge.segments.size() >= 16, "Must detect all circular segments");
+
+    // 3. View-Facing selection test: cast ray down from +Y above a 3D box
+    ParametricGraph boxGraph(pool);
+    auto boxSketch = std::make_shared<SketchNode>("BoxSketch", SketchPlane::XZ_Ground);
+    boxSketch->SetPresetRectangle(2.0f, 2.0f);
+    boxSketch->Evaluate(nullptr, exchange);
+    boxGraph.AddNode(boxSketch);
+
+    auto box = std::make_shared<ExtrudeNode>("BoxSolid", boxSketch, 2.0f, ExtrudeOperation::Boss);
+    boxGraph.AddNode(box);
+    box->Evaluate(nullptr, exchange);
+
+    // Ray looking down from Y = +10 towards the top face
+    Point3D topRayOrig(0.0, 10.0, 0.0);
+    Vector3D topRayDir(0.0, -1.0, 0.0);
+    auto topSubRes = boxGraph.PickSubElement(topRayOrig, topRayDir, box->GetId(), 0.25, 0.25, SelectionFilter::All);
+    TEST_ASSERT(topSubRes.faceIndex >= 0, "Must hit the front-facing top face");
+
+    // Cast ray close to the back/bottom edge while viewing from front: back-facing edge must be rejected
+    Point3D rearRayOrig(0.0, 1.0, -0.99);
+    Vector3D frontRayDir(0.0, 0.0, -1.0);
+    auto rearSubRes = boxGraph.PickSubElement(rearRayOrig, frontRayDir, box->GetId(), 0.15, 0.15, SelectionFilter::All);
+    if (rearSubRes.edgeIndex >= 0) {
+        // Edge must be on the front view-facing side (+Z or side), not the back occluded face
+        TEST_ASSERT(rearSubRes.edgeP0.z >= -0.1 || rearSubRes.edgeP1.z >= -0.1, "Occluded back-facing edge must not be picked");
+    }
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << " Running Tessera 3D Viewport Picking Tests\n";
@@ -3739,6 +3912,8 @@ int main() {
     pass &= TestExtrudeAndRevolveCutToggleOperation();
     pass &= TestCutExtrudeFaceSketchMaterialRemovalAndTreeHierarchy();
     pass &= Test2DSketchDeletionDefaultToolAndEmptySketchWorkflow();
+    pass &= TestActiveLeafSubElementPickingAndEndModelState();
+    pass &= TestCircularLoopDetectionAndMeasureAndFaceSketchExtrusion();
 
     if (pass) {
         std::cout << "\n[PASS] All 3D Viewport Picking test suites succeeded!\n";

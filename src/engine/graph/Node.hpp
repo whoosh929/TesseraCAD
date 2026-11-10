@@ -82,16 +82,24 @@ public:
         return result;
     }
 
+    /// For downstream solid modifications (Fillet, Chamfer, Cut Extrude, Cut Revolve), returns the target solid being modified
+    [[nodiscard]] virtual std::shared_ptr<DAGNode> GetTargetSolid() const noexcept { return nullptr; }
+
+    /// Returns true if this node produces or represents a solid 3D body (Extrude, Revolve, Fillet, Chamfer, etc.)
+    [[nodiscard]] virtual bool IsSolidFeature() const noexcept { return true; }
+
     /// Recursively traces downstream solid feature dependencies to find the latest active leaf feature
     [[nodiscard]] std::shared_ptr<DAGNode> GetActiveLeafFeature() {
         std::shared_ptr<DAGNode> curr = shared_from_this();
         bool advanced = true;
-        while (advanced) {
+        size_t safetyCounter = 0;
+        while (advanced && safetyCounter++ < 100) {
             advanced = false;
             std::shared_ptr<DAGNode> bestNext = nullptr;
             for (const auto& depWeak : curr->m_dependents) {
                 if (auto dep = depWeak.lock()) {
                     if (dep->HasConflict()) continue;
+                    if (!dep->IsSolidFeature()) continue;
                     bestNext = dep;
                     if (!dep->IsConsumed()) {
                         break;

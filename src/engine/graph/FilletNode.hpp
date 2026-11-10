@@ -29,6 +29,7 @@ public:
         m_edgeIndex(edgeIndex),
         m_radius(std::max(0.01f, radius)) {
         if (m_targetNode) {
+            AddInput(m_targetNode);
             m_targetNode->SetConsumed(true);
         }
     }
@@ -40,6 +41,7 @@ public:
     }
 
     [[nodiscard]] std::shared_ptr<DAGNode> GetTargetFeature() const noexcept { return m_targetNode; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetTargetSolid() const noexcept override { return m_targetNode; }
     [[nodiscard]] std::shared_ptr<DAGNode> GetParentFeature() const noexcept override { return m_targetNode; }
     [[nodiscard]] bool HasParentFeature() const noexcept override { return m_targetNode != nullptr; }
     [[nodiscard]] int GetReferencedEdgeIndex() const noexcept { return m_edgeIndex; }

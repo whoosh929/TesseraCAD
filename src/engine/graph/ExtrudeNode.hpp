@@ -90,6 +90,9 @@ public:
     [[nodiscard]] bool IsCut() const noexcept { return m_operation == ExtrudeOperation::Cut; }
 
     [[nodiscard]] std::shared_ptr<DAGNode> GetTargetFeature() const noexcept { return m_targetNode; }
+    [[nodiscard]] std::shared_ptr<DAGNode> GetTargetSolid() const noexcept override {
+        return (m_operation == ExtrudeOperation::Cut) ? m_targetNode : nullptr;
+    }
     [[nodiscard]] std::shared_ptr<DAGNode> GetParentFeature() const noexcept override {
         return (m_operation == ExtrudeOperation::Cut) ? m_targetNode : nullptr;
     }

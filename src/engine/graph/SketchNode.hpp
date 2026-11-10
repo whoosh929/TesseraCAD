@@ -25,6 +25,34 @@ enum class SketchPreset : uint8_t {
     Custom = 5
 };
 
+struct VertexAxisConstraint {
+    bool lockOriginDist{false};
+    float originDist{0.0f};
+
+    bool lockUAxisDist{false}; // distance to U-Axis (|V|)
+    float uAxisDist{0.0f};
+
+    bool lockVAxisDist{false}; // distance to V-Axis (|U|)
+    float vAxisDist{0.0f};
+
+    bool lockDatumAxisDist{false}; // distance to reference DatumAxis line
+    float datumAxisDist{0.0f};
+    uint64_t datumAxisId{0};
+    std::string datumAxisName;
+
+    [[nodiscard]] bool HasAnyConstraint() const noexcept {
+        return lockOriginDist || lockUAxisDist || lockVAxisDist || lockDatumAxisDist;
+    }
+};
+
+struct ProjectedDatumAxis {
+    uint64_t id{0};
+    std::string name;
+    std::array<float, 2> p0{0.0f, 0.0f};
+    std::array<float, 2> dir{1.0f, 0.0f};
+    bool valid{false};
+};
+
 class SketchNode : public DAGNode {
 public:
     SketchNode(
@@ -176,19 +204,164 @@ public:
         MarkDirty();
     }
 
+    [[nodiscard]] const std::map<size_t, std::map<size_t, VertexAxisConstraint>>& GetVertexAxisConstraints() const noexcept {
+        return m_shapeVertexAxisConstraints;
+    }
+    void SetVertexAxisConstraints(std::map<size_t, std::map<size_t, VertexAxisConstraint>> constraints) {
+        m_shapeVertexAxisConstraints = std::move(constraints);
+        MarkDirty();
+    }
+    void SetVertexOriginConstraint(size_t shapeIdx, size_t vIdx, float dist) {
+        if (dist > 0.0001f) {
+            m_shapeVertexAxisConstraints[shapeIdx][vIdx].lockOriginDist = true;
+            m_shapeVertexAxisConstraints[shapeIdx][vIdx].originDist = dist;
+            MarkDirty();
+        }
+    }
+    void RemoveVertexOriginConstraint(size_t shapeIdx, size_t vIdx) {
+        auto it = m_shapeVertexAxisConstraints.find(shapeIdx);
+        if (it != m_shapeVertexAxisConstraints.end()) {
+            it->second[vIdx].lockOriginDist = false;
+            it->second[vIdx].originDist = 0.0f;
+            if (!it->second[vIdx].HasAnyConstraint()) {
+                it->second.erase(vIdx);
+            }
+            if (it->second.empty()) {
+                m_shapeVertexAxisConstraints.erase(it);
+            }
+            MarkDirty();
+        }
+    }
+    [[nodiscard]] bool IsVertexOriginConstrained(size_t shapeIdx, size_t vIdx) const {
+        auto it = m_shapeVertexAxisConstraints.find(shapeIdx);
+        if (it == m_shapeVertexAxisConstraints.end()) return false;
+        auto vIt = it->second.find(vIdx);
+        return vIt != it->second.end() && vIt->second.lockOriginDist;
+    }
+    [[nodiscard]] float GetVertexOriginDistance(size_t shapeIdx, size_t vIdx) const {
+        auto it = m_shapeVertexAxisConstraints.find(shapeIdx);
+        if (it == m_shapeVertexAxisConstraints.end()) return 0.0f;
+        auto vIt = it->second.find(vIdx);
+        return (vIt != it->second.end() && vIt->second.lockOriginDist) ? vIt->second.originDist : 0.0f;
+    }
+    void ClearVertexAxisConstraints() {
+        m_shapeVertexAxisConstraints.clear();
+        MarkDirty();
+    }
+
+    [[nodiscard]] Geom::Plane GetEffectivePlane() const noexcept {
+        if (m_useCustomPlane) {
+            return m_customPlane;
+        }
+        switch (m_plane) {
+            case SketchPlane::XZ_Ground:
+                return Geom::Plane(
+                    Geom::Point3D(m_position[0], m_position[1], m_position[2]),
+                    Geom::Vector3D(0.0, 1.0, 0.0), // Normal: +Y
+                    Geom::Vector3D(1.0, 0.0, 0.0), // U: +X
+                    Geom::Vector3D(0.0, 0.0, 1.0)  // V: +Z
+                );
+            case SketchPlane::XY_Front:
+                return Geom::Plane(
+                    Geom::Point3D(m_position[0], m_position[1], m_position[2]),
+                    Geom::Vector3D(0.0, 0.0, 1.0), // Normal: +Z
+                    Geom::Vector3D(1.0, 0.0, 0.0), // U: +X
+                    Geom::Vector3D(0.0, 1.0, 0.0)  // V: +Y
+                );
+            case SketchPlane::YZ_Right:
+                return Geom::Plane(
+                    Geom::Point3D(m_position[0], m_position[1], m_position[2]),
+                    Geom::Vector3D(1.0, 0.0, 0.0), // Normal: +X
+                    Geom::Vector3D(0.0, 0.0, 1.0), // U: +Z
+                    Geom::Vector3D(0.0, 1.0, 0.0)  // V: +Y
+                );
+        }
+        return Geom::Plane::XY();
+    }
+
     static void EnforceConstraints(
         std::vector<std::array<float, 2>>& points,
         const std::map<size_t, float>& edgeConstraints,
+        const std::map<size_t, VertexAxisConstraint>& vertexConstraints,
         bool isClosed = true,
-        int pinnedVertexIdx = -1)
+        int pinnedVertexIdx = -1,
+        const std::vector<ProjectedDatumAxis>& datumAxes = {})
     {
-        if (edgeConstraints.empty() || points.size() < 2) return;
+        if (points.empty()) return;
+        if (edgeConstraints.empty() && vertexConstraints.empty()) return;
 
         size_t n = points.size();
 
         // Iterate up to 10 passes for relaxation across coupled constraints
         for (int iter = 0; iter < 10; ++iter) {
             bool allSatisfied = true;
+
+            // 1. Enforce vertex origin and axis constraints
+            for (const auto& [vIdx, vc] : vertexConstraints) {
+                if (vIdx >= n) continue;
+                auto& pt = points[vIdx];
+
+                // Constrain distance from Sketch Plane Origin (0, 0)
+                if (vc.lockOriginDist && vc.originDist > 1e-4f) {
+                    float curDist = std::hypot(pt[0], pt[1]);
+                    float diff = std::abs(curDist - vc.originDist);
+                    if (diff > 1e-4f) {
+                        allSatisfied = false;
+                        if (curDist > 1e-6f) {
+                            float scale = vc.originDist / curDist;
+                            pt[0] *= scale;
+                            pt[1] *= scale;
+                        } else {
+                            pt[0] = vc.originDist;
+                            pt[1] = 0.0f;
+                        }
+                    }
+                }
+
+                // Constrain distance from Horizontal U-Axis (V=0, |V| = target)
+                if (vc.lockUAxisDist) {
+                    float targetV = (pt[1] >= 0.0f) ? vc.uAxisDist : -vc.uAxisDist;
+                    if (std::abs(pt[1] - targetV) > 1e-4f) {
+                        allSatisfied = false;
+                        pt[1] = targetV;
+                    }
+                }
+
+                // Constrain distance from Vertical V-Axis (U=0, |U| = target)
+                if (vc.lockVAxisDist) {
+                    float targetU = (pt[0] >= 0.0f) ? vc.vAxisDist : -vc.vAxisDist;
+                    if (std::abs(pt[0] - targetU) > 1e-4f) {
+                        allSatisfied = false;
+                        pt[0] = targetU;
+                    }
+                }
+
+                // Constrain distance from Reference Datum Axis line
+                if (vc.lockDatumAxisDist) {
+                    for (const auto& dAx : datumAxes) {
+                        if (dAx.valid && (vc.datumAxisId == 0 || dAx.id == vc.datumAxisId)) {
+                            float du = pt[0] - dAx.p0[0];
+                            float dv = pt[1] - dAx.p0[1];
+                            float t = du * dAx.dir[0] + dv * dAx.dir[1];
+                            float projU = dAx.p0[0] + t * dAx.dir[0];
+                            float projV = dAx.p0[1] + t * dAx.dir[1];
+                            float normU = -dAx.dir[1];
+                            float normV = dAx.dir[0];
+                            float signedDist = du * normU + dv * normV;
+                            float sign = (signedDist >= 0.0f) ? 1.0f : -1.0f;
+                            float curD = std::abs(signedDist);
+                            if (std::abs(curD - vc.datumAxisDist) > 1e-4f) {
+                                allSatisfied = false;
+                                pt[0] = projU + normU * sign * vc.datumAxisDist;
+                                pt[1] = projV + normV * sign * vc.datumAxisDist;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 2. Enforce edge length constraints
             for (const auto& [edgeIdx, targetLen] : edgeConstraints) {
                 if (targetLen <= 0.0001f || edgeIdx >= n) continue;
                 size_t i0 = edgeIdx;
@@ -208,10 +381,17 @@ public:
                 float ux = (curLen > 1e-6f) ? (dx / curLen) : 1.0f;
                 float uy = (curLen > 1e-6f) ? (dy / curLen) : 0.0f;
 
-                if (pinnedVertexIdx == static_cast<int>(i0)) {
+                bool p0Fixed = (pinnedVertexIdx == static_cast<int>(i0));
+                bool p1Fixed = (pinnedVertexIdx == static_cast<int>(i1));
+                auto it0 = vertexConstraints.find(i0);
+                auto it1 = vertexConstraints.find(i1);
+                if (it0 != vertexConstraints.end() && it0->second.HasAnyConstraint()) p0Fixed = true;
+                if (it1 != vertexConstraints.end() && it1->second.HasAnyConstraint()) p1Fixed = true;
+
+                if (p0Fixed && !p1Fixed) {
                     p1[0] = p0[0] + ux * targetLen;
                     p1[1] = p0[1] + uy * targetLen;
-                } else if (pinnedVertexIdx == static_cast<int>(i1)) {
+                } else if (!p0Fixed && p1Fixed) {
                     p0[0] = p1[0] - ux * targetLen;
                     p0[1] = p1[1] - uy * targetLen;
                 } else {
@@ -226,6 +406,16 @@ public:
             }
             if (allSatisfied) break;
         }
+    }
+
+    static void EnforceConstraints(
+        std::vector<std::array<float, 2>>& points,
+        const std::map<size_t, float>& edgeConstraints,
+        bool isClosed = true,
+        int pinnedVertexIdx = -1)
+    {
+        std::map<size_t, VertexAxisConstraint> emptyVC;
+        EnforceConstraints(points, edgeConstraints, emptyVC, isClosed, pinnedVertexIdx);
     }
 
     [[nodiscard]] SketchPreset GetPreset() const noexcept { return m_preset; }
@@ -357,6 +547,7 @@ public:
         }
     }
 
+    [[nodiscard]] bool IsSolidFeature() const noexcept override { return false; }
     [[nodiscard]] bool IsConsumed() const noexcept override { return m_isConsumed; }
     void SetConsumed(bool consumed) noexcept override { m_isConsumed = consumed; }
 
@@ -489,6 +680,7 @@ private:
     std::vector<std::array<float, 2>> m_profile;
     std::vector<std::vector<std::array<float, 2>>> m_shapes;
     std::map<size_t, std::map<size_t, float>> m_shapeEdgeConstraints;
+    std::map<size_t, std::map<size_t, VertexAxisConstraint>> m_shapeVertexAxisConstraints;
     bool m_visible{true};
     std::weak_ptr<DAGNode> m_parentFeature;
 
